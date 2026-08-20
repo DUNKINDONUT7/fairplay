@@ -8,6 +8,7 @@ import useEventStore from '../../store/eventStore';
 import useScoreStore from '../../store/scoreStore';
 import useNotificationStore from '../../store/notificationStore';
 import useAuthStore from '../../store/authStore';
+import useAttendanceStore from '../../store/attendanceStore';
 import btechLogo from '../../../assets/logo/BTECH.jpg';
 
 const JUDGE_CATEGORIES = ['judge'];
@@ -528,6 +529,7 @@ export default function OrganizerCertificates() {
   const { certificates, fetchCertificates, generateCertificatesForEvent, template, updateTemplate } = useCertificateStore();
   const { calculateLeaderboard, fetchScores, getScoresForEvent } = useScoreStore();
   const { success, error } = useNotificationStore();
+  const { attendance, fetchAttendance } = useAttendanceStore();
 
   const [selectedEventId, setSelectedEventId] = useState('');
   const [activeTab, setActiveTab] = useState('contestants');
@@ -555,6 +557,7 @@ export default function OrganizerCertificates() {
 
   useEffect(() => {
     if (!selectedEventId) return;
+    fetchAttendance(selectedEventId);
     fetchScores(selectedEventId);
     fetchCertificates(selectedEventId);
   }, [fetchScores, fetchCertificates, selectedEventId]);
@@ -577,7 +580,19 @@ export default function OrganizerCertificates() {
     (c) => String(c.eventId) === String(selectedEventId)
   );
 
-  const participantRecipients = leaderboard.map((entry) => ({
+  const attendanceRequired = Boolean(selectedEvent?.attendanceTracking);
+  const checkedInIds = new Set(
+    attendance
+      .filter((record) => String(record.eventId) === String(selectedEventId) && record.checkInStatus !== 'absent')
+      .map((record) => String(record.attendeeId))
+  );
+
+  const eligibleLeaderboard = attendanceRequired
+    ? leaderboard.filter((entry) => checkedInIds.has(String(entry.contestantId)))
+    : leaderboard;
+  const excludedForAbsence = attendanceRequired ? leaderboard.length - eligibleLeaderboard.length : 0;
+
+  const participantRecipients = eligibleLeaderboard.map((entry) => ({
     id: entry.contestantId,
     name: entry.contestantName,
     score: entry.averageScore,
@@ -784,6 +799,13 @@ export default function OrganizerCertificates() {
               <i className={isGenerating ? 'bi bi-arrow-repeat' : 'bi bi-award'} style={{ marginRight: 8 }} />
               {isGenerating ? 'Generating...' : 'Generate All Certificates'}
             </button>
+
+            {attendanceRequired && excludedForAbsence > 0 && (
+              <span style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 999, padding: '6px 12px', fontWeight: 700 }}>
+                <i className="bi bi-info-circle" style={{ marginRight: 6 }} />
+                {excludedForAbsence} contestant{excludedForAbsence === 1 ? '' : 's'} excluded — not checked in via QR attendance
+              </span>
+            )}
 
             {eventCertificates.length > 0 && (
               <button

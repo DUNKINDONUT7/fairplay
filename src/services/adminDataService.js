@@ -134,6 +134,44 @@ export function deriveAiDetections({ users = [], events = [], registrations = []
     }
   });
 
+  // Judge consistency check: for each contestant scored by 3+ judges, flag
+  // any single judge whose score is far from the group's average — a cheap
+  // signal for bias, favoritism, or a data-entry mistake worth a second look.
+  const scoreGroups = new Map();
+  scoreRows.forEach((score) => {
+    const values = Object.values(score.criteriaScores || {}).map(Number).filter(Number.isFinite);
+    if (values.length === 0) return;
+    const average = values.reduce((sum, v) => sum + v, 0) / values.length;
+    const key = `${score.eventId}:${score.contestantId}`;
+    if (!scoreGroups.has(key)) scoreGroups.set(key, []);
+    scoreGroups.get(key).push({ score, average });
+  });
+
+  scoreGroups.forEach((entries, key) => {
+    if (entries.length < 3) return;
+    const groupMean = entries.reduce((sum, e) => sum + e.average, 0) / entries.length;
+    if (groupMean === 0) return;
+
+    entries.forEach(({ score, average }) => {
+      const deviation = Math.abs(average - groupMean) / groupMean;
+      if (deviation >= 0.3) {
+        detections.push({
+          id: `judge-score-outlier-${score.id}`,
+          targetType: 'score',
+          targetId: String(score.id),
+          targetName: score.contestantName || 'Contestant',
+          actorId: score.judgeId || '',
+          actorName: score.judgeName || 'Judge',
+          riskLevel: deviation >= 0.5 ? 'high' : 'medium',
+          status: 'open',
+          reason: `This judge's average score (${average.toFixed(1)}) is ${Math.round(deviation * 100)}% off from the other judges' average (${groupMean.toFixed(1)}) for the same contestant.`,
+          detectedAt: score.timestamp || new Date().toISOString(),
+          metadata: { eventId: score.eventId, contestantId: score.contestantId, groupMean, judgeAverage: average },
+        });
+      }
+    });
+  });
+
   const userEmails = new Set(users.map((user) => String(user.email || '').toLowerCase()).filter(Boolean));
   attendance.forEach((row) => {
     if (row.attendeeType === 'judge' && row.attendeeName && !userEmails.has(String(row.attendeeName).toLowerCase())) {

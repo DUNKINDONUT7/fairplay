@@ -8,6 +8,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
+import useRubricTemplateStore from '../../store/rubricTemplateStore';
 import {
   generateCriteriaFromUpload,
   generateCriteriaWithAIFallback,
@@ -284,8 +285,14 @@ export default function CreateEvent() {
   const { user } = useAuthStore();
   const { createEvent } = useEventStore();
   const { success, error } = useNotificationStore();
+  const { templates: rubricTemplates, fetchTemplates: fetchRubricTemplates, saveTemplate: saveRubricTemplate } = useRubricTemplateStore();
 
   const [step, setStep] = useState(1);
+  const [showRubricLibrary, setShowRubricLibrary] = useState(false);
+
+  useEffect(() => {
+    fetchRubricTemplates();
+  }, [fetchRubricTemplates]);
   const [loading, setLoading] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
@@ -832,6 +839,38 @@ export default function CreateEvent() {
       };
     });
     success('Criteria weights balanced to 100.');
+  }, [success]);
+
+  const handleSaveRubricAsTemplate = useCallback(async () => {
+    if (criteriaDraft.criteria.length === 0) {
+      error('Generate or build a rubric first before saving it as a template.');
+      return;
+    }
+    const name = window.prompt('Name this rubric template:', form.title ? `${form.title} rubric` : 'My rubric');
+    if (!name || !name.trim()) return;
+    await saveRubricTemplate({
+      name: name.trim(),
+      eventType: form.eventType,
+      criteria: criteriaDraft.criteria,
+      scoringMethod: criteriaDraft.scoringMethod,
+      tieBreaker: criteriaDraft.tieBreaker,
+      judgeInstructions: criteriaDraft.judgeInstructions,
+    });
+    success(`Saved "${name.trim()}" to your rubric library.`);
+  }, [criteriaDraft, error, form.eventType, form.title, saveRubricTemplate, success]);
+
+  const handleLoadRubricTemplate = useCallback((template) => {
+    setCriteriaDraft({
+      profile: template.name,
+      criteria: template.criteria,
+      scoringMethod: template.scoringMethod,
+      tieBreaker: template.tieBreaker,
+      judgeInstructions: template.judgeInstructions,
+      source: 'template',
+      modelUsed: '',
+    });
+    setShowRubricLibrary(false);
+    success(`Loaded rubric template "${template.name}".`);
   }, [success]);
 
   const handleReorderCriterion = useCallback((index, direction) => {
@@ -1646,6 +1685,36 @@ export default function CreateEvent() {
                           <i className="bi bi-plus-lg" />
                           <span>Add criterion</span>
                         </button>
+                        <button onClick={handleSaveRubricAsTemplate} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
+                          <i className="bi bi-bookmark-plus" />
+                          <span>Save as template</span>
+                        </button>
+                        <div style={{ position: 'relative' }}>
+                          <button onClick={() => setShowRubricLibrary((v) => !v)} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
+                            <i className="bi bi-collection" />
+                            <span>Load template ({rubricTemplates.length})</span>
+                          </button>
+                          {showRubricLibrary && (
+                            <div style={{ position: 'absolute', right: 0, top: '110%', width: 280, maxHeight: 320, overflowY: 'auto', background: '#fff', border: '1px solid #dbeafe', borderRadius: 14, boxShadow: '0 20px 50px rgba(37,99,235,0.15)', zIndex: 50, padding: 8 }}>
+                              {rubricTemplates.length === 0 ? (
+                                <div style={{ padding: 16, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
+                                  No saved templates yet. Generate a rubric, then "Save as template".
+                                </div>
+                              ) : rubricTemplates.map((template) => (
+                                <button
+                                  key={template.id}
+                                  onClick={() => handleLoadRubricTemplate(template)}
+                                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 10, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                                >
+                                  <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{template.name}</div>
+                                  <div style={{ fontSize: 11, color: '#64748b' }}>{template.criteria.length} criteria · {template.eventType || 'any type'}</div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 

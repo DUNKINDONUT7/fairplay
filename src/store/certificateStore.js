@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import useNotificationStore from './notificationStore';
 
 const defaultTemplate = {
   title: 'Certificate of Achievement',
@@ -31,6 +32,7 @@ function normalizeCertificate(certificate) {
     eventTitle: certificate.eventTitle || certificate.event_title || metadata.event_title || 'Untitled Event',
     recipientId: String(rawRecipientId || metadata.recipient_id || metadata.participant_id || rawRecipientName).trim(),
     recipientName: rawRecipientName,
+    recipientEmail: certificate.recipientEmail || certificate.recipient_email || metadata.recipient_email || '',
     category: certificate.category || certificate.certificate_type || metadata.category || 'participant',
     placement: certificate.placement ?? metadata.placement ?? null,
     score: certificate.score ?? metadata.score ?? null,
@@ -228,6 +230,7 @@ const useCertificateStore = create(
       generateCertificatesForEvent: async ({ event, recipients = [], category = 'participant' }) => {
         const existing = get().certificates;
         const generatedAt = new Date().toISOString();
+        const newlyIssued = [];
 
         const nextCertificates = recipients.map((recipient, index) => {
           const existingCertificate = existing.find(
@@ -235,6 +238,7 @@ const useCertificateStore = create(
               String(certificate.eventId) === String(event.id) &&
               String(certificate.recipientId) === String(recipient.id || recipient.name)
           );
+          if (!existingCertificate) newlyIssued.push(recipient.id || recipient.name);
 
           const verificationCode = existingCertificate?.verificationCode || `FP-${String(event.id)}-${index + 1}`.toUpperCase();
           const verificationUrl = `${window.location.origin}/certificates/${verificationCode}`;
@@ -245,6 +249,7 @@ const useCertificateStore = create(
             eventTitle: event.title,
             recipientId: recipient.id || recipient.name,
             recipientName: recipient.name,
+            recipientEmail: recipient.email || '',
             category: recipient.category || category,
             placement: recipient.placement || null,
             score: recipient.score ?? null,
@@ -277,6 +282,12 @@ const useCertificateStore = create(
             set({ error: error.message });
           }
         }
+
+        nextCertificates
+          .filter((certificate) => newlyIssued.includes(certificate.recipientId))
+          .forEach((certificate) => {
+            useNotificationStore.getState().notifyCertificateReady(certificate).catch(() => {});
+          });
 
         return nextCertificates;
       },

@@ -25,8 +25,9 @@ export default function JudgeScoring() {
 
   const judgeId = getJudgeForActor(user)?.id || getBusinessActorId(user);
   const resolvedEvent = selectedEventId ? getEventById(selectedEventId) : null;
+  const eliminatedIds = new Set((resolvedEvent?.eliminatedContestantIds || []).map(String));
   const contestants = Array.isArray(resolvedEvent?.contestants) && resolvedEvent.contestants.length > 0
-    ? resolvedEvent.contestants
+    ? resolvedEvent.contestants.filter((c) => !eliminatedIds.has(String(c.id)))
     : [];
   const criteria = resolvedEvent?.criteria || [];
   const selectedContestant = contestants.find((c) => String(c.id) === String(selectedContestantId)) || null;

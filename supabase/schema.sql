@@ -983,3 +983,41 @@ for each row execute function public.handle_new_auth_user();
 -- authentication at all. Removing them closes that self-service-abuse hole.
 drop policy if exists "Allow organizer signup requests" on public.profiles;
 drop policy if exists "Allow organizer signup request updates" on public.profiles;
+
+-- ============================================================================
+-- SECTION: Rubric template library
+-- Lets organizers save a generated/edited rubric and reuse it for a future
+-- event instead of regenerating one from scratch every time.
+-- ============================================================================
+
+create table if not exists public.rubric_templates (
+  id bigint primary key,
+  name text not null,
+  event_type text,
+  criteria jsonb not null default '[]'::jsonb,
+  scoring_method text,
+  tie_breaker jsonb default '[]'::jsonb,
+  judge_instructions text,
+  created_by text,
+  created_at timestamptz default timezone('utc', now())
+);
+
+alter table public.rubric_templates enable row level security;
+
+drop policy if exists "Staff can view rubric templates" on public.rubric_templates;
+create policy "Staff can view rubric templates"
+on public.rubric_templates for select
+to authenticated
+using (public.is_staff_user());
+
+drop policy if exists "Staff can save rubric templates" on public.rubric_templates;
+create policy "Staff can save rubric templates"
+on public.rubric_templates for insert
+to authenticated
+with check (public.is_staff_user());
+
+drop policy if exists "Staff can delete their rubric templates" on public.rubric_templates;
+create policy "Staff can delete their rubric templates"
+on public.rubric_templates for delete
+to authenticated
+using (public.is_staff_user());

@@ -353,7 +353,8 @@ export default function JudgeLiveScoring() {
     setSubmitted((prev) => ({ ...prev, [contestantId]: true }));
 
     // Auto-advance to next unscored contestant
-    const contestants = event?.contestants || [];
+    const eliminated = new Set((event?.eliminatedContestantIds || []).map(String));
+    const contestants = (event?.contestants || []).filter((c) => !eliminated.has(String(c.id)));
     const next = contestants.find((c) => !submitted[c.id] && c.id !== contestantId);
     if (next) setActiveContestantId(next.id);
   }
@@ -370,7 +371,8 @@ export default function JudgeLiveScoring() {
     );
   }
 
-  const contestants = event.contestants || [];
+  const eliminatedIds = new Set((event.eliminatedContestantIds || []).map(String));
+  const contestants = (event.contestants || []).filter((c) => !eliminatedIds.has(String(c.id)));
   const criteria = event.criteria || [];
   const doneCount = Object.keys(submitted).length;
   const activeContestant = contestants.find((c) => c.id === activeContestantId);

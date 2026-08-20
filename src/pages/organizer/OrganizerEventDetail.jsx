@@ -221,6 +221,38 @@ export default function OrganizerEventDetail() {
     setShowAddContestant(false);
   }
 
+  async function handleBulkImportCsv(file) {
+    if (!file) return;
+    const text = await file.text();
+    const rows = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      // Skip an optional header row like "name,type"
+      .filter((line) => !/^name\s*,?\s*(type)?$/i.test(line));
+
+    const existing = event.contestants || [];
+    const existingNames = new Set(existing.map((c) => c.name.trim().toLowerCase()));
+    const imported = [];
+
+    rows.forEach((line, index) => {
+      const [rawName, rawType] = line.split(',').map((v) => v?.trim());
+      const name = rawName || '';
+      if (!name || existingNames.has(name.toLowerCase())) return;
+      const type = /team/i.test(rawType || '') ? 'team' : 'individual';
+      existingNames.add(name.toLowerCase());
+      imported.push({ id: `${type}-csv-${Date.now()}-${index}`, name, type });
+    });
+
+    if (imported.length === 0) {
+      notifyError('No new contestants found in that file — check for duplicates or an empty file.');
+      return;
+    }
+
+    await updateEvent(id, { contestants: [...existing, ...imported], participants: existing.length + imported.length });
+    notifySuccess(`Imported ${imported.length} contestant${imported.length === 1 ? '' : 's'} from CSV.`);
+  }
+
   async function handleAddScorer({ name, subEventId, subEventName }) {
     const token = `scorer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const assignment = {
@@ -422,10 +454,28 @@ export default function OrganizerEventDetail() {
               <div style={eyebrow}>Registered</div>
               <h2 style={{ ...panelTitle, marginBottom: 0 }}>Contestants ({(event.contestants || []).length})</h2>
             </div>
-            <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
-              <i className="bi bi-plus-lg" /> Add Contestant
-            </button>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
+                <i className="bi bi-plus-lg" /> Add Contestant
+              </button>
+              <label style={{ ...secondaryBtn, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <i className="bi bi-upload" /> Import CSV
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    handleBulkImportCsv(file);
+                    e.target.value = '';
+                  }}
+                />
+              </label>
+            </div>
           </div>
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: '-8px 0 16px' }}>
+            CSV format: one contestant per line — <span className="mono">Full Name</span> or <span className="mono">Full Name,team</span> to mark a team entry.
+          </p>
           {(!event.contestants || event.contestants.length === 0) ? (
             <p style={{ color: '#94a3b8', fontSize: 14 }}>No contestants yet. They register via the Participant QR, or add them manually above.</p>
           ) : (

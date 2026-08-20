@@ -217,6 +217,28 @@ const useNotificationStore = create(
         });
       },
 
+      notifyCertificateReady: async (certificate) => {
+        if (!certificate?.id) return null;
+        const eventId = certificate.eventId;
+        return get().createSystemNotification({
+          title: 'Your certificate is ready',
+          message: `Your certificate for ${certificate.eventTitle || 'your event'} is ready to view and download.`,
+          type: 'success',
+          category: 'certificate-ready',
+          targetEmails: [certificate.recipientEmail].filter(Boolean),
+          sourceKey: `certificate-ready:${certificate.id}`,
+          entityType: 'certificate',
+          entityId: certificate.id,
+          actionUrl: `/certificates/${certificate.verificationCode}`,
+          metadata: {
+            eventId,
+            eventTitle: certificate.eventTitle,
+            recipientName: certificate.recipientName,
+            verificationCode: certificate.verificationCode,
+          },
+        });
+      },
+
       loadNotifications: async (user) => {
         if (!isSupabaseConfigured || !supabase) {
           return get().getNotificationsForUser(user);
