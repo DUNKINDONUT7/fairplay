@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FairPlay - Event Management Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%; min-height: 100%;
+        background: #ffffff; color: #0f172a;
+        font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      #root { width: 100%; }
+
+      /* Centers only the pre-mount loading state — must not constrain the
+         app's own layout/scrolling once React replaces this content. */
+      .boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; animation: boot-in 0.5s ease both; }
+      @keyframes boot-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+      .boot-logo { width: 168px; height: auto; margin: 0 auto 28px; display: block; }
+
+      .boot-ring { width: 30px; height: 30px; margin: 0 auto; animation: boot-spin 0.9s linear infinite; }
+      @keyframes boot-spin { to { transform: rotate(360deg); } }
+
+      .boot-status {
+        margin-top: 18px; font-size: 13px; font-weight: 600;
+        letter-spacing: 0.04em; text-transform: uppercase; color: #64748b;
+      }
+
+      .boot-hint {
+        margin-top: 10px; font-size: 12.5px; color: #94a3b8;
+        opacity: 0; transition: opacity 0.4s ease;
+      }
+      .boot-hint.show { opacity: 1; }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot">
+        <img class="boot-logo" src="/logo.svg" alt="FairPlay" />
+        <svg class="boot-ring" viewBox="0 0 32 32" fill="none">
+          <defs>
+            <linearGradient id="boot-ring-grad" x1="4" y1="4" x2="28" y2="28" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#26D6FF" />
+              <stop offset="0.5" stop-color="#1686E8" />
+              <stop offset="1" stop-color="#083FA5" />
+            </linearGradient>
+          </defs>
+          <circle cx="16" cy="16" r="13" stroke="url(#boot-ring-grad)" stroke-width="3" stroke-linecap="round" stroke-dasharray="55 26" />
+        </svg>
+        <div class="boot-status">Loading FairPlay</div>
+        <div class="boot-hint" id="boot-hint">Taking longer than usual — please check your connection.</div>
+      </div>
+    </div>
+    <script>
+      setTimeout(function () {
+        var hint = document.getElementById('boot-hint');
+        if (hint) hint.classList.add('show');
+      }, 6000);
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

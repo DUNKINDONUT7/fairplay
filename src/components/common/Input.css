@@ -1,0 +1,125 @@
+/* Input Component */
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+.input-label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.input-required {
+  color: var(--accent-red);
+  font-weight: var(--font-weight-bold);
+}
+
+.input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-base);
+  font-family: var(--font-family);
+  color: var(--text-primary);
+  background: linear-gradient(135deg, rgba(26, 31, 46, 0.5) 0%, rgba(26, 31, 46, 0.3) 100%);
+  backdrop-filter: blur(5px);
+  border: 1px solid rgba(6, 182, 212, 0.15);
+  border-radius: var(--radius-md);
+  outline: none;
+  transition: all var(--transition-base);
+}
+
+.input:hover {
+  border-color: rgba(6, 182, 212, 0.25);
+  background: linear-gradient(135deg, rgba(26, 31, 46, 0.6) 0%, rgba(26, 31, 46, 0.4) 100%);
+}
+
+.input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.15), 0 0 20px rgba(6, 182, 212, 0.1);
+  background: linear-gradient(135deg, rgba(26, 31, 46, 0.7) 0%, rgba(26, 31, 46, 0.5) 100%);
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* Input with icon */
+.input-with-icon .input {
+  padding-left: 40px;
+}
+
+.input-with-icon .input-icon {
+  position: absolute;
+  left: var(--spacing-md);
+  color: var(--text-secondary);
+  width: 18px;
+  height: 18px;
+  pointer-events: none;
+}
+
+/* Input states */
+.input-error {
+  border-color: var(--accent-red);
+  background-color: rgba(239, 68, 68, 0.05);
+}
+
+.input-error:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.input-success {
+  border-color: var(--accent-green);
+  background-color: rgba(16, 185, 129, 0.05);
+}
+
+.input-success:focus {
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+.input-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Error and Helper Text */
+.input-error-text,
+.input-helper-text {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+}
+
+.input-error-text {
+  color: var(--accent-red);
+}
+
+/* Checkmark */
+.input-check {
+  position: absolute;
+  right: var(--spacing-md);
+  color: var(--accent-green);
+  font-size: var(--font-size-lg);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .input {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+
+  .input-label {
+    font-size: var(--font-size-xs);
+  }
+}

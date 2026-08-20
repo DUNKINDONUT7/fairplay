@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="fairplay-icon" viewBox="0 0 1024 1024">
+    <defs>
+      <linearGradient id="fp-ring" x1="206" y1="167" x2="801" y2="857" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#26D6FF"/>
+        <stop offset="0.5" stop-color="#1686E8"/>
+        <stop offset="1" stop-color="#083FA5"/>
+      </linearGradient>
+      <linearGradient id="fp-mark" x1="330" y1="326" x2="707" y2="663" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#27D6FF"/>
+        <stop offset="0.42" stop-color="#168BEA"/>
+        <stop offset="1" stop-color="#073B9F"/>
+      </linearGradient>
+    </defs>
+    <circle cx="512" cy="512" r="329" fill="none" stroke="url(#fp-ring)" stroke-width="26"/>
+    <path d="M337 353H685C743 353 784 397 776 451C769 500 729 536 676 536H566L512 662H409L462 536H347L289 663H198L274 371C281 344 306 353 337 353Z" fill="url(#fp-mark)"/>
+    <path d="M312 459C340 430 378 418 426 418H695C733 418 754 438 748 466C743 493 718 512 681 512H355L282 559L312 459Z" fill="#0B54C5" opacity="0.9"/>
+    <path d="M516 420H704C743 420 764 441 757 470C751 497 724 516 686 516H580L512 663H407L476 503C490 471 494 448 516 420Z" fill="url(#fp-mark)"/>
+  </symbol>
+</svg>

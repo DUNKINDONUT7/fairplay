@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\kikos\\\\OneDrive\\\\Desktop\\\\fairplay\" -Recurse -Directory)",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)",
+      "Bash(npm install *)",
+      "Bash(npx playwright *)",
+      "Bash(node -e ' *)",
+      "Bash(node \"C:/Users/kikos/AppData/Local/Temp/cert-screenshot.js\")",
+      "Bash(cp \"C:/Users/kikos/AppData/Local/Temp/cert-screenshot.js\" \"c:/Users/kikos/OneDrive/Desktop/fairplay/cert-screenshot.js\")",
+      "Bash(node cert-screenshot.js)",
+      "Bash(mv cert-screenshot.js cert-screenshot.cjs)",
+      "Bash(node cert-screenshot.cjs)",
+      "Bash(node cert2.cjs)"
+    ]
+  }
+}

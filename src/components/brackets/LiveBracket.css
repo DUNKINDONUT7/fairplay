@@ -1,0 +1,289 @@
+.live-bracket-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.live-bracket-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.live-bracket-stat {
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 26px rgba(37, 99, 235, 0.06);
+}
+
+.live-bracket-stat-label {
+  color: #64748b;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
+
+.live-bracket-stat-value {
+  color: #1d4ed8;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.live-bracket-board {
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+.live-bracket-rounds {
+  display: flex;
+  align-items: flex-start;
+  gap: 56px;
+  min-width: max-content;
+  padding: 6px 0 20px;
+}
+
+.live-bracket-round {
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+}
+
+.live-bracket-round-header {
+  margin-bottom: 18px;
+  text-align: center;
+}
+
+.live-bracket-round-title {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.live-bracket-round-subtitle {
+  color: #64748b;
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.live-bracket-round-matches {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.live-bracket-match-wrap {
+  position: relative;
+}
+
+.live-bracket-round[data-round-index="1"] .live-bracket-match-wrap {
+  margin-top: 34px;
+}
+
+.live-bracket-round[data-round-index="2"] .live-bracket-match-wrap {
+  margin-top: 88px;
+}
+
+.live-bracket-round[data-round-index="3"] .live-bracket-match-wrap {
+  margin-top: 164px;
+}
+
+.live-bracket-round[data-round-index="4"] .live-bracket-match-wrap {
+  margin-top: 280px;
+}
+
+.live-bracket-match {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  padding: 14px;
+  min-height: 128px;
+  box-shadow: 0 16px 34px rgba(37, 99, 235, 0.08);
+}
+
+.live-bracket-match::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -28px;
+  width: 28px;
+  border-top: 2px solid #bfdbfe;
+}
+
+.live-bracket-round:first-child .live-bracket-match::before {
+  content: "";
+  position: absolute;
+  left: -28px;
+  top: 50%;
+  width: 28px;
+  border-top: 2px solid #dbeafe;
+}
+
+.live-bracket-round:last-child .live-bracket-match::after {
+  display: none;
+}
+
+.live-bracket-match-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.live-bracket-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.live-bracket-pill-live {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.live-bracket-pill-pending {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.live-bracket-pill-complete {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.live-bracket-match-id {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.live-bracket-slot {
+  display: grid;
+  grid-template-columns: 1fr 74px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+}
+
+.live-bracket-slot + .live-bracket-slot {
+  border-top: 1px solid #e2e8f0;
+}
+
+.live-bracket-slot-main {
+  min-width: 0;
+}
+
+.live-bracket-slot-name {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-bracket-slot-subtitle {
+  color: #64748b;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.live-bracket-slot-winner .live-bracket-slot-name {
+  color: #15803d;
+}
+
+.live-bracket-score {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid #bfdbfe;
+  background: #f8fafc;
+  color: #0f172a;
+  text-align: center;
+  font-weight: 700;
+}
+
+.live-bracket-score[disabled] {
+  opacity: 0.45;
+}
+
+.live-bracket-score-readonly {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  text-align: center;
+  font-weight: 700;
+}
+
+.live-bracket-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.live-bracket-footer-note {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.live-bracket-action {
+  border: none;
+  border-radius: 12px;
+  padding: 9px 14px;
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.live-bracket-action[disabled] {
+  background: #e2e8f0;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.live-bracket-banner {
+  background: linear-gradient(135deg, #eff6ff, #f0f9ff);
+  border: 1px solid #bfdbfe;
+  border-radius: 18px;
+  padding: 18px 20px;
+}
+
+.live-bracket-banner-title {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.live-bracket-banner-copy {
+  color: #64748b;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+@media (max-width: 768px) {
+  .live-bracket-rounds {
+    gap: 28px;
+  }
+
+  .live-bracket-round {
+    min-width: 220px;
+  }
+
+  .live-bracket-slot {
+    grid-template-columns: 1fr 60px;
+  }
+}

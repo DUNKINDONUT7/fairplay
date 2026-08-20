@@ -1,0 +1,18 @@
+# Environment variables
+.env
+.env*.local
+
+# Build output
+dist/
+vite.config.js.timestamp-*.mjs
+
+# Common ignores
+node_modules
+.DS_Store
+
+# Local tooling (Playwright browser binaries, Claude Code scheduler lock)
+.pw-browsers/
+.claude/scheduled_tasks.lock
+
+# Supabase CLI local link cache (machine-specific, not project data)
+supabase/.temp/
