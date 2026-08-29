@@ -30,7 +30,7 @@ export default function Register() {
       setError(result.error || 'Registration failed.');
       return;
     }
-    if (result.requiresEmailConfirmation) {
+    if (result.requiresApproval || result.requiresEmailConfirmation) {
       setNotice(result.message || 'Check your email to confirm your account, then sign in.');
       return;
     }

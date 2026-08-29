@@ -53,6 +53,12 @@ const AuthModal = ({ mode: initialMode, onClose }) => {
     if (regData.password !== regData.confirmPassword) { setError('Passwords do not match.'); return; }
     const result = await store.register({ name: regData.name, email: regData.email, password: regData.password, role: 'organizer' });
     if (result.success) {
+      if (result.requiresApproval || result.requiresEmailConfirmation) {
+        setMode('login');
+        setLoginData({ email: regData.email, password: '' });
+        setError(result.message || 'Account created. An admin needs to approve it before you can sign in.');
+        return;
+      }
       onClose();
       redirectAfterLogin(result.user);
     } else {

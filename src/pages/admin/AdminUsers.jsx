@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Lock, Trash2, Search, RefreshCw } from 'lucide-react';
+import { Lock, Trash2, Search, RefreshCw, Check, X, ShieldAlert } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import useAuthStore from '../../store/authStore';
@@ -12,9 +12,12 @@ import useNotificationStore from '../../store/notificationStore';
 export default function AdminUsers() {
   const {
     users,
+    organizerApplications,
     refreshProfiles,
     updateUser,
     deleteUser,
+    approveOrganizerApplication,
+    declineOrganizerApplication,
     authMode,
   } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
@@ -82,6 +85,30 @@ export default function AdminUsers() {
     }
   }
 
+  async function handleApprove(application) {
+    setBusy(`approve-${application.id}`);
+    try {
+      await approveOrganizerApplication(application.id);
+      success(`Approved ${application.email} as an organizer.`);
+    } catch (err) {
+      error(err.message || 'Unable to approve this application.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function handleDecline(application) {
+    setBusy(`decline-${application.id}`);
+    try {
+      await declineOrganizerApplication(application.id);
+      success(`Declined ${application.email}'s organizer application.`);
+    } catch (err) {
+      error(err.message || 'Unable to decline this application.');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function handleDelete(user) {
     setBusy(`delete-${user.id}`);
     try {
@@ -105,6 +132,46 @@ export default function AdminUsers() {
         onCancel={() => setUserToDelete(null)}
         onConfirm={() => handleDelete(userToDelete)}
       />
+      {organizerApplications.length > 0 && (
+        <div style={applicationsCardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+            <ShieldAlert size={18} color="#b45309" />
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#0f172a' }}>
+              Pending Organizer Applications ({organizerApplications.length})
+            </h3>
+          </div>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {organizerApplications.map((application) => (
+              <div key={application.id} style={applicationRowStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  <span style={avatarStyle}>{String(application.avatar || application.name || application.email || 'U').charAt(0).toUpperCase()}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>{application.name}</div>
+                    <div style={{ fontSize: 12, color: '#64748b' }}>{application.email} · applied {application.joined}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                  <button
+                    onClick={() => handleApprove(application)}
+                    disabled={Boolean(busy)}
+                    style={approveButtonStyle}
+                  >
+                    <Check size={14} /> Approve
+                  </button>
+                  <button
+                    onClick={() => handleDecline(application)}
+                    disabled={Boolean(busy)}
+                    style={declineButtonStyle}
+                  >
+                    <X size={14} /> Decline
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={toolbarStyle}>
         <div style={{ position: 'relative', width: 320, maxWidth: '100%' }}>
           <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
@@ -148,7 +215,13 @@ export default function AdminUsers() {
                   <td style={tdStyle}>{user.joined || 'From database'}</td>
                   <td style={{ padding: '12px 16px' }}>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button onClick={() => handleToggleStatus(user)} disabled={Boolean(busy)} style={iconButtonStyle} aria-label="Toggle user status">
+                      <button
+                        onClick={() => handleToggleStatus(user)}
+                        disabled={Boolean(busy) || user.status === 'pending'}
+                        style={iconButtonStyle}
+                        aria-label="Toggle user status"
+                        title={user.status === 'pending' ? 'Use the pending applications panel above to approve or decline' : undefined}
+                      >
                         <Lock size={14} />
                       </button>
                       <button onClick={() => setUserToDelete(user)} disabled={Boolean(busy)} style={{ ...iconButtonStyle, background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.2)', color: '#ef4444' }} aria-label="Delete user">
@@ -167,6 +240,10 @@ export default function AdminUsers() {
 }
 
 const cardStyle = { background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 18, padding: 24, boxShadow: '0 12px 32px rgba(15,23,42,0.06)' };
+const applicationsCardStyle = { background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 18, padding: 20, boxShadow: '0 12px 32px rgba(180,83,9,0.06)', marginBottom: 20 };
+const applicationRowStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', borderRadius: 12, background: '#ffffff', border: '1px solid #fde68a', flexWrap: 'wrap' };
+const approveButtonStyle = { padding: '8px 14px', borderRadius: 10, background: '#16a34a', color: '#ffffff', border: 'none', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 };
+const declineButtonStyle = { padding: '8px 14px', borderRadius: 10, background: '#fef2f2', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)', fontWeight: 700, fontSize: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 };
 const toolbarStyle = { background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 16, boxShadow: '0 10px 24px rgba(15,23,42,0.06)', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 };
 const searchStyle = { padding: '10px 14px 10px 34px', borderRadius: 10, background: '#ffffff', border: '1px solid #e2e8f0', color: '#0f172a', fontSize: 13, outline: 'none', width: '100%' };
 const secondaryButtonStyle = { padding: '10px 16px', borderRadius: 10, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 };

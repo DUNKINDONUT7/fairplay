@@ -113,9 +113,9 @@ export default function AuthModal({ onClose }) {
 
     const result = await store.register({ name, email, password, role: 'organizer' });
     if (result.success) {
-      if (result.requiresEmailConfirmation) {
+      if (result.requiresApproval || result.requiresEmailConfirmation) {
         setMode('login');
-        setNotice(result.message || 'Account created. Please confirm your email before signing in.');
+        setNotice(result.message || 'Account created. An admin needs to approve it before you can sign in.');
         setLoginData({ email, password: '' });
         return;
       }

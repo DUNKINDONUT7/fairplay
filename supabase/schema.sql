@@ -956,14 +956,20 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_role text := coalesce(new.raw_user_meta_data->>'role', 'organizer');
 begin
+  -- Self-registered organizers start 'pending' and need an admin's approval
+  -- (see approve_organizer in the section below) before they can sign in.
+  -- Any other role reaching this trigger is created elsewhere by staff
+  -- (judge invites, admin-created accounts), so it's trusted immediately.
   insert into public.profiles (id, email, full_name, role, status, created_at, updated_at)
   values (
     new.id::text,
     new.email,
     coalesce(new.raw_user_meta_data->>'full_name', new.email),
-    coalesce(new.raw_user_meta_data->>'role', 'organizer'),
-    'active',
+    v_role,
+    case when v_role = 'organizer' then 'pending' else 'active' end,
     timezone('utc', now()),
     timezone('utc', now())
   )

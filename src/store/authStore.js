@@ -58,6 +58,12 @@ function matchDemoCredentials(get, normalizedEmail, password) {
   );
 }
 
+function getBlockedAuthMessage(status) {
+  if (status === 'pending') return 'Your organizer account is awaiting admin approval. You will be notified once approved.';
+  if (status === 'suspended') return 'Your account has been suspended. Contact an administrator.';
+  return null;
+}
+
 function buildOrganizerApplication(userData = {}) {
   const email = String(userData.email || '').trim().toLowerCase();
   const name = String(userData.name || userData.full_name || email || 'Organizer Applicant').trim();
@@ -342,6 +348,12 @@ const useAuthStore = create(
             return { success: false, error: 'Invalid email or password.' };
           }
 
+          const blockedMessage = getBlockedAuthMessage(safeUser.status);
+          if (blockedMessage) {
+            set({ loading: false });
+            return { success: false, error: blockedMessage };
+          }
+
           const token = `token_${safeUser.id}_${Date.now()}`;
           set({ user: safeUser, token, loading: false, initialized: true, authMode: 'demo', sessionSource: 'demo' });
           return { success: true, user: safeUser };
@@ -354,6 +366,12 @@ const useAuthStore = create(
         // a full failed request before ever reaching the fallback below.
         const demoMatch = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
         if (demoMatch) {
+          const blockedMessage = getBlockedAuthMessage(demoMatch.status);
+          if (blockedMessage) {
+            set({ loading: false });
+            return { success: false, error: blockedMessage };
+          }
+
           const token = `token_${demoMatch.id}_${Date.now()}`;
           set({
             user: demoMatch,
@@ -377,6 +395,14 @@ const useAuthStore = create(
           }
 
           const sessionUser = await buildSessionUser(data.user);
+
+          const blockedMessage = getBlockedAuthMessage(sessionUser?.status);
+          if (blockedMessage) {
+            await supabase.auth.signOut();
+            set({ loading: false, initialized: true });
+            return { success: false, error: blockedMessage };
+          }
+
           const users = await fetchProfilesList().catch(() => get().users);
 
           set({
@@ -394,6 +420,12 @@ const useAuthStore = create(
         } catch (error) {
           const safeUser = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
           if (safeUser) {
+            const blockedMessage = getBlockedAuthMessage(safeUser.status);
+            if (blockedMessage) {
+              set({ loading: false, initialized: true });
+              return { success: false, error: blockedMessage };
+            }
+
             const token = `token_${safeUser.id}_${Date.now()}`;
             set({
               user: safeUser,
@@ -422,9 +454,17 @@ const useAuthStore = create(
         const password = String(userData?.password || '');
         const role = 'organizer';
         const name = String(userData?.name || '').trim() || email || 'FairPlay User';
-        const status = 'active';
 
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
+          const existing = get().users.find((entry) => String(entry.email || '').toLowerCase() === email);
+          if (existing) {
+            set({ loading: false });
+            return { success: false, error: 'An account with this email already exists.' };
+          }
+
+          // New self-registered organizers start 'pending' — no session is
+          // created here, so they can't walk straight into the dashboard
+          // before an admin approves them (see approveOrganizerApplication).
           const newUser = {
             id: Date.now(),
             email,
@@ -432,26 +472,22 @@ const useAuthStore = create(
             role,
             password,
             avatar: buildAvatar(name, email),
-            status,
+            status: 'pending',
             joined: new Date().toISOString().slice(0, 10),
           };
-          const safeUser = { ...newUser, password: undefined };
-          const token = `token_${newUser.id}_${Date.now()}`;
-          set((state) => ({
-            user: safeUser,
-            token,
-            users: [newUser, ...state.users.filter((entry) => entry.email !== newUser.email)],
-            organizerApplications: state.organizerApplications.filter((entry) => entry.email !== newUser.email),
-            loading: false,
-            initialized: true,
-            authMode: 'demo',
-            sessionSource: 'demo',
-          }));
+          set((state) => {
+            const users = [newUser, ...state.users.filter((entry) => entry.email !== newUser.email)];
+            return {
+              users,
+              organizerApplications: buildOrganizerApplicationsFromUsers(users),
+              loading: false,
+              initialized: true,
+            };
+          });
           return {
             success: true,
-            user: safeUser,
-            requiresApproval: false,
-            message: 'Organizer account created.',
+            requiresApproval: true,
+            message: 'Your organizer account has been submitted for admin approval. You will be notified once approved.',
           };
         }
 
@@ -474,17 +510,40 @@ const useAuthStore = create(
           if (!data.session) {
             // Email confirmation is required by this project's Supabase Auth
             // settings — there's no active session yet, so we can't build a
-            // logged-in state. The user must confirm their email, then log in.
+            // logged-in state. The trigger already created the profile as
+            // 'pending', so after confirming their email they'll still need
+            // an admin to approve them before they can sign in.
             set({ loading: false, initialized: true });
             return {
               success: true,
-              requiresApproval: false,
+              requiresApproval: true,
               requiresEmailConfirmation: true,
-              message: 'Check your email to confirm your account, then sign in.',
+              message: 'Check your email to confirm your account. An admin will also need to approve it before you can sign in.',
             };
           }
 
           const sessionUser = await buildSessionUser(data.user);
+
+          if (sessionUser?.status === 'pending') {
+            // Email confirmation is off for this project, so signUp() above
+            // already opened a real session — sign it back out immediately
+            // rather than let a not-yet-approved organizer into the dashboard.
+            await supabase.auth.signOut();
+            const users = await fetchProfilesList().catch(() => get().users);
+            set({
+              users,
+              organizerApplications: buildOrganizerApplicationsFromUsers(users),
+              loading: false,
+              initialized: true,
+            });
+            return {
+              success: true,
+              requiresApproval: true,
+              requiresEmailConfirmation: false,
+              message: 'Your organizer account has been submitted for admin approval. You will be notified once approved.',
+            };
+          }
+
           const users = await fetchProfilesList().catch(() => get().users);
 
           set({
@@ -569,7 +628,15 @@ const useAuthStore = create(
           get().users.find((entry) => String(entry.id) === String(applicationId));
 
         if (SUPABASE_AUTH_ENABLED && supabase && application && !String(application.id).startsWith('application-')) {
-          await supabase.from('profiles').delete().eq('id', application.id);
+          // Goes through the delete-user Edge Function (service role) so the
+          // Supabase Auth account is actually removed, not just the profiles
+          // row — a profile-only delete left the account able to sign in and
+          // silently get re-created as an active organizer on next login.
+          const { data, error } = await supabase.functions.invoke('delete-user', {
+            body: { userId: application.id },
+          });
+          if (error) throw error;
+          if (data?.error) throw new Error(data.error);
         }
 
         set((state) => ({
