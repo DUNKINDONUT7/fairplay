@@ -3,7 +3,7 @@
   "appName": "FairPlay",
   "webDir": "dist",
   "server": {
-    "url": "https://fairplay-gray.vercel.app",
+    "url": "https://fairplay-kappa.vercel.app",
     "cleartext": false
   }
 }
