@@ -91,7 +91,13 @@ const useAttendanceStore = create(
 
         if (isSupabaseConfigured) {
           try {
-            const { error } = await supabase.from('attendance').upsert([{
+            // insert (not upsert) on purpose: two scanners checking the same
+            // badge in at nearly the same instant both pass the in-memory
+            // duplicate check above before either write lands. A plain insert
+            // lets the DB's unique constraint (event_id, attendee_id,
+            // check_in_status) be the real tie-breaker — the loser gets a
+            // 23505 error instead of silently overwriting the winner's row.
+            const { error } = await supabase.from('attendance').insert([{
               id: record.id,
               event_id: record.eventId,
               sub_event_id: record.subEventId,
@@ -109,11 +115,33 @@ const useAttendanceStore = create(
             }]);
             if (error) throw error;
           } catch (error) {
-            console.error('Error syncing attendance:', error.message);
             set((state) => ({
               attendance: state.attendance.filter((entry) => String(entry.id) !== String(record.id)),
-              error: error.message,
             }));
+
+            if (error.code === '23505' && record.attendeeId) {
+              const { data: existingRows } = await supabase
+                .from('attendance')
+                .select('*')
+                .eq('event_id', record.eventId)
+                .eq('attendee_id', record.attendeeId)
+                .eq('check_in_status', 'checked-in')
+                .limit(1);
+
+              const existing = existingRows?.[0] ? normalizeAttendance(existingRows[0]) : record;
+              set((state) => ({
+                attendance: [existing, ...state.attendance.filter((entry) => String(entry.id) !== String(existing.id))],
+              }));
+
+              return {
+                ...existing,
+                duplicate: true,
+                message: `${existing.attendeeName} is already checked in.`,
+              };
+            }
+
+            console.error('Error syncing attendance:', error.message);
+            set({ error: error.message });
             throw error;
           }
         }

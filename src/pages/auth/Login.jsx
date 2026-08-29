@@ -16,7 +16,7 @@ export default function Login() {
     e.preventDefault();
     if (!email.trim()) { error('Please enter your email'); return; }
     setLoading(true);
-    const result = login(email, password);
+    const result = await login(email, password);
     if (result.success) {
       success(`Welcome back, ${result.user.name}!`);
       const roleRoutes = {

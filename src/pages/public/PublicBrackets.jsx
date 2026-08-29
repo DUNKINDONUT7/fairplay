@@ -15,9 +15,11 @@ export default function PublicBrackets() {
     fetchEvents();
     fetchTournaments(id);
 
+    // Fallback only — the realtime subscription below already refreshes on
+    // every tournament change; this just covers a silently-dropped socket.
     const intervalId = window.setInterval(() => {
       fetchTournaments(id);
-    }, 10000);
+    }, 30000);
 
     const unsubscribe = isSupabaseConfigured
       ? subscribeToTable({

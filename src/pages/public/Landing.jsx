@@ -344,7 +344,11 @@ export default function Landing() {
       const [eventsRes, judgesRes, scoresRes, teamsRes] = await Promise.all([
         supabase.from('events').select('id,title,type,status,description,location,start_date,end_date,participants,max_participants,metadata'),
         supabase.from('judges').select('id,name'),
-        supabase.from('scores').select('id,total_score,criteria_scores,team_id,participant_id,contestant_id,contestant_name,judge_id,judge_name,locked,event_title,event_id,created_at,updated_at'),
+        // Bounded to the most recent rows — this table gets one row per
+        // judge x contestant x event and grows without limit as the platform
+        // accumulates history. This is a "live" widget, so a recent window
+        // is also the more meaningful number, not just the cheaper one.
+        supabase.from('scores').select('id,total_score,criteria_scores,team_id,participant_id,contestant_id,contestant_name,judge_id,judge_name,locked,event_title,event_id,created_at,updated_at').order('updated_at', { ascending: false }).limit(300),
         supabase.from('teams').select('id,name'),
       ]);
 
@@ -379,7 +383,11 @@ export default function Landing() {
     };
 
     loadDashboard();
-    const intervalId = window.setInterval(loadDashboard, 15000);
+    // Realtime (below) already refreshes within ~250ms of any write; this
+    // interval is only a fallback for a silently-dropped socket, so it can
+    // be long. Every visitor on this public page reruns 3 unbounded table
+    // scans each tick, so tightening this matters as concurrent traffic grows.
+    const intervalId = window.setInterval(loadDashboard, 60000);
     const channel = supabase
       ? supabase
           .channel('fairplay-public-live-dashboard')

@@ -8,8 +8,15 @@ import useAudienceScoreStore from '../../store/audienceScoreStore';
 import useJudgeStore from '../../store/judgeStore';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
+import { inferTeamLimitConfig, getParticipantLimitMessage, TEAM_EVENT_CATEGORIES } from '../../utils/teamEventRules';
 
 const TOURNAMENT_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
+
+function isLikelyTeamEvent(event) {
+  const sport = String(event?.sportType || event?.eventType || event?.type || '').trim().toLowerCase();
+  if (!sport) return false;
+  return TEAM_EVENT_CATEGORIES.some((category) => category.toLowerCase() === sport) || sport === 'esports';
+}
 
 async function copyLink(value, { success, error }) {
   try {
@@ -89,26 +96,60 @@ function AddScorerModal({ event, onAdd, onClose }) {
   );
 }
 
-function AddContestantModal({ onAdd, onClose }) {
+function AddContestantModal({ event, onAdd, onClose }) {
+  const teamConfig = inferTeamLimitConfig(event);
+  const defaultType = isLikelyTeamEvent(event) ? 'team' : 'individual';
   const [name, setName] = useState('');
-  const [type, setType] = useState('individual');
+  const [type, setType] = useState(defaultType);
+  const [members, setMembers] = useState(['', '']);
+
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
+
+  const cleanMembers = members.map((m) => m.trim()).filter(Boolean);
+  const outOfRange = type === 'team' && (cleanMembers.length < teamConfig.min || cleanMembers.length > teamConfig.max);
+  const memberCountError = outOfRange ? getParticipantLimitMessage(teamConfig) : '';
+  const canSubmit = name.trim() && (type === 'individual' || (cleanMembers.length > 0 && !memberCountError));
+
+  function updateMember(index, value) {
+    setMembers((current) => current.map((m, i) => (i === index ? value : m)));
+  }
+
+  function addMemberRow() {
+    setMembers((current) => [...current, '']);
+  }
+
+  function removeMemberRow(index) {
+    setMembers((current) => current.filter((_, i) => i !== index));
+  }
+
+  function handleSubmit() {
+    if (!canSubmit) return;
+    onAdd(name.trim(), type, type === 'team' ? cleanMembers.map((memberName) => ({ name: memberName })) : []);
+  }
+
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 20, padding: 32, width: '100%', maxWidth: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
-        <h2 style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', marginBottom: 20 }}>Add Contestant</h2>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: '#fff', borderRadius: 20, padding: 32, width: '100%', maxWidth: 420, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+        <h2 style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', marginBottom: 20 }}>Add Participant</h2>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16, padding: 4, borderRadius: 12, background: '#f1f5f9' }}>
           {['individual', 'team'].map((t) => (
             <button key={t} onClick={() => setType(t)} style={{ padding: '8px', borderRadius: 9, border: 'none', background: type === t ? '#fff' : 'transparent', color: type === t ? '#2563eb' : '#64748b', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: type === t ? '0 1px 4px rgba(0,0,0,0.08)' : 'none' }}>
-              <i className={type === t && t === 'individual' ? 'bi bi-person' : type === t ? 'bi bi-people' : t === 'individual' ? 'bi bi-person' : 'bi bi-people'} style={{ marginRight: 4 }} />
+              <i className={t === 'individual' ? 'bi bi-person' : 'bi bi-people'} style={{ marginRight: 4 }} />
               {t === 'individual' ? 'Individual' : 'Team'}
             </button>
           ))}
         </div>
+
+        {type === 'team' && isLikelyTeamEvent(event) && (
+          <div style={{ fontSize: 12, color: '#1d4ed8', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 10, padding: '8px 10px', marginBottom: 14 }}>
+            {teamConfig.label}: {getParticipantLimitMessage(teamConfig)}
+          </div>
+        )}
+
         <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 8 }}>
           {type === 'individual' ? 'Full Name' : 'Team Name'}
         </label>
@@ -117,13 +158,51 @@ function AddContestantModal({ onAdd, onClose }) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onAdd(name.trim(), type); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && type === 'individual') handleSubmit(); }}
           placeholder={type === 'individual' ? 'Juan dela Cruz' : 'Team Alpha'}
-          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1', fontSize: 14, color: '#0f172a', outline: 'none', boxSizing: 'border-box', marginBottom: 20 }}
+          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1', fontSize: 14, color: '#0f172a', outline: 'none', boxSizing: 'border-box', marginBottom: type === 'team' ? 16 : 20 }}
         />
+
+        {type === 'team' && (
+          <>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 8 }}>
+              Team Members
+            </label>
+            <div style={{ display: 'grid', gap: 8, marginBottom: 8 }}>
+              {members.map((member, index) => (
+                <div key={index} style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    type="text"
+                    value={member}
+                    onChange={(e) => updateMember(index, e.target.value)}
+                    placeholder={`Member ${index + 1} full name`}
+                    style={{ flex: 1, padding: '10px 12px', borderRadius: 10, border: '1.5px solid #cbd5e1', fontSize: 13, color: '#0f172a', outline: 'none', boxSizing: 'border-box' }}
+                  />
+                  <button
+                    onClick={() => removeMemberRow(index)}
+                    disabled={members.length <= 1}
+                    style={{ width: 36, borderRadius: 10, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', cursor: members.length > 1 ? 'pointer' : 'not-allowed', opacity: members.length > 1 ? 1 : 0.4 }}
+                  >
+                    <i className="bi bi-trash3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={addMemberRow}
+              style={{ fontSize: 12, fontWeight: 700, color: '#2563eb', background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 0', marginBottom: memberCountError ? 8 : 20 }}
+            >
+              <i className="bi bi-plus-lg" /> Add another member
+            </button>
+            {memberCountError && (
+              <div style={{ fontSize: 12, color: '#dc2626', marginBottom: 20 }}>{memberCountError}</div>
+            )}
+          </>
+        )}
+
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 12, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={() => name.trim() && onAdd(name.trim(), type)} disabled={!name.trim()} style={{ flex: 1, padding: '11px', borderRadius: 12, border: 'none', background: name.trim() ? 'linear-gradient(135deg,#2563eb,#0ea5e9)' : '#e2e8f0', color: name.trim() ? '#fff' : '#94a3b8', fontWeight: 800, fontSize: 14, cursor: name.trim() ? 'pointer' : 'not-allowed' }}>Add</button>
+          <button onClick={handleSubmit} disabled={!canSubmit} style={{ flex: 1, padding: '11px', borderRadius: 12, border: 'none', background: canSubmit ? 'linear-gradient(135deg,#2563eb,#0ea5e9)' : '#e2e8f0', color: canSubmit ? '#fff' : '#94a3b8', fontWeight: 800, fontSize: 14, cursor: canSubmit ? 'pointer' : 'not-allowed' }}>Add</button>
         </div>
       </div>
     </div>
@@ -210,12 +289,13 @@ export default function OrganizerEventDetail() {
 
   const event = getEventById(id);
 
-  async function handleAddContestant(name, type) {
+  async function handleAddContestant(name, type, members = []) {
     const existing = event.contestants || [];
     const newContestant = {
       id: `${type}-manual-${Date.now()}`,
       name,
       type,
+      ...(type === 'team' ? { members } : {}),
     };
     await updateEvent(id, { contestants: [...existing, newContestant], participants: existing.length + 1 });
     setShowAddContestant(false);
@@ -245,12 +325,12 @@ export default function OrganizerEventDetail() {
     });
 
     if (imported.length === 0) {
-      notifyError('No new contestants found in that file — check for duplicates or an empty file.');
+      notifyError('No new participants found in that file — check for duplicates or an empty file.');
       return;
     }
 
     await updateEvent(id, { contestants: [...existing, ...imported], participants: existing.length + imported.length });
-    notifySuccess(`Imported ${imported.length} contestant${imported.length === 1 ? '' : 's'} from CSV.`);
+    notifySuccess(`Imported ${imported.length} participant${imported.length === 1 ? '' : 's'} from CSV.`);
   }
 
   async function handleAddScorer({ name, subEventId, subEventName }) {
@@ -345,6 +425,7 @@ export default function OrganizerEventDetail() {
     )}
     {showAddContestant && (
       <AddContestantModal
+        event={event}
         onAdd={handleAddContestant}
         onClose={() => setShowAddContestant(false)}
       />
@@ -423,7 +504,7 @@ export default function OrganizerEventDetail() {
             </h2>
             <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
               {event.scoringActive
-                ? 'Judges can currently score contestants.'
+                ? 'Judges can currently score participants.'
                 : 'Start the session to allow judges to submit scores.'}
             </p>
           </div>
@@ -452,11 +533,11 @@ export default function OrganizerEventDetail() {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <div>
               <div style={eyebrow}>Registered</div>
-              <h2 style={{ ...panelTitle, marginBottom: 0 }}>Contestants ({(event.contestants || []).length})</h2>
+              <h2 style={{ ...panelTitle, marginBottom: 0 }}>Participants ({(event.contestants || []).length})</h2>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
-                <i className="bi bi-plus-lg" /> Add Contestant
+                <i className="bi bi-plus-lg" /> Add Participant
               </button>
               <label style={{ ...secondaryBtn, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <i className="bi bi-upload" /> Import CSV
@@ -474,16 +555,21 @@ export default function OrganizerEventDetail() {
             </div>
           </div>
           <p style={{ fontSize: 12, color: '#94a3b8', margin: '-8px 0 16px' }}>
-            CSV format: one contestant per line — <span className="mono">Full Name</span> or <span className="mono">Full Name,team</span> to mark a team entry.
+            CSV format: one participant per line — <span className="mono">Full Name</span> or <span className="mono">Full Name,team</span> to mark a team entry.
           </p>
           {(!event.contestants || event.contestants.length === 0) ? (
-            <p style={{ color: '#94a3b8', fontSize: 14 }}>No contestants yet. They register via the Participant QR, or add them manually above.</p>
+            <p style={{ color: '#94a3b8', fontSize: 14 }}>No participants yet. They register via the Participant QR, or add them manually above.</p>
           ) : (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {event.contestants.map((c) => (
                 <div key={c.id} style={{ padding: '8px 14px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 14, fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <i className={c.type === 'team' ? 'bi bi-people' : 'bi bi-person'} style={{ color: '#2563eb', fontSize: 12 }} />
                   {c.name}
+                  {c.type === 'team' && Array.isArray(c.members) && c.members.length > 0 && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#2563eb', background: '#eff6ff', borderRadius: 999, padding: '2px 8px' }}>
+                      {c.members.length} member{c.members.length === 1 ? '' : 's'}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>

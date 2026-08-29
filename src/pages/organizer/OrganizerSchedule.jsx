@@ -6,11 +6,13 @@ import ConfirmDialog from '../../components/common/ConfirmDialog';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 
+const todayStr = new Date().toISOString().split('T')[0];
+
 export default function OrganizerSchedule() {
   const navigate = useNavigate();
   const { events, updateEvent } = useEventStore();
-  const { success } = useNotificationStore();
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const { success, error } = useNotificationStore();
+  const [selectedDate, setSelectedDate] = useState(todayStr);
   const [pendingConflict, setPendingConflict] = useState(null);
 
   const activeEvents = events.filter((event) => event.status === 'active' || event.status === 'upcoming');
@@ -46,6 +48,10 @@ export default function OrganizerSchedule() {
   };
 
   const handleSchedule = async (event) => {
+    if (selectedDate < todayStr) {
+      error('Cannot assign a date in the past.');
+      return;
+    }
     const conflicts = checkConflicts(event, selectedDate);
     if (conflicts.length > 0) {
       setPendingConflict({ event, conflicts });
@@ -72,6 +78,7 @@ export default function OrganizerSchedule() {
         <input
           type="date"
           value={selectedDate}
+          min={todayStr}
           onChange={(event) => setSelectedDate(event.target.value)}
           style={{ padding: '10px 16px', borderRadius: 12, background: '#ffffff', border: '1px solid #bfdbfe', color: '#0f172a', fontSize: 13, outline: 'none', boxShadow: '0 10px 30px rgba(37,99,235,0.08)' }}
         />

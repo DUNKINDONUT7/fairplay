@@ -26,7 +26,8 @@ const ROLE_LABELS = {
 
 export default function Navbar({ isMobile = false, onMenuToggle }) {
   const navigate = useNavigate();
-  const { user, userRole } = useAuthStore();
+  const { user } = useAuthStore();
+  const userRole = user?.role;
   const { loadNotifications, subscribeToNotifications, getNotificationsForUser, markAsRead, markAllAsRead } = useNotificationStore();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNotif, setShowNotif] = useState(false);
@@ -71,7 +72,8 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
   }, [loadNotifications, subscribeToNotifications, user]);
 
   const notifications = getNotificationsForUser(user);
-  const unreadCount = notifications.filter((notification) => !notification.read).length;
+  const unreadNotifications = notifications.filter((notification) => !notification.read);
+  const unreadCount = unreadNotifications.length;
   const avatarLetter = String(user?.avatar || user?.name || 'U').charAt(0).toUpperCase();
 
   return (
@@ -171,10 +173,10 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
                   )}
                 </div>
               </div>
-              {notifications.length === 0 ? (
-                <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>No notifications yet</div>
+              {unreadNotifications.length === 0 ? (
+                <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>You're all caught up</div>
               ) : (
-                notifications.slice(0, 8).map((notification) => (
+                unreadNotifications.slice(0, 8).map((notification) => (
                   <div
                     key={notification.id}
                     onClick={() => {
@@ -184,9 +186,9 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
                         navigate(notification.actionUrl);
                       }
                     }}
-                    style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9', background: notification.read ? 'transparent' : 'rgba(37,99,235,0.06)', cursor: 'pointer' }}
+                    style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9', background: 'rgba(37,99,235,0.06)', cursor: 'pointer' }}
                   >
-                    <p style={{ fontSize: 12, color: notification.read ? '#64748b' : '#1d4ed8', margin: '0 0 4px', fontWeight: 800 }}>{notification.title || 'Notification'}</p>
+                    <p style={{ fontSize: 12, color: '#1d4ed8', margin: '0 0 4px', fontWeight: 800 }}>{notification.title || 'Notification'}</p>
                     <p style={{ fontSize: 13, color: '#0f172a', margin: 0, lineHeight: 1.35 }}>{notification.message}</p>
                     <p style={{ fontSize: 11, color: '#64748b', marginTop: 6, marginBottom: 0 }}>{new Date(notification.time).toLocaleString()}</p>
                   </div>
@@ -203,8 +205,12 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
             onClick={() => setShowDropdown((current) => !current)}
             style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 14, padding: isMobile ? '8px 10px' : '8px 14px', cursor: 'pointer', color: '#1d4ed8' }}
           >
-            <span style={{ width: 34, height: 34, borderRadius: 10, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(14,165,233,0.18))', color: '#1d4ed8', fontWeight: 800, fontSize: 14 }}>
-              {avatarLetter}
+            <span style={{ width: 34, height: 34, borderRadius: 10, overflow: 'hidden', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, rgba(59,130,246,0.18), rgba(14,165,233,0.18))', color: '#1d4ed8', fontWeight: 800, fontSize: 14 }}>
+              {user?.avatarUrl ? (
+                <img src={user.avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                avatarLetter
+              )}
             </span>
             <div style={{ textAlign: 'left', display: isMobile ? 'none' : 'block' }}>
               <p style={{ fontSize: 13, fontWeight: 700, margin: 0, color: '#1d4ed8' }}>{user?.name || 'User'}</p>

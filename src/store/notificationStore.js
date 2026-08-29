@@ -217,6 +217,77 @@ const useNotificationStore = create(
         });
       },
 
+      notifyRegistrationSubmitted: async (registration, event = null) => {
+        if (!registration?.id) return null;
+        const participantName = registration.participantName || registration.teamName || 'A participant';
+        const eventTitle = event?.title || registration.category || 'an event';
+        return get().createSystemNotification({
+          title: registration.registrationType === 'team' ? 'New team registration' : 'New registration',
+          message: `${participantName} registered for ${eventTitle}.`,
+          type: 'info',
+          category: 'registration',
+          targetRoles: ['admin', 'organizer'],
+          targetUserIds: [event?.organizerAuthProfileId].filter(Boolean),
+          targetEmails: [event?.organizerEmail].filter(Boolean),
+          sourceKey: `registration-submitted:${registration.id}`,
+          entityType: 'registration',
+          entityId: registration.id,
+          actionUrl: event?.id ? `/organizer/events/${event.id}` : '/organizer/events',
+          metadata: {
+            eventId: registration.eventId,
+            eventTitle,
+            participantName,
+            registrationType: registration.registrationType,
+          },
+        });
+      },
+
+      notifyJudgeInvited: async (invite, event = null) => {
+        if (!invite?.id && !invite?.token) return null;
+        const eventTitle = event?.title || invite.eventTitle || 'an event';
+        return get().createSystemNotification({
+          title: 'Judge invite sent',
+          message: `An invite was sent to ${invite.judgeEmail || invite.judgeName || 'a judge'} for ${eventTitle}.`,
+          type: 'info',
+          category: 'judges',
+          targetRoles: ['admin', 'organizer'],
+          targetUserIds: [event?.organizerAuthProfileId].filter(Boolean),
+          targetEmails: [event?.organizerEmail].filter(Boolean),
+          sourceKey: `judge-invite-sent:${invite.id || invite.token}`,
+          entityType: 'judge-invite',
+          entityId: invite.id || invite.token,
+          actionUrl: event?.id ? `/organizer/events/${event.id}` : '/organizer/events',
+          metadata: {
+            eventId: event?.id,
+            eventTitle,
+            judgeEmail: invite.judgeEmail,
+            judgeName: invite.judgeName,
+          },
+        });
+      },
+
+      notifyBracketPublished: async (tournament, event = null) => {
+        if (!tournament?.id) return null;
+        const title = tournament.title || tournament.name || event?.title || 'Tournament';
+        return get().createSystemNotification({
+          title: 'Bracket published',
+          message: `${title} bracket is now visible to participants and the public.`,
+          type: 'success',
+          category: 'tournament',
+          targetRoles: ['admin', 'organizer'],
+          targetUserIds: [event?.organizerAuthProfileId].filter(Boolean),
+          targetEmails: [event?.organizerEmail].filter(Boolean),
+          sourceKey: `bracket-published:${tournament.id}:${tournament.publishedAt || ''}`,
+          entityType: 'tournament',
+          entityId: tournament.id,
+          actionUrl: tournament.eventId ? `/events/${tournament.eventId}/brackets` : '/organizer/brackets',
+          metadata: {
+            eventId: tournament.eventId,
+            tournamentTitle: title,
+          },
+        });
+      },
+
       notifyCertificateReady: async (certificate) => {
         if (!certificate?.id) return null;
         const eventId = certificate.eventId;
@@ -325,7 +396,11 @@ const useNotificationStore = create(
         }));
 
         if (isSupabaseConfigured && supabase) {
-          await supabase.from('notifications').update({ is_read: true }).eq('id', id).catch(() => {});
+          try {
+            await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+          } catch {
+            // best-effort — local state above already reflects the read status
+          }
         }
       },
 
@@ -340,7 +415,11 @@ const useNotificationStore = create(
         }));
 
         if (isSupabaseConfigured && supabase && ids.length > 0) {
-          await supabase.from('notifications').update({ is_read: true }).in('id', ids).catch(() => {});
+          try {
+            await supabase.from('notifications').update({ is_read: true }).in('id', ids);
+          } catch {
+            // best-effort — local state above already reflects the read status
+          }
         }
       },
 

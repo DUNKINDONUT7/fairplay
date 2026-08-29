@@ -4,6 +4,22 @@ import useCertificateStore from '../../store/certificateStore';
 import useNotificationStore from '../../store/notificationStore';
 import useAuthStore from '../../store/authStore';
 
+function getInitials(name, email) {
+  const source = String(name || email || 'User').trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return source.slice(0, 2).toUpperCase();
+}
+
+function roleLabel(role) {
+  return String(role || 'organizer')
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
 export default function OrganizerSettings() {
   const { template, updateTemplate } = useCertificateStore();
   const { success, error } = useNotificationStore();
@@ -44,6 +60,30 @@ export default function OrganizerSettings() {
     <DashboardLayout title="Profile Settings" subtitle="Manage organizer preferences and automation templates">
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 600px)', gap: 20 }}>
         <div style={{ background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 20, padding: 28, boxShadow: '0 20px 45px rgba(37,99,235,0.08)' }}>
+
+          {/* Profile identity */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 20, paddingBottom: 24, marginBottom: 24, borderBottom: '1px solid #e5efff' }}>
+            <div style={{
+              width: 84, height: 84, borderRadius: '50%', overflow: 'hidden', flexShrink: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: user?.avatarUrl ? '#f1f5f9' : 'linear-gradient(135deg, #2563eb, #0ea5e9)',
+              color: '#ffffff', fontSize: 26, fontWeight: 800, border: '3px solid #ffffff',
+              boxShadow: '0 8px 24px rgba(37,99,235,0.2)',
+            }}>
+              {user?.avatarUrl ? (
+                <img src={user.avatarUrl} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                getInitials(user?.name, user?.email)
+              )}
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', margin: 0 }}>{user?.name || 'Organizer User'}</p>
+              <p style={{ fontSize: 12, color: '#2563eb', fontWeight: 600, margin: '2px 0' }}>{roleLabel(user?.role)}</p>
+              <p style={{ fontSize: 12, color: '#64748b', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{user?.email}</p>
+            </div>
+          </div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <div>
               <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#64748b', marginBottom: 6 }}>Display Name</label>

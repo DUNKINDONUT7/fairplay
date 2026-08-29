@@ -24,6 +24,7 @@ export default function LiveBracket({
   onScoreChange,
   onSaveMatch,
   onAutoAdvanceMatch,
+  onPickWinner,
 }) {
   if (!tournament) return null;
 
@@ -162,6 +163,25 @@ export default function LiveBracket({
                           </div>
                         ))}
 
+                        {editable && onPickWinner && match.team1 && match.team2 && !['completed', 'bye'].includes(match.status) && (
+                          <div className="live-bracket-pick-row">
+                            <button
+                              type="button"
+                              className="live-bracket-pick-btn"
+                              onClick={() => onPickWinner(match, 'score1')}
+                            >
+                              <i className="bi bi-trophy" /> {match.team1.name} wins
+                            </button>
+                            <button
+                              type="button"
+                              className="live-bracket-pick-btn"
+                              onClick={() => onPickWinner(match, 'score2')}
+                            >
+                              <i className="bi bi-trophy" /> {match.team2.name} wins
+                            </button>
+                          </div>
+                        )}
+
                         <div className="live-bracket-footer">
                           <div className="live-bracket-footer-note">
                             {match.winner?.name
@@ -169,7 +189,7 @@ export default function LiveBracket({
                               : match.status === 'bye'
                                 ? 'Automatic advance'
                                 : editable && !isRoundRobin && !isFinalMatch(match)
-                                  ? 'Auto-advances when both scores are entered'
+                                  ? 'Pick a winner above, or enter exact scores below'
                                 : 'Waiting for result'}
                           </div>
                           {editable && (isRoundRobin || isFinalMatch(match)) && (

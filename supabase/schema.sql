@@ -1021,3 +1021,44 @@ create policy "Staff can delete their rubric templates"
 on public.rubric_templates for delete
 to authenticated
 using (public.is_staff_user());
+
+-- ============================================================================
+-- SECTION: Attendance check-in de-duplication
+-- Two scanner devices checking the same badge in within the same instant can
+-- both pass the client-side (in-memory) duplicate check before either write
+-- lands, producing two "checked-in" rows for the same attendee. This adds a
+-- real DB-level guard so the second insert fails fast instead of silently
+-- succeeding, and the app treats that failure as "already checked in".
+--
+-- Only rows with a populated attendee_id are constrained (Postgres never
+-- treats NULL = NULL, so anonymous/manual entries with no attendee_id are
+-- unaffected and can still have any number of rows). A row's check_in_status
+-- is part of the key on purpose: it only blocks two simultaneous
+-- 'checked-in' rows for the same attendee at the same event — a later status
+-- change (e.g. 'absent') is a different row and stays allowed.
+--
+-- The de-dupe step below removes any duplicates that already exist today
+-- (keeping only the earliest 'checked-in' row per attendee/event) so the
+-- constraint can be added without failing on old data. Re-running this
+-- section is safe: once de-duped, there is nothing left to delete, and the
+-- constraint is only added if it doesn't already exist.
+-- ============================================================================
+
+delete from public.attendance a
+using public.attendance b
+where a.event_id = b.event_id
+  and a.attendee_id = b.attendee_id
+  and a.check_in_status = b.check_in_status
+  and a.check_in_status = 'checked-in'
+  and a.attendee_id is not null
+  and (a.checked_in_at, a.id) > (b.checked_in_at, b.id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'attendance_event_attendee_status_key'
+  ) then
+    alter table public.attendance
+      add constraint attendance_event_attendee_status_key unique (event_id, attendee_id, check_in_status);
+  end if;
+end $$;

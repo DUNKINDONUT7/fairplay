@@ -348,9 +348,36 @@ const useScoreStore = create(
 
       finalizeEventScores: async (eventId) => {
         const scoresForEvent = get().getScoresForEvent(eventId);
-        for (const score of scoresForEvent) {
-          await get().lockScore(score.eventId, score.judgeId, score.contestantId);
+        if (scoresForEvent.length === 0) return 0;
+
+        const lockedAt = new Date().toISOString();
+        const ids = scoresForEvent.map((score) => score.id);
+
+        set((state) => {
+          const nextScores = { ...state.scores };
+          scoresForEvent.forEach((score) => {
+            const key = scoreKey(score.eventId, score.judgeId, score.contestantId);
+            nextScores[key] = { ...nextScores[key], locked: true, lockedAt };
+          });
+          return { scores: nextScores };
+        });
+
+        if (isSupabaseConfigured) {
+          try {
+            // One batched update instead of N sequential lockScore() calls —
+            // finalizing an event can mean hundreds of scores, and awaiting
+            // them one at a time serializes what should be a single round trip.
+            const { error } = await supabase
+              .from('scores')
+              .update({ locked: true, locked_at: lockedAt })
+              .in('id', ids);
+            if (error) throw error;
+          } catch (error) {
+            console.error('Error finalizing event scores:', error.message);
+            set({ error: error.message });
+          }
         }
+
         return scoresForEvent.length;
       },
 

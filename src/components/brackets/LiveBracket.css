@@ -224,6 +224,32 @@
   font-weight: 700;
 }
 
+.live-bracket-pick-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.live-bracket-pick-btn {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 8px 6px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-bracket-pick-btn:hover {
+  background: #dbeafe;
+}
+
 .live-bracket-footer {
   display: flex;
   justify-content: space-between;

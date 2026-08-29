@@ -51,6 +51,13 @@ function getSeedUser(email, password) {
   return safeUser;
 }
 
+function matchDemoCredentials(get, normalizedEmail, password) {
+  return getSeedUser(normalizedEmail, password) || get().users.find((entry) =>
+    String(entry.email || '').toLowerCase() === normalizedEmail &&
+    entry.password === password
+  );
+}
+
 function buildOrganizerApplication(userData = {}) {
   const email = String(userData.email || '').trim().toLowerCase();
   const name = String(userData.name || userData.full_name || email || 'Organizer Applicant').trim();
@@ -217,15 +224,41 @@ const useAuthStore = create(
       sessionSource: HYBRID_MODE ? 'hybrid' : SUPABASE_AUTH_ENABLED ? 'supabase' : 'demo',
 
       initAuth: async () => {
+        // zustand's persist middleware rehydrates from localStorage
+        // asynchronously, so on a fresh page load this can still be running
+        // when initAuth starts — without waiting for it, get().user/
+        // get().sessionSource below would read the store's default values
+        // instead of a real persisted demo session, and getSession() finding
+        // no real Supabase session would then wipe it out entirely.
+        if (!useAuthStore.persist.hasHydrated()) {
+          // onFinishHydration only fires on a successful rehydrate — if it
+          // ever errors (corrupted localStorage, etc.) the callback never
+          // runs at all, so this must not wait unconditionally or a bad
+          // hydration would permanently stall the login flow.
+          await Promise.race([
+            new Promise((resolve) => {
+              const unsubscribe = useAuthStore.persist.onFinishHydration(() => {
+                unsubscribe();
+                resolve();
+              });
+            }),
+            new Promise((resolve) => setTimeout(resolve, 1500)),
+          ]);
+        }
+
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
           set({ loading: false, initialized: true, authMode: 'demo', sessionSource: 'demo' });
           return;
         }
 
+        const persistedUser = get().user;
+        const persistedToken = get().token;
+        const hasPersistedDemoSession = get().sessionSource === 'demo' && Boolean(persistedUser) && Boolean(persistedToken);
+
         set({
           loading: true,
-          authMode: HYBRID_MODE ? 'hybrid' : 'supabase',
-          sessionSource: HYBRID_MODE ? 'hybrid' : 'supabase',
+          authMode: hasPersistedDemoSession ? get().authMode : (HYBRID_MODE ? 'hybrid' : 'supabase'),
+          sessionSource: hasPersistedDemoSession ? get().sessionSource : (HYBRID_MODE ? 'hybrid' : 'supabase'),
         });
 
         try {
@@ -237,14 +270,29 @@ const useAuthStore = create(
           const session = sessionData?.session || null;
           const sessionUser = session?.user ? await buildSessionUser(session.user) : null;
 
-          set({
-            user: sessionUser,
-            token: session?.access_token || null,
-            users: profiles.length > 0 ? profiles : get().users,
-            organizerApplications: buildOrganizerApplicationsFromUsers(profiles.length > 0 ? profiles : get().users),
-            loading: false,
-            initialized: true,
-          });
+          // A demo/seed login never creates a real Supabase session, so
+          // getSession() always comes back empty for it. Without this check,
+          // every page reload would silently overwrite a valid demo session
+          // with null and log the user out.
+          if (!session && hasPersistedDemoSession) {
+            set({
+              users: profiles.length > 0 ? profiles : get().users,
+              organizerApplications: buildOrganizerApplicationsFromUsers(profiles.length > 0 ? profiles : get().users),
+              loading: false,
+              initialized: true,
+            });
+          } else {
+            set({
+              user: sessionUser,
+              token: session?.access_token || null,
+              users: profiles.length > 0 ? profiles : get().users,
+              organizerApplications: buildOrganizerApplicationsFromUsers(profiles.length > 0 ? profiles : get().users),
+              loading: false,
+              initialized: true,
+              authMode: sessionUser ? (HYBRID_MODE ? 'hybrid' : 'supabase') : get().authMode,
+              sessionSource: sessionUser ? 'supabase' : get().sessionSource,
+            });
+          }
         } catch (error) {
           set({
             user: null,
@@ -257,6 +305,14 @@ const useAuthStore = create(
         if (!authListenerBound) {
           authListenerBound = true;
           supabase.auth.onAuthStateChange(async (_event, session) => {
+            // Same demo-session guard as above: this fires on subscription
+            // with whatever Supabase's real session currently is (null, for
+            // a demo login), and would otherwise silently log the user out
+            // right after initAuth just finished restoring their session.
+            if (!session && get().sessionSource === 'demo' && get().user && get().token) {
+              return;
+            }
+
             const nextUser = session?.user ? await buildSessionUser(session.user) : null;
             const users = session?.user ? await fetchProfilesList().catch(() => get().users) : get().users;
 
@@ -291,6 +347,25 @@ const useAuthStore = create(
           return { success: true, user: safeUser };
         }
 
+        // Hybrid mode: a known demo/seed account should log in instantly
+        // instead of first waiting on a network round-trip to Supabase Auth
+        // that is guaranteed to fail (seed accounts have no real Supabase
+        // Auth user behind them) — without this, every demo login paid for
+        // a full failed request before ever reaching the fallback below.
+        const demoMatch = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
+        if (demoMatch) {
+          const token = `token_${demoMatch.id}_${Date.now()}`;
+          set({
+            user: demoMatch,
+            token,
+            loading: false,
+            initialized: true,
+            authMode: HYBRID_MODE ? 'hybrid' : 'demo',
+            sessionSource: 'demo',
+          });
+          return { success: true, user: demoMatch };
+        }
+
         try {
           const { data, error } = await supabase.auth.signInWithPassword({
             email: normalizedEmail,
@@ -317,12 +392,7 @@ const useAuthStore = create(
 
           return { success: true, user: sessionUser };
         } catch (error) {
-          const safeUser = DEMO_MODE_ENABLED && (
-            getSeedUser(normalizedEmail, password) || get().users.find((entry) =>
-              String(entry.email || '').toLowerCase() === normalizedEmail &&
-              entry.password === password
-            )
-          );
+          const safeUser = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
           if (safeUser) {
             const token = `token_${safeUser.id}_${Date.now()}`;
             set({
@@ -517,12 +587,17 @@ const useAuthStore = create(
       updateUser: async (userId, updates) => {
         let updatedUser = null;
 
-        if (SUPABASE_AUTH_ENABLED && supabase) {
+        // A demo/seed-logged-in user (see login()'s fallback) has no matching
+        // row in the real Supabase `profiles` table, so hitting Supabase here
+        // would just throw — same guard pattern as logout()'s sessionSource check.
+        const isSupabaseSession = SUPABASE_AUTH_ENABLED && supabase && get().sessionSource === 'supabase';
+
+        if (isSupabaseSession) {
           const payload = {
             ...(updates?.email ? { email: updates.email } : {}),
             ...(updates?.name ? { full_name: updates.name } : {}),
             ...(updates?.role ? { role: normalizeRole(updates.role) } : {}),
-            ...(updates?.avatarUrl ? { avatar_url: updates.avatarUrl } : {}),
+            ...(updates?.avatarUrl !== undefined ? { avatar_url: updates.avatarUrl } : {}),
             ...(updates?.status ? { status: updates.status } : {}),
             updated_at: new Date().toISOString(),
           };
@@ -622,14 +697,6 @@ const useAuthStore = create(
       },
 
       setLoading: (loading) => set({ loading }),
-
-      get isAuthenticated() {
-        return !!get().user && !!get().token;
-      },
-
-      get userRole() {
-        return get().user?.role || null;
-      },
     }),
     {
       name: 'fairplay_auth',

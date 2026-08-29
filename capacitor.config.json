@@ -1,0 +1,9 @@
+{
+  "appId": "com.fairplay.events",
+  "appName": "FairPlay",
+  "webDir": "dist",
+  "server": {
+    "url": "https://fairplay-gray.vercel.app",
+    "cleartext": false
+  }
+}

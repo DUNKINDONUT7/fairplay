@@ -25,6 +25,7 @@ function normalizeContestants(event) {
       captain: contestant.captain || '',
       subEventId: contestant.subEventId || contestant.sub_event_id || '',
       subEventName: contestant.subEventName || contestant.sub_event_name || '',
+      members: Array.isArray(contestant.members) ? contestant.members : [],
     }));
 }
 

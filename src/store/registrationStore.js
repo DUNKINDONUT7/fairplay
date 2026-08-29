@@ -4,6 +4,7 @@ import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 import { validateRegistrationConflict } from '../services/eventWorkflowService';
 import useEventStore from './eventStore';
 import useTeamStore from './teamStore';
+import useNotificationStore from './notificationStore';
 import { inferTeamLimitConfig, validateTeamMemberCount } from '../utils/teamEventRules';
 
 const initialDetails = { name: '', email: '', phone: '', qrToken: '' };
@@ -328,6 +329,7 @@ const useRegistrationStore = create(
           }));
 
           await persistRegistration(registration);
+          await useNotificationStore.getState().notifyRegistrationSubmitted(registration, event);
 
           return registration;
         } catch (error) {
@@ -528,6 +530,7 @@ const useRegistrationStore = create(
           }));
 
           await persistRegistration(registration);
+          await useNotificationStore.getState().notifyRegistrationSubmitted(registration, event);
           return registration;
         } catch (error) {
           set({ status: 'error', error: error.message });

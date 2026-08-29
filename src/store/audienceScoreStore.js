@@ -193,9 +193,12 @@ const useAudienceScoreStore = create(
           onChange: refresh,
         });
 
+        // Fallback only — the filtered realtime subscriptions above already
+        // refresh within ~150ms of any relevant change. This just covers a
+        // silently-dropped socket, so it doesn't need to be fast.
         const pollId = window.setInterval(() => {
           get().fetchAudienceScores(eventId, { silent: true });
-        }, 3000);
+        }, 30000);
 
         get().fetchAudienceScores(eventId, { silent: true });
 

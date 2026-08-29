@@ -191,9 +191,11 @@ export default function OrganizerBracket() {
     fetchRegistrations();
     fetchTournaments();
 
+    // Fallback only — the realtime subscription below already refreshes on
+    // every tournament change; this just covers a silently-dropped socket.
     const intervalId = window.setInterval(() => {
       fetchTournaments();
-    }, 10000);
+    }, 30000);
 
     const unsubscribe = isSupabaseConfigured
       ? subscribeToTable({
@@ -483,6 +485,19 @@ export default function OrganizerBracket() {
     }
   };
 
+  const handlePickWinner = async (match, winnerKey) => {
+    if (!currentTournament || !match) return;
+    const winnerName = winnerKey === 'score1' ? match.team1?.name : match.team2?.name;
+    try {
+      await updateMatchDraft(currentTournament.id, match.id, 'score1', winnerKey === 'score1' ? 1 : 0);
+      await updateMatchDraft(currentTournament.id, match.id, 'score2', winnerKey === 'score2' ? 1 : 0);
+      await saveMatchResult(currentTournament.id, match.id);
+      success(`${winnerName || 'Winner'} advances.`);
+    } catch (saveError) {
+      error(String(saveError?.message || 'Unable to save this result.'));
+    }
+  };
+
   const copyPublicLink = async () => {
     if (!currentTournament?.eventId) return;
     const link = `${window.location.origin}/events/${currentTournament.eventId}/brackets`;
@@ -525,6 +540,8 @@ export default function OrganizerBracket() {
     }
   };
 
+  const guideStep = !selectedEvent ? 1 : !currentTournament ? 2 : !currentTournament.isPublished ? 3 : 4;
+
   return (
     <DashboardLayout
       title={performanceMode ? 'Points Leaderboard Management' : 'Tournament Bracket Management'}
@@ -543,6 +560,18 @@ export default function OrganizerBracket() {
         }}
       />
       <div style={{ display: 'grid', gap: 20 }}>
+        {!performanceMode && (
+          <GuideBanner
+            step={guideStep}
+            steps={[
+              'Pick the event you want a bracket for',
+              'Arrange the seed order below, then click "Generate Bracket"',
+              'Click "Publish" so participants and the public can view it',
+              'Enter match scores in the bracket below as games finish',
+            ]}
+          />
+        )}
+
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <LabeledControl label="Event">
             <select
@@ -577,8 +606,8 @@ export default function OrganizerBracket() {
               </select>
             </LabeledControl>
           )}
-          {!performanceMode && selectedEventTournaments.length > 0 && (
-            <LabeledControl label="Bracket">
+          {!performanceMode && selectedEventTournaments.length > 1 && (
+            <LabeledControl label="Bracket (this event has more than one)">
               <select
                 value={currentTournament?.id || ''}
                 onChange={(event) => {
@@ -755,19 +784,34 @@ export default function OrganizerBracket() {
         </div>
 
         {!performanceMode && currentTournament ? (
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <button onClick={() => publishTournament(currentTournament.id, !currentTournament.isPublished)} style={secondaryButtonStyle}>
-              <i className={`bi ${currentTournament.isPublished ? 'bi-eye-slash' : 'bi-broadcast-pin'}`} /> {currentTournament.isPublished ? 'Unpublish' : 'Publish'}
-            </button>
-            <button onClick={copyPublicLink} style={secondaryButtonStyle}>
-              <i className="bi bi-link-45deg" /> Copy Public Link
-            </button>
-            <button onClick={() => lockTournament(currentTournament.id, !currentTournament.isLocked)} style={secondaryButtonStyle}>
-              <i className={`bi ${currentTournament.isLocked ? 'bi-unlock' : 'bi-lock'}`} /> {currentTournament.isLocked ? 'Unlock' : 'Lock'}
-            </button>
-            <button onClick={() => undoLastResult(currentTournament.id).then(() => success('Last result undone.')).catch((undoError) => error(String(undoError?.message || 'Unable to undo the last result.')))} style={secondaryButtonStyle}>
-              <i className="bi bi-arrow-counterclockwise" /> Undo Last Result
-            </button>
+          <div style={panelStyle}>
+            <h3 style={{ color: '#0f172a', fontSize: 16, fontWeight: 800, marginBottom: 14 }}>Bracket Actions</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              <ActionButton
+                icon={currentTournament.isPublished ? 'bi-eye-slash' : 'bi-broadcast-pin'}
+                label={currentTournament.isPublished ? 'Unpublish' : 'Publish'}
+                caption={currentTournament.isPublished ? 'Currently visible to participants and the public. Click to hide it again.' : 'Makes this bracket visible to participants and the public.'}
+                onClick={() => publishTournament(currentTournament.id, !currentTournament.isPublished)}
+              />
+              <ActionButton
+                icon="bi-link-45deg"
+                label="Copy Public Link"
+                caption="Copies the link anyone can open to view this bracket (works once published)."
+                onClick={copyPublicLink}
+              />
+              <ActionButton
+                icon={currentTournament.isLocked ? 'bi-unlock' : 'bi-lock'}
+                label={currentTournament.isLocked ? 'Unlock Bracket' : 'Lock Bracket'}
+                caption={currentTournament.isLocked ? 'Editing is currently disabled. Click to allow score changes again.' : 'Prevents any further match score changes — use once results are final.'}
+                onClick={() => lockTournament(currentTournament.id, !currentTournament.isLocked)}
+              />
+              <ActionButton
+                icon="bi-arrow-counterclockwise"
+                label="Undo Last Result"
+                caption="Reverses the most recently saved match score, in case of a mistake."
+                onClick={() => undoLastResult(currentTournament.id).then(() => success('Last result undone.')).catch((undoError) => error(String(undoError?.message || 'Unable to undo the last result.')))}
+              />
+            </div>
           </div>
         ) : null}
 
@@ -831,6 +875,7 @@ export default function OrganizerBracket() {
             onScoreChange={handleScoreFieldChange}
             onSaveMatch={handleSaveMatch}
             onAutoAdvanceMatch={handleAutoAdvanceMatch}
+            onPickWinner={handlePickWinner}
           />
         ) : (
           <div style={emptyPanelStyle}>
@@ -840,6 +885,83 @@ export default function OrganizerBracket() {
 
       </div>
     </DashboardLayout>
+  );
+}
+
+function GuideBanner({ step, steps }) {
+  return (
+    <div style={{ background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 16, padding: '16px 20px', boxShadow: '0 12px 32px rgba(37, 99, 235, 0.07)' }}>
+      <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+        How this page works
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        {steps.map((text, index) => {
+          const stepNumber = index + 1;
+          const isDone = stepNumber < step;
+          const isActive = stepNumber === step;
+          return (
+            <div
+              key={text}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '8px 14px 8px 8px',
+                borderRadius: 999,
+                background: isActive ? '#eff6ff' : isDone ? '#f0fdf4' : '#f8fafc',
+                border: `1px solid ${isActive ? '#93c5fd' : isDone ? '#bbf7d0' : '#e2e8f0'}`,
+                flex: '1 1 220px',
+                minWidth: 220,
+              }}
+            >
+              <span
+                style={{
+                  width: 24,
+                  height: 24,
+                  borderRadius: '50%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  flexShrink: 0,
+                  background: isActive ? '#2563eb' : isDone ? '#22c55e' : '#cbd5e1',
+                  color: '#ffffff',
+                }}
+              >
+                {isDone ? <i className="bi bi-check-lg" /> : stepNumber}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: isActive ? 700 : 500, color: isActive ? '#1d4ed8' : isDone ? '#15803d' : '#64748b' }}>
+                {text}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ActionButton({ icon, label, caption, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        textAlign: 'left',
+        padding: '14px 16px',
+        borderRadius: 14,
+        border: '1px solid #bfdbfe',
+        background: '#eff6ff',
+        cursor: 'pointer',
+        display: 'grid',
+        gap: 6,
+      }}
+    >
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#1d4ed8', fontWeight: 800, fontSize: 13 }}>
+        <i className={`bi ${icon}`} /> {label}
+      </span>
+      <span style={{ color: '#64748b', fontSize: 12, fontWeight: 500, lineHeight: 1.4 }}>{caption}</span>
+    </button>
   );
 }
 

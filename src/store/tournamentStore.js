@@ -13,6 +13,7 @@ import {
 } from '../utils/bracketEngine';
 import useCertificateStore from './certificateStore';
 import useEventStore from './eventStore';
+import useNotificationStore from './notificationStore';
 
 function normalizeTournament(tournament) {
   return {
@@ -474,11 +475,18 @@ const useTournamentStore = create(
         // actual match progress (waiting/live/completed) and must not be
         // touched here, or "Live Status" gets stuck showing "published"
         // forever instead of the bracket's real progress.
-        return get().updateTournament(tournamentId, {
+        const updated = await get().updateTournament(tournamentId, {
           isPublished,
           publishedAt: isPublished ? new Date().toISOString() : null,
           streamMessage: isPublished ? 'Public bracket view is now live.' : 'Public bracket view was unpublished.',
         });
+
+        if (isPublished && updated) {
+          const event = useEventStore.getState().getEventById(updated.eventId);
+          await useNotificationStore.getState().notifyBracketPublished(updated, event);
+        }
+
+        return updated;
       },
 
       lockTournament: async (tournamentId, isLocked = true) => {

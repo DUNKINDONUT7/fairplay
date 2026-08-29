@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 import { getBusinessActorId, getActorIdentityKeys, matchesActorIdentity } from '../utils/identity';
+import useNotificationStore from './notificationStore';
+import useEventStore from './eventStore';
 
 function normalizeJudge(judge) {
   return {
@@ -258,10 +260,15 @@ const useJudgeStore = create(
           body: { eventId, eventTitle, judgeName: name, judgeEmail: email },
         });
 
-        if (error) throw error;
+        if (error) {
+          const bodyFromResponse = await error.context?.json?.().catch(() => null);
+          throw new Error(bodyFromResponse?.error || data?.error || error.message);
+        }
         if (data?.error) throw new Error(data.error);
 
         await get().fetchInvites(eventId);
+        const event = useEventStore.getState().getEventById(eventId);
+        await useNotificationStore.getState().notifyJudgeInvited({ id: data?.inviteId, token: data?.token, judgeEmail: email, judgeName: name, eventTitle }, event);
         return data;
       },
 
