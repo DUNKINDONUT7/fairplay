@@ -36,26 +36,39 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
   const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
   const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || 'FairPlay <onboarding@resend.dev>';
   const siteUrl = (Deno.env.get('SITE_URL') || Deno.env.get('APP_URL') || '').replace(/\/$/, '');
 
-  if (!supabaseUrl || !serviceRoleKey || !resendApiKey) {
+  if (!supabaseUrl || !anonKey || !resendApiKey) {
     return jsonResponse({ error: 'Email service is not configured.' }, 500);
   }
 
   const authHeader = req.headers.get('Authorization') || '';
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+
+  // Runs entirely as the caller — no service-role client, and the anon key
+  // rather than SUPABASE_SERVICE_ROLE_KEY. This project's auto-injected
+  // service-role key does not authenticate as service_role (confirmed: it
+  // returned "permission denied for table ..." on both profiles and
+  // judge_invites), so nothing here depends on it. judge_invites originally
+  // had RLS on with only a SELECT policy — no INSERT policy — which is what
+  // actually made the insert impossible, service-role key or not. The real
+  // gap was the missing policy; "Staff can create judge invites" (for
+  // insert, to authenticated, with check is_staff_user()) now covers it,
+  // mirroring the existing SELECT policy's rule (role in admin/organizer).
+  // With that in place, the caller's own session is sufficient for
+  // everything below, same as any browser request through the anon key.
+  const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const { data: authData, error: authError } = await callerClient.auth.getUser();
   if (authError || !authData?.user) {
     return jsonResponse({ error: 'Unauthorized.' }, 401);
   }
 
-  const { data: callerProfile, error: profileError } = await supabase
+  const { data: callerProfile, error: profileError } = await callerClient
     .from('profiles')
     .select('role')
     .eq('id', authData.user.id)
@@ -84,7 +97,7 @@ serve(async (req) => {
   const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
   const inviteId = Date.now();
 
-  const { error: insertError } = await supabase.from('judge_invites').insert({
+  const { error: insertError } = await callerClient.from('judge_invites').insert({
     id: inviteId,
     event_id: eventId,
     event_title: eventTitle,
@@ -98,7 +111,10 @@ serve(async (req) => {
     return jsonResponse({ error: insertError.message }, 500);
   }
 
-  const inviteUrl = `${siteUrl || 'https://fairplay-gray.vercel.app'}/judge/invite/${token}`;
+  // Set the SITE_URL secret so this never has to fall back. The fallback is
+  // the real deployed domain, so a missing secret still produces a link that
+  // works rather than one pointing at a project that does not exist.
+  const inviteUrl = `${siteUrl || 'https://fairplay-kappa.vercel.app'}/judge/invite/${token}`;
   const safeName = escapeHtml(judgeName);
   const safeEventTitle = escapeHtml(eventTitle);
   const safeInviteUrl = escapeHtml(inviteUrl);

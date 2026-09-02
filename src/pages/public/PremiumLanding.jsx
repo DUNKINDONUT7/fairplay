@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
+import useNotificationStore from '../../store/notificationStore';
 import './PremiumLanding.css';
 
 /* ─── Auth Modal ────────────────────────────────────────────────── */
 const AuthModal = ({ mode: initialMode, onClose }) => {
   const store = useAuthStore();
   const navigate = useNavigate();
+  const { success: showSuccess, error: showError } = useNotificationStore();
   const [mode, setMode] = useState(initialMode); // 'login' | 'register'
-  const [error, setError] = useState('');
   const overlayRef = useRef(null);
 
   const [loginData, setLoginData] = useState({ email: '', password: '' });
@@ -34,35 +35,33 @@ const AuthModal = ({ mode: initialMode, onClose }) => {
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError('');
-    if (!loginData.email || !loginData.password) { setError('Please fill in all fields.'); return; }
+    if (!loginData.email || !loginData.password) { showError('Please fill in all fields.'); return; }
     const result = await store.login(loginData.email, loginData.password);
     if (result.success) {
       onClose();
       redirectAfterLogin(result.user);
     } else {
-      setError(result.error || 'Login failed. Please try again.');
+      showError(result.error || 'Login failed. Please try again.');
     }
   };
 
   const handleRegister = async (e) => {
     e.preventDefault();
-    setError('');
-    if (!regData.name || !regData.email || !regData.password) { setError('Please fill in all fields.'); return; }
-    if (regData.password.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    if (regData.password !== regData.confirmPassword) { setError('Passwords do not match.'); return; }
+    if (!regData.name || !regData.email || !regData.password) { showError('Please fill in all fields.'); return; }
+    if (regData.password.length < 6) { showError('Password must be at least 6 characters.'); return; }
+    if (regData.password !== regData.confirmPassword) { showError('Passwords do not match.'); return; }
     const result = await store.register({ name: regData.name, email: regData.email, password: regData.password, role: 'organizer' });
     if (result.success) {
       if (result.requiresApproval || result.requiresEmailConfirmation) {
         setMode('login');
         setLoginData({ email: regData.email, password: '' });
-        setError(result.message || 'Account created. An admin needs to approve it before you can sign in.');
+        showSuccess(result.message || 'Account created. An admin needs to approve it before you can sign in.');
         return;
       }
       onClose();
       redirectAfterLogin(result.user);
     } else {
-      setError(result.error || 'Registration failed.');
+      showError(result.error || 'Registration failed.');
     }
   };
 
@@ -75,16 +74,14 @@ const AuthModal = ({ mode: initialMode, onClose }) => {
           <span>FairPlay</span>
         </div>
         <div className="fp-modal-tabs">
-          <button className={`fp-modal-tab ${mode === 'login' ? 'active' : ''}`} onClick={() => { setMode('login'); setError(''); }}>
+          <button className={`fp-modal-tab ${mode === 'login' ? 'active' : ''}`} onClick={() => setMode('login')}>
             Sign In
           </button>
-          <button className={`fp-modal-tab ${mode === 'register' ? 'active' : ''}`} onClick={() => { setMode('register'); setError(''); }}>
+          <button className={`fp-modal-tab ${mode === 'register' ? 'active' : ''}`} onClick={() => setMode('register')}>
             Create Account
           </button>
           <div className={`fp-modal-tab-indicator ${mode === 'register' ? 'right' : 'left'}`} />
         </div>
-
-        {error && <div className="fp-modal-error">⚠ {error}</div>}
 
         {mode === 'login' && (
           <form className="fp-form" onSubmit={handleLogin}>

@@ -1,12 +1,18 @@
+/* FairPlay bracket board.
+   Palette matches the rest of the public/organizer surfaces:
+   ink #0f172a · muted #64748b · primary #1d4ed8 · line #dbeafe · surface #fff */
+
 .live-bracket-shell {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
 }
+
+/* ── Summary tiles ─────────────────────────────────────────────── */
 
 .live-bracket-meta {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 
@@ -14,95 +20,123 @@
   background: #ffffff;
   border: 1px solid #dbeafe;
   border-radius: 16px;
-  padding: 16px;
-  box-shadow: 0 10px 26px rgba(37, 99, 235, 0.06);
+  padding: 14px 16px;
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.05);
 }
 
 .live-bracket-stat-label {
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   margin-bottom: 6px;
 }
 
 .live-bracket-stat-value {
   color: #1d4ed8;
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 800;
+  text-transform: capitalize;
+  line-height: 1.2;
 }
+
+/* ── Board / scroll area ───────────────────────────────────────── */
 
 .live-bracket-board {
+  position: relative;
   overflow-x: auto;
-  padding-bottom: 8px;
+  overflow-y: hidden;
+  padding-bottom: 10px;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
+  scrollbar-color: #bfdbfe transparent;
 }
 
+.live-bracket-board::-webkit-scrollbar {
+  height: 8px;
+}
+
+.live-bracket-board::-webkit-scrollbar-track {
+  background: #eff6ff;
+  border-radius: 999px;
+}
+
+.live-bracket-board::-webkit-scrollbar-thumb {
+  background: #bfdbfe;
+  border-radius: 999px;
+}
+
+.live-bracket-board::-webkit-scrollbar-thumb:hover {
+  background: #93c5fd;
+}
+
+/* align-items: stretch gives every round the same height, which is what
+   lets the even distribution below line matches up across rounds. */
 .live-bracket-rounds {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 56px;
   min-width: max-content;
-  padding: 6px 0 20px;
+  padding: 4px 0 16px;
 }
 
 .live-bracket-round {
-  min-width: 260px;
+  min-width: 250px;
   display: flex;
   flex-direction: column;
+  scroll-snap-align: start;
 }
 
 .live-bracket-round-header {
-  margin-bottom: 18px;
+  margin-bottom: 16px;
   text-align: center;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.05);
 }
 
 .live-bracket-round-title {
   color: #0f172a;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
 }
 
 .live-bracket-round-subtitle {
   color: #64748b;
   font-size: 11px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
+/* Every match takes an equal share of the round's height, so a match in the
+   next round lands exactly at the midpoint of the two that feed it — at any
+   card height, for any number of rounds. This replaces the fixed per-round
+   margins that broke as soon as a card grew taller than expected. */
 .live-bracket-round-matches {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
 }
 
+/* No min-height:0 here on purpose. The default (auto) stops a wrapper from
+   ever shrinking below its card, so a taller card — the editable view adds
+   pick and save buttons — pushes the round taller instead of squashing. */
 .live-bracket-match-wrap {
   position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
 }
 
-.live-bracket-round[data-round-index="1"] .live-bracket-match-wrap {
-  margin-top: 34px;
-}
+/* ── Connectors ────────────────────────────────────────────────── */
 
-.live-bracket-round[data-round-index="2"] .live-bracket-match-wrap {
-  margin-top: 88px;
-}
-
-.live-bracket-round[data-round-index="3"] .live-bracket-match-wrap {
-  margin-top: 164px;
-}
-
-.live-bracket-round[data-round-index="4"] .live-bracket-match-wrap {
-  margin-top: 280px;
-}
-
-.live-bracket-match {
-  position: relative;
-  background: #ffffff;
-  border: 1px solid #dbeafe;
-  border-radius: 18px;
-  padding: 14px;
-  min-height: 128px;
-  box-shadow: 0 16px 34px rgba(37, 99, 235, 0.08);
-}
-
-.live-bracket-match::after {
+/* Outgoing stub, reaching the midpoint of the gap. */
+.live-bracket-round:not(:last-child) .live-bracket-match::after {
   content: "";
   position: absolute;
   top: 50%;
@@ -111,17 +145,46 @@
   border-top: 2px solid #bfdbfe;
 }
 
-.live-bracket-round:first-child .live-bracket-match::before {
+/* Incoming stub for every round that actually has a previous round. */
+.live-bracket-round:not(:first-child) .live-bracket-match::before {
   content: "";
   position: absolute;
-  left: -28px;
   top: 50%;
+  left: -28px;
   width: 28px;
-  border-top: 2px solid #dbeafe;
+  border-top: 2px solid #bfdbfe;
 }
 
-.live-bracket-round:last-child .live-bracket-match::after {
-  display: none;
+/* The vertical part of the elbow. Because each wrapper owns an equal slice of
+   the round, the centre-to-centre distance between two neighbours is exactly
+   one wrapper height — so height:100% from the midpoint joins the pair with
+   no hard-coded pixel values. */
+.live-bracket-round:not(:last-child) .live-bracket-match-wrap:nth-child(odd):not(:last-child)::after {
+  content: "";
+  position: absolute;
+  right: -28px;
+  top: 50%;
+  height: 100%;
+  border-right: 2px solid #bfdbfe;
+}
+
+/* ── Match card ────────────────────────────────────────────────── */
+
+.live-bracket-match {
+  position: relative;
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 18px;
+  padding: 14px;
+  box-shadow: 0 10px 26px rgba(37, 99, 235, 0.07);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.live-bracket-match:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
 }
 
 .live-bracket-match-status {
@@ -129,7 +192,7 @@
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .live-bracket-pill {
@@ -139,8 +202,8 @@
   border-radius: 999px;
   padding: 4px 10px;
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  font-weight: 800;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
@@ -149,9 +212,29 @@
   color: #15803d;
 }
 
+.live-bracket-pill-live::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #16a34a;
+  animation: live-bracket-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes live-bracket-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-bracket-pill-live::before { animation: none; }
+  .live-bracket-match { transition: none; }
+  .live-bracket-match:hover { transform: none; }
+}
+
 .live-bracket-pill-pending {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #f1f5f9;
+  color: #475569;
 }
 
 .live-bracket-pill-complete {
@@ -161,19 +244,25 @@
 
 .live-bracket-match-id {
   color: #94a3b8;
-  font-size: 11px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
+
+/* ── Team slots ────────────────────────────────────────────────── */
 
 .live-bracket-slot {
   display: grid;
-  grid-template-columns: 1fr 74px;
+  grid-template-columns: 1fr 68px;
   gap: 10px;
   align-items: center;
-  padding: 10px 0;
+  padding: 9px 8px;
+  margin: 0 -8px;
+  border-radius: 12px;
 }
 
 .live-bracket-slot + .live-bracket-slot {
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid #eef2f7;
 }
 
 .live-bracket-slot-main {
@@ -190,24 +279,50 @@
 }
 
 .live-bracket-slot-subtitle {
-  color: #64748b;
+  color: #94a3b8;
   font-size: 11px;
   margin-top: 2px;
+}
+
+/* The winner should be readable at a glance, not just a colour change. */
+.live-bracket-slot-winner {
+  background: #f0fdf4;
 }
 
 .live-bracket-slot-winner .live-bracket-slot-name {
   color: #15803d;
 }
 
+/* A plain character rather than an icon-font codepoint — this renders the
+   same everywhere without depending on bootstrap-icons being loaded. */
+.live-bracket-slot-winner .live-bracket-slot-name::after {
+  content: "✓";
+  font-size: 11px;
+  font-weight: 900;
+  margin-left: 6px;
+}
+
+.live-bracket-slot-winner .live-bracket-score-readonly {
+  background: #dcfce7;
+  color: #15803d;
+}
+
 .live-bracket-score {
   width: 100%;
-  padding: 9px 10px;
+  padding: 9px 8px;
   border-radius: 12px;
   border: 1px solid #bfdbfe;
   background: #f8fafc;
   color: #0f172a;
   text-align: center;
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.live-bracket-score:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
 
 .live-bracket-score[disabled] {
@@ -216,23 +331,27 @@
 
 .live-bracket-score-readonly {
   width: 100%;
-  padding: 9px 10px;
+  padding: 9px 8px;
   border-radius: 12px;
   background: #eff6ff;
   color: #1d4ed8;
   text-align: center;
-  font-weight: 700;
+  font-weight: 800;
+  font-size: 14px;
 }
+
+/* ── Actions ───────────────────────────────────────────────────── */
 
 .live-bracket-pick-row {
   display: flex;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .live-bracket-pick-btn {
   flex: 1;
   min-width: 0;
+  min-height: 38px;
   border: 1px solid #bfdbfe;
   border-radius: 12px;
   padding: 8px 6px;
@@ -244,6 +363,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background 0.15s ease;
 }
 
 .live-bracket-pick-btn:hover {
@@ -255,19 +375,23 @@
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f7;
   flex-wrap: wrap;
 }
 
 .live-bracket-footer-note {
   color: #64748b;
   font-size: 11px;
+  font-weight: 600;
 }
 
 .live-bracket-action {
   border: none;
   border-radius: 12px;
   padding: 9px 14px;
+  min-height: 38px;
   background: linear-gradient(135deg, #2563eb, #0ea5e9);
   color: #ffffff;
   font-size: 12px;
@@ -280,6 +404,8 @@
   color: #94a3b8;
   cursor: not-allowed;
 }
+
+/* ── Banner / standings ────────────────────────────────────────── */
 
 .live-bracket-banner {
   background: linear-gradient(135deg, #eff6ff, #f0f9ff);
@@ -300,16 +426,111 @@
   margin-top: 4px;
 }
 
+.live-bracket-standings {
+  width: 100%;
+  border-collapse: collapse;
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.live-bracket-standings th {
+  text-align: left;
+  padding: 9px 10px;
+  border-bottom: 1px solid #bfdbfe;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.live-bracket-standings td {
+  padding: 10px;
+  border-bottom: 1px solid #e0ecff;
+}
+
+.live-bracket-standings tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.live-bracket-standings-team {
+  font-weight: 700;
+}
+
+.live-bracket-standings-points {
+  color: #1d4ed8;
+  font-weight: 800;
+}
+
+/* ── Mobile ────────────────────────────────────────────────────── */
+
 @media (max-width: 768px) {
+  .live-bracket-meta {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+
+  .live-bracket-stat {
+    padding: 12px 14px;
+    border-radius: 14px;
+  }
+
+  .live-bracket-stat-value {
+    font-size: 17px;
+  }
+
   .live-bracket-rounds {
-    gap: 28px;
+    gap: 40px;
   }
 
   .live-bracket-round {
-    min-width: 220px;
+    min-width: 232px;
+  }
+
+  /* Half the gap, so the connector stubs still meet in the middle. */
+  .live-bracket-round:not(:last-child) .live-bracket-match::after {
+    right: -20px;
+    width: 20px;
+  }
+
+  .live-bracket-round:not(:first-child) .live-bracket-match::before {
+    left: -20px;
+    width: 20px;
+  }
+
+  .live-bracket-round:not(:last-child) .live-bracket-match-wrap:nth-child(odd):not(:last-child)::after {
+    right: -20px;
   }
 
   .live-bracket-slot {
-    grid-template-columns: 1fr 60px;
+    grid-template-columns: 1fr 58px;
+  }
+
+  .live-bracket-pick-row {
+    flex-direction: column;
+  }
+
+  .live-bracket-pick-btn {
+    min-height: 42px;
+  }
+
+  .live-bracket-footer {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 420px) {
+  .live-bracket-meta {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .live-bracket-round {
+    min-width: 216px;
+  }
+
+  .live-bracket-match {
+    padding: 12px;
+    border-radius: 16px;
   }
 }

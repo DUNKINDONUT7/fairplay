@@ -2,23 +2,16 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 
-const DEMO_MODE_ENABLED = import.meta.env.VITE_DEMO_MODE === 'true';
 const SUPABASE_AUTH_ENABLED = isSupabaseConfigured;
-const HYBRID_MODE = isSupabaseConfigured && DEMO_MODE_ENABLED;
 const APP_URL =
   import.meta.env.VITE_SITE_URL ||
   import.meta.env.VITE_APP_URL ||
   (typeof window !== 'undefined' ? window.location.origin : '');
 
-const SEED_USERS = [
-  { id: 1, email: 'admin@fairplay.com', password: 'Admin123!', name: 'Admin User', role: 'admin', avatar: 'A', status: 'active', joined: '2025-01-15' },
-  { id: 2, email: 'organizer@fairplay.com', password: 'Organizer123!', name: 'Organizer User', role: 'organizer', avatar: 'O', status: 'active', joined: '2025-02-20' },
-  { id: 3, email: 'judge@fairplay.com', password: 'Judge123!', name: 'Judge User', role: 'judge', avatar: 'J', status: 'active', joined: '2025-03-10' },
-  { id: 4, email: 'participant@fairplay.com', password: 'Participant123!', name: 'Participant User', role: 'participant', avatar: 'P', status: 'active', joined: '2025-04-05' },
-  { id: 5, email: 'coordinator@fairplay.com', password: 'Coordinator123!', name: 'Institute Coordinator', role: 'institute-coordinator', avatar: 'C', status: 'active', joined: '2025-04-06' },
-  { id: 6, email: 'sportshead@fairplay.com', password: 'SportsHead123!', name: 'Sports Head', role: 'sports-head', avatar: 'S', status: 'active', joined: '2025-04-07' },
-  { id: 7, email: 'osds@fairplay.com', password: 'OSDS123!', name: 'OSDS Officer', role: 'osds', avatar: 'O', status: 'active', joined: '2025-04-08' },
-];
+// Every account lives in Supabase Auth. There are no built-in local logins:
+// a login Supabase rejects is simply a failed login, and nothing client-side
+// can shadow or stand in for a real registered account.
+const NOT_CONNECTED_MESSAGE = 'FairPlay is not connected to Supabase. Check the Supabase URL and anon key, then reload.';
 
 const ALLOWED_ROLES = new Set([
   'admin',
@@ -40,28 +33,51 @@ function buildAvatar(name, email) {
   return String(name || email || 'U').trim().charAt(0).toUpperCase() || 'U';
 }
 
-function getSeedUser(email, password) {
-  const normalizedEmail = String(email || '').trim().toLowerCase();
-  const userData = SEED_USERS.find((candidate) => candidate.email.toLowerCase() === normalizedEmail) || null;
-  if (!userData || !password || password !== userData.password) {
-    return null;
-  }
-
-  const { password: _, ...safeUser } = userData;
-  return safeUser;
-}
-
-function matchDemoCredentials(get, normalizedEmail, password) {
-  return getSeedUser(normalizedEmail, password) || get().users.find((entry) =>
-    String(entry.email || '').toLowerCase() === normalizedEmail &&
-    entry.password === password
-  );
-}
-
 function getBlockedAuthMessage(status) {
   if (status === 'pending') return 'Your organizer account is awaiting admin approval. You will be notified once approved.';
   if (status === 'suspended') return 'Your account has been suspended. Contact an administrator.';
   return null;
+}
+
+// Translates whatever Supabase/the browser throws into one plain, actionable
+// sentence — never the raw error.message. Server/network errors can surface
+// in all sorts of technical shapes (a Supabase error code, a bare HTTP
+// status, a browser-level fetch failure with no code at all), and none of
+// that is something someone signing up should ever have to read. Every
+// branch below is a *recognized* case; anything that doesn't match falls
+// through to one safe, generic sentence — so even a completely unanticipated
+// error still reads as human, not as a leaked stack trace or API response.
+function describeAuthError(error, { action = 'signing in' } = {}) {
+  const status = Number(error?.status) || null;
+  const code = String(error?.code || '').toLowerCase();
+  const message = String(error?.message || '').toLowerCase();
+  const includesAny = (...needles) => needles.some((needle) => message.includes(needle));
+
+  if (status === 429 || code.includes('rate_limit') || includesAny('rate limit', 'too many requests')) {
+    return "You've tried a few times in a row — please wait a few minutes before trying again.";
+  }
+
+  if (code === 'user_already_exists' || code === 'email_exists' || includesAny('already registered', 'already exists', 'already been registered')) {
+    return 'An account with this email already exists. Try signing in instead, or use a different email address.';
+  }
+
+  if (code === 'invalid_credentials' || includesAny('invalid login credentials', 'invalid email or password')) {
+    return 'That email and password don’t match. Please check and try again.';
+  }
+
+  if (code === 'email_not_confirmed' || includesAny('email not confirmed', 'confirm your email')) {
+    return 'Please confirm your email first — check your inbox (and spam folder) for the confirmation link.';
+  }
+
+  if (code.includes('weak_password') || includesAny('password should be', 'password is too weak')) {
+    return 'Please choose a stronger password — at least 8 characters with a mix of letters and numbers.';
+  }
+
+  if (includesAny('failed to fetch', 'load failed', 'network', 'securityerror', 'no api key')) {
+    return 'Unable to reach the server right now. Check your internet connection and try again.';
+  }
+
+  return `Something went wrong while ${action}. Please try again in a moment.`;
 }
 
 function buildOrganizerApplication(userData = {}) {
@@ -201,7 +217,7 @@ async function buildSessionUser(authUser) {
 
 async function fetchProfilesList() {
   if (!supabase) {
-    return SEED_USERS.map((entry) => ({ ...entry, password: undefined }));
+    return [];
   }
 
   const { data, error } = await supabase
@@ -222,20 +238,19 @@ const useAuthStore = create(
     (set, get) => ({
       user: null,
       token: null,
-      users: SEED_USERS.map(({ password, ...entry }) => entry),
+      users: [],
       organizerApplications: [],
       loading: true,
       initialized: false,
-      authMode: HYBRID_MODE ? 'hybrid' : SUPABASE_AUTH_ENABLED ? 'supabase' : 'demo',
-      sessionSource: HYBRID_MODE ? 'hybrid' : SUPABASE_AUTH_ENABLED ? 'supabase' : 'demo',
+      // Kept as fields because the admin screens display them, but there is
+      // only one possible source now — Supabase — or none at all.
+      authMode: SUPABASE_AUTH_ENABLED ? 'supabase' : 'disconnected',
+      sessionSource: SUPABASE_AUTH_ENABLED ? 'supabase' : 'disconnected',
 
       initAuth: async () => {
         // zustand's persist middleware rehydrates from localStorage
-        // asynchronously, so on a fresh page load this can still be running
-        // when initAuth starts — without waiting for it, get().user/
-        // get().sessionSource below would read the store's default values
-        // instead of a real persisted demo session, and getSession() finding
-        // no real Supabase session would then wipe it out entirely.
+        // asynchronously. Waiting for it here stops a late rehydrate from
+        // overwriting the session this function is about to resolve.
         if (!useAuthStore.persist.hasHydrated()) {
           // onFinishHydration only fires on a successful rehydrate — if it
           // ever errors (corrupted localStorage, etc.) the callback never
@@ -253,19 +268,20 @@ const useAuthStore = create(
         }
 
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
-          set({ loading: false, initialized: true, authMode: 'demo', sessionSource: 'demo' });
+          set({
+            user: null,
+            token: null,
+            users: [],
+            organizerApplications: [],
+            loading: false,
+            initialized: true,
+            authMode: 'disconnected',
+            sessionSource: 'disconnected',
+          });
           return;
         }
 
-        const persistedUser = get().user;
-        const persistedToken = get().token;
-        const hasPersistedDemoSession = get().sessionSource === 'demo' && Boolean(persistedUser) && Boolean(persistedToken);
-
-        set({
-          loading: true,
-          authMode: hasPersistedDemoSession ? get().authMode : (HYBRID_MODE ? 'hybrid' : 'supabase'),
-          sessionSource: hasPersistedDemoSession ? get().sessionSource : (HYBRID_MODE ? 'hybrid' : 'supabase'),
-        });
+        set({ loading: true, authMode: 'supabase', sessionSource: 'supabase' });
 
         try {
           const [{ data: sessionData }, profiles] = await Promise.all([
@@ -276,29 +292,20 @@ const useAuthStore = create(
           const session = sessionData?.session || null;
           const sessionUser = session?.user ? await buildSessionUser(session.user) : null;
 
-          // A demo/seed login never creates a real Supabase session, so
-          // getSession() always comes back empty for it. Without this check,
-          // every page reload would silently overwrite a valid demo session
-          // with null and log the user out.
-          if (!session && hasPersistedDemoSession) {
-            set({
-              users: profiles.length > 0 ? profiles : get().users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(profiles.length > 0 ? profiles : get().users),
-              loading: false,
-              initialized: true,
-            });
-          } else {
-            set({
-              user: sessionUser,
-              token: session?.access_token || null,
-              users: profiles.length > 0 ? profiles : get().users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(profiles.length > 0 ? profiles : get().users),
-              loading: false,
-              initialized: true,
-              authMode: sessionUser ? (HYBRID_MODE ? 'hybrid' : 'supabase') : get().authMode,
-              sessionSource: sessionUser ? 'supabase' : get().sessionSource,
-            });
-          }
+          // Supabase's own session is the only source of truth now: whatever
+          // getSession() says, that is the signed-in state. The profiles
+          // fallback below only guards against a transient fetch failure
+          // blanking a list that was loaded fine a moment ago.
+          const nextUsers = profiles.length > 0 ? profiles : get().users;
+
+          set({
+            user: sessionUser,
+            token: session?.access_token || null,
+            users: nextUsers,
+            organizerApplications: buildOrganizerApplicationsFromUsers(nextUsers),
+            loading: false,
+            initialized: true,
+          });
         } catch (error) {
           set({
             user: null,
@@ -311,14 +318,6 @@ const useAuthStore = create(
         if (!authListenerBound) {
           authListenerBound = true;
           supabase.auth.onAuthStateChange(async (_event, session) => {
-            // Same demo-session guard as above: this fires on subscription
-            // with whatever Supabase's real session currently is (null, for
-            // a demo login), and would otherwise silently log the user out
-            // right after initAuth just finished restoring their session.
-            if (!session && get().sessionSource === 'demo' && get().user && get().token) {
-              return;
-            }
-
             const nextUser = session?.user ? await buildSessionUser(session.user) : null;
             const users = session?.user ? await fetchProfilesList().catch(() => get().users) : get().users;
 
@@ -339,49 +338,8 @@ const useAuthStore = create(
         const normalizedEmail = String(email || '').trim().toLowerCase();
 
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
-          const safeUser = getSeedUser(normalizedEmail, password) || get().users.find((entry) =>
-            String(entry.email || '').toLowerCase() === normalizedEmail &&
-            entry.password === password
-          );
-          if (!safeUser) {
-            set({ loading: false });
-            return { success: false, error: 'Invalid email or password.' };
-          }
-
-          const blockedMessage = getBlockedAuthMessage(safeUser.status);
-          if (blockedMessage) {
-            set({ loading: false });
-            return { success: false, error: blockedMessage };
-          }
-
-          const token = `token_${safeUser.id}_${Date.now()}`;
-          set({ user: safeUser, token, loading: false, initialized: true, authMode: 'demo', sessionSource: 'demo' });
-          return { success: true, user: safeUser };
-        }
-
-        // Hybrid mode: a known demo/seed account should log in instantly
-        // instead of first waiting on a network round-trip to Supabase Auth
-        // that is guaranteed to fail (seed accounts have no real Supabase
-        // Auth user behind them) — without this, every demo login paid for
-        // a full failed request before ever reaching the fallback below.
-        const demoMatch = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
-        if (demoMatch) {
-          const blockedMessage = getBlockedAuthMessage(demoMatch.status);
-          if (blockedMessage) {
-            set({ loading: false });
-            return { success: false, error: blockedMessage };
-          }
-
-          const token = `token_${demoMatch.id}_${Date.now()}`;
-          set({
-            user: demoMatch,
-            token,
-            loading: false,
-            initialized: true,
-            authMode: HYBRID_MODE ? 'hybrid' : 'demo',
-            sessionSource: 'demo',
-          });
-          return { success: true, user: demoMatch };
+          set({ loading: false, initialized: true });
+          return { success: false, error: NOT_CONNECTED_MESSAGE };
         }
 
         try {
@@ -412,38 +370,14 @@ const useAuthStore = create(
             organizerApplications: buildOrganizerApplicationsFromUsers(users),
             loading: false,
             initialized: true,
-            authMode: HYBRID_MODE ? 'hybrid' : 'supabase',
+            authMode: 'supabase',
             sessionSource: 'supabase',
           });
 
           return { success: true, user: sessionUser };
         } catch (error) {
-          const safeUser = DEMO_MODE_ENABLED && matchDemoCredentials(get, normalizedEmail, password);
-          if (safeUser) {
-            const blockedMessage = getBlockedAuthMessage(safeUser.status);
-            if (blockedMessage) {
-              set({ loading: false, initialized: true });
-              return { success: false, error: blockedMessage };
-            }
-
-            const token = `token_${safeUser.id}_${Date.now()}`;
-            set({
-              user: safeUser,
-              token,
-              loading: false,
-              initialized: true,
-              authMode: HYBRID_MODE ? 'hybrid' : 'demo',
-              sessionSource: 'demo',
-            });
-            return {
-              success: true,
-              user: safeUser,
-              message: 'Signed in using FairPlay demo access.',
-            };
-          }
-
           set({ loading: false, initialized: true });
-          return { success: false, error: error?.message || 'Unable to sign in right now.' };
+          return { success: false, error: describeAuthError(error, { action: 'signing in' }) };
         }
       },
 
@@ -456,39 +390,8 @@ const useAuthStore = create(
         const name = String(userData?.name || '').trim() || email || 'FairPlay User';
 
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
-          const existing = get().users.find((entry) => String(entry.email || '').toLowerCase() === email);
-          if (existing) {
-            set({ loading: false });
-            return { success: false, error: 'An account with this email already exists.' };
-          }
-
-          // New self-registered organizers start 'pending' — no session is
-          // created here, so they can't walk straight into the dashboard
-          // before an admin approves them (see approveOrganizerApplication).
-          const newUser = {
-            id: Date.now(),
-            email,
-            name,
-            role,
-            password,
-            avatar: buildAvatar(name, email),
-            status: 'pending',
-            joined: new Date().toISOString().slice(0, 10),
-          };
-          set((state) => {
-            const users = [newUser, ...state.users.filter((entry) => entry.email !== newUser.email)];
-            return {
-              users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(users),
-              loading: false,
-              initialized: true,
-            };
-          });
-          return {
-            success: true,
-            requiresApproval: true,
-            message: 'Your organizer account has been submitted for admin approval. You will be notified once approved.',
-          };
+          set({ loading: false, initialized: true });
+          return { success: false, error: NOT_CONNECTED_MESSAGE };
         }
 
         try {
@@ -553,7 +456,7 @@ const useAuthStore = create(
             organizerApplications: buildOrganizerApplicationsFromUsers(users),
             loading: false,
             initialized: true,
-            authMode: HYBRID_MODE ? 'hybrid' : 'supabase',
+            authMode: 'supabase',
             sessionSource: 'supabase',
           });
 
@@ -568,7 +471,7 @@ const useAuthStore = create(
           set({ loading: false, initialized: true });
           return {
             success: false,
-            error: error?.message || 'Unable to create your organizer account right now.',
+            error: describeAuthError(error, { action: 'creating your organizer account' }),
           };
         }
       },
@@ -654,12 +557,7 @@ const useAuthStore = create(
       updateUser: async (userId, updates) => {
         let updatedUser = null;
 
-        // A demo/seed-logged-in user (see login()'s fallback) has no matching
-        // row in the real Supabase `profiles` table, so hitting Supabase here
-        // would just throw — same guard pattern as logout()'s sessionSource check.
-        const isSupabaseSession = SUPABASE_AUTH_ENABLED && supabase && get().sessionSource === 'supabase';
-
-        if (isSupabaseSession) {
+        if (SUPABASE_AUTH_ENABLED && supabase) {
           const payload = {
             ...(updates?.email ? { email: updates.email } : {}),
             ...(updates?.name ? { full_name: updates.name } : {}),
@@ -721,20 +619,7 @@ const useAuthStore = create(
 
       refreshProfiles: async () => {
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
-          set((state) => {
-            const seedUsers = SEED_USERS.map(({ password, ...entry }) => entry);
-            const seedEmails = new Set(seedUsers.map((entry) => entry.email.toLowerCase()));
-            const customUsers = state.users.filter((entry) => !seedEmails.has(String(entry.email || '').toLowerCase()));
-            const users = [
-              ...customUsers,
-              ...seedUsers,
-            ];
-
-            return {
-              users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(users),
-            };
-          });
+          set({ users: [], organizerApplications: [] });
           return;
         }
 
@@ -750,16 +635,17 @@ const useAuthStore = create(
       },
 
       logout: async () => {
-        if (SUPABASE_AUTH_ENABLED && supabase && get().sessionSource === 'supabase') {
+        if (SUPABASE_AUTH_ENABLED && supabase) {
           await supabase.auth.signOut();
         }
 
         set({
           user: null,
           token: null,
+          users: [],
+          organizerApplications: [],
           loading: false,
           initialized: true,
-          users: SUPABASE_AUTH_ENABLED ? get().users : SEED_USERS.map(({ password, ...entry }) => entry),
         });
       },
 
@@ -767,13 +653,20 @@ const useAuthStore = create(
     }),
     {
       name: 'fairplay_auth',
+      // Bumped when local logins were removed. An older payload can still
+      // hold a client-side session and user list that no longer correspond
+      // to anything in Supabase, so it is dropped rather than migrated —
+      // initAuth re-reads the real session and profiles on the next load.
+      version: 2,
+      migrate: () => ({}),
+      // The profile directory is re-fetched by initAuth on every load and by
+      // refreshProfiles on every screen that shows it, so it is deliberately
+      // not persisted: a signed-out browser should not keep a copy of it.
       partialize: (state) => ({
         user: state.user,
         token: state.token,
         authMode: state.authMode,
         sessionSource: state.sessionSource,
-        organizerApplications: state.organizerApplications,
-        users: state.users,
       }),
     }
   )

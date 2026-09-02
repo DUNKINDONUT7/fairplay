@@ -16,27 +16,17 @@ pnpm dev
 
 The application will open at `http://localhost:3000`
 
-### Demo Login Credentials
+### Signing In
 
-**Admin Dashboard:**
-- Email: `admin@fairplay.com`
-- Password: Any password works
-- Role: `admin`
+Every account lives in Supabase Auth — there are no built-in local logins.
 
-**Organizer Dashboard:**
-- Email: `organizer@fairplay.com`
-- Password: Any password works
-- Role: `organizer`
-
-**Judge Dashboard:**
-- Email: `judge@fairplay.com`
-- Password: Any password works
-- Role: `judge`
-
-**Participant Dashboard:**
-- Email: `participant@fairplay.com`
-- Password: Any password works
-- Role: `participant`
+- **Organizers** sign up through the app's Create Account flow. A new organizer
+  account starts as `pending` and can only sign in once an admin approves it
+  from **Admin → User Management → Pending Organizer Applications**.
+- **Admins** are created directly in Supabase (set the profile's `role` to
+  `admin`), since self-registration always creates an organizer.
+- **Judges** do not need an account at all: an organizer emails them an invite
+  link, and that link opens their scoring session directly.
 
 ## 📁 Project Structure
 

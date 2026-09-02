@@ -52,7 +52,9 @@ function buildVenuePayload(venue) {
   };
 }
 
-const demoVenues = [
+// Starting content for a build with no database behind it — with Supabase
+// connected the real venues load over this instead.
+const sampleVenues = [
   normalizeVenue({
     id: 1,
     name: 'Main Arena',
@@ -72,7 +74,7 @@ const demoVenues = [
 const useVenueStore = create(
   persist(
     (set, get) => ({
-      venues: isSupabaseConfigured ? [] : demoVenues,
+      venues: isSupabaseConfigured ? [] : sampleVenues,
       loading: false,
       error: null,
 

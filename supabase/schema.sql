@@ -25,7 +25,6 @@ create table if not exists public.events (
   id bigint primary key,
   title text not null,
   type text default 'contest',
-  type text default 'contest',
   organizer_id bigint,
   participants integer default 0,
   max_participants integer,
@@ -754,6 +753,16 @@ create policy "Staff can view judge invites"
 on public.judge_invites for select
 to authenticated
 using (public.is_staff_user());
+
+-- This table had SELECT covered but no INSERT policy, which silently made
+-- creating an invite impossible for every caller regardless of role — the
+-- notify-judge-invite Edge Function runs as the caller (not service role),
+-- so RLS applies to its insert the same as it would to any client request.
+drop policy if exists "Staff can create judge invites" on public.judge_invites;
+create policy "Staff can create judge invites"
+on public.judge_invites for insert
+to authenticated
+with check (public.is_staff_user());
 
 create or replace function public.resolve_judge_invite(p_token text)
 returns table (

@@ -31,7 +31,7 @@ const FAQ_KNOWLEDGE_BASE = {
   public: {
     'What is FairPlay?': 'FairPlay is an event management and judging platform for competitions, live scoring, AI-generated rubrics, and role-based operations.',
     'How does the AI criteria maker work?': 'FairPlay can call an AI model to generate rubric profiles, then fall back to a local rubric generator if the API is unavailable.',
-    'How do I get started?': 'Use the Get Started flow on the landing page, sign in with a demo role if needed, and continue into your role dashboard.',
+    'How do I get started?': 'Use the Get Started flow on the landing page to create an organizer account. Once an admin approves it, sign in and continue into your role dashboard.',
   },
 };
 

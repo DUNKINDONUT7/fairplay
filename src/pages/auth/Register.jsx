@@ -2,32 +2,32 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
+import useNotificationStore from '../../store/notificationStore';
 
 export default function Register() {
   const navigate = useNavigate();
   const register = useAuthStore((state) => state.register);
+  const { error: showError } = useNotificationStore();
   const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'organizer' });
-  const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.name || !form.email || !form.password) {
-      setError('Please fill in all required fields');
+      showError('Please fill in all required fields');
       return;
     }
     if (form.password.length < 8) {
-      setError('Password must be at least 8 characters.');
+      showError('Password must be at least 8 characters.');
       return;
     }
     if (form.password !== form.confirmPassword) {
-      setError('Passwords do not match');
+      showError('Passwords do not match');
       return;
     }
-    setError('');
     const result = await register({ name: form.name, email: form.email, password: form.password, role: 'organizer' });
     if (!result.success) {
-      setError(result.error || 'Registration failed.');
+      showError(result.error || 'Registration failed.');
       return;
     }
     if (result.requiresApproval || result.requiresEmailConfirmation) {
@@ -69,16 +69,6 @@ export default function Register() {
           <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4, color: '#0f172a' }}>Create Account</h1>
           <p style={{ color: '#64748b', fontSize: 14 }}>Join FairPlay today</p>
         </div>
-
-        {error && (
-          <div style={{
-            padding: '10px 14px', borderRadius: 10, marginBottom: 16,
-            background: '#fef2f2', border: '1px solid #fecaca',
-            color: '#dc2626', fontSize: 13,
-          }}>
-            ⚠ {error}
-          </div>
-        )}
 
         {notice ? (
           <div style={{ textAlign: 'center', padding: '20px 4px' }}>

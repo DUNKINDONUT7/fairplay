@@ -377,16 +377,29 @@ export default function JudgeLiveScoring() {
   const doneCount = Object.keys(submitted).length;
   const activeContestant = contestants.find((c) => c.id === activeContestantId);
   const allDone = doneCount === contestants.length && contestants.length > 0;
-  const sessionClosed = event.scoringActive === false && event.status === 'completed';
+  // Allow-list, not a deny-list: scoringActive starts out `null` (see
+  // normalizeEvent in eventStore.js) for any event the organizer hasn't
+  // activated yet. The old check only caught the "was active, now closed"
+  // case (scoringActive === false && status === 'completed') — a fresh
+  // event sitting at scoringActive:null let a judge with a valid invite
+  // link score before the organizer ever pressed "Activate Scoring."
+  const scoringOpen = event.scoringActive === true;
 
-  if (sessionClosed) {
+  if (!scoringOpen) {
+    const notStartedYet = event.status !== 'completed';
     return (
       <div style={fullPage}>
         <AnimatedBackground />
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
-          <i className="bi bi-lock-fill" style={{ fontSize: 52, color: '#94a3b8', display: 'block', marginBottom: 16 }} />
-          <div style={{ fontWeight: 800, fontSize: 22, color: '#0f172a', marginBottom: 8 }}>Scoring Session Ended</div>
-          <p style={{ color: '#64748b', fontSize: 15 }}>The organizer has closed this scoring session.<br />Thank you for judging!</p>
+          <i className={`bi ${notStartedYet ? 'bi-hourglass-split' : 'bi-lock-fill'}`} style={{ fontSize: 52, color: '#94a3b8', display: 'block', marginBottom: 16 }} />
+          <div style={{ fontWeight: 800, fontSize: 22, color: '#0f172a', marginBottom: 8 }}>
+            {notStartedYet ? 'Scoring Not Open Yet' : 'Scoring Session Ended'}
+          </div>
+          <p style={{ color: '#64748b', fontSize: 15 }}>
+            {notStartedYet
+              ? <>The organizer hasn't started this scoring session yet.<br />Check back once it goes live.</>
+              : <>The organizer has closed this scoring session.<br />Thank you for judging!</>}
+          </p>
         </div>
       </div>
     );

@@ -29,7 +29,6 @@ export default function AdminSettings() {
     { label: 'Open Registration', value: import.meta.env.VITE_DISABLE_REGISTRATION === 'true' ? 'Disabled by environment' : 'Enabled' },
     { label: 'Maintenance Mode', value: import.meta.env.VITE_MAINTENANCE_MODE === 'true' ? 'Enabled' : 'Disabled' },
     { label: 'AI Features', value: import.meta.env.VITE_DISABLE_AI === 'true' ? 'Disabled by environment' : 'Enabled' },
-    { label: 'Demo Mode', value: import.meta.env.VITE_DEMO_MODE !== 'false' ? 'Enabled' : 'Disabled' },
   ];
 
   return (

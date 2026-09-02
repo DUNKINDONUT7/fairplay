@@ -1,8 +1,15 @@
 import { useState } from 'react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
+import useAuthStore from '../../store/authStore';
 
 export default function JudgeSettings() {
-  const [form, setForm] = useState({ name: 'Judge User', email: 'judge@fairplay.com', specialty: 'Technical', mobileView: true });
+  const user = useAuthStore((state) => state.user);
+  const [form, setForm] = useState({
+    name: user?.name || '',
+    email: user?.email || '',
+    specialty: user?.metadata?.specialty || '',
+    mobileView: true,
+  });
 
   return (
     <DashboardLayout title="Profile Settings" subtitle="Manage your judging profile">

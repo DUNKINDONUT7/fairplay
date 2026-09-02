@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
+import useNotificationStore from '../../store/notificationStore';
 import { getPostAuthPath } from '../../utils/navigation';
 
 export default function AuthModal({ onClose }) {
@@ -10,14 +11,10 @@ export default function AuthModal({ onClose }) {
   const initialMode = searchParams.get('modal') === 'register' ? 'register' : 'login';
 
   const store = useAuthStore();
+  const { error: showError } = useNotificationStore();
   const authMode = store.authMode;
-  const authModeLabel = authMode === 'hybrid'
-    ? 'Supabase Auth with Demo Backup'
-    : authMode === 'demo'
-      ? 'Demo Mode Active'
-      : 'Secure Sign In';
+  const authModeLabel = authMode === 'disconnected' ? 'Sign In Unavailable' : 'Secure Sign In';
   const [mode, setMode] = useState(initialMode);
-  const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
@@ -56,13 +53,12 @@ export default function AuthModal({ onClose }) {
 
   const handleLogin = async (event) => {
     event.preventDefault();
-    setError('');
     setNotice('');
     const email = String(loginData.email || '').trim();
     const password = String(loginData.password || '');
 
-    if (!email) return setError('Email is required.');
-    if (!password) return setError('Password is required.');
+    if (!email) return showError('Email is required.');
+    if (!password) return showError('Password is required.');
 
     const result = await store.login(email, password);
     if (result.success) {
@@ -76,7 +72,7 @@ export default function AuthModal({ onClose }) {
       return;
     }
 
-    setError(result.error || 'Login failed. Please try again.');
+    showError(result.error || 'Login failed. Please try again.');
   };
 
   const passwordStrength = (() => {
@@ -95,21 +91,20 @@ export default function AuthModal({ onClose }) {
 
   const handleRegister = async (event) => {
     event.preventDefault();
-    setError('');
     setNotice('');
     const name = String(regData.name || '').trim();
     const email = String(regData.email || '').trim();
     const password = String(regData.password || '');
     const confirmPassword = String(regData.confirmPassword || '');
 
-    if (!name || !email || !password || !confirmPassword) return setError('Please complete every field.');
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setError('Enter a valid email address.');
-    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    if (!name || !email || !password || !confirmPassword) return showError('Please complete every field.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return showError('Enter a valid email address.');
+    if (password.length < 8) return showError('Password must be at least 8 characters.');
     if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
-      return setError('Password must include uppercase, lowercase, and numbers.');
+      return showError('Password must include uppercase, lowercase, and numbers.');
     }
-    if (password !== confirmPassword) return setError('Passwords do not match.');
-    if (!acceptedTerms) return setError('Please agree to the terms to continue.');
+    if (password !== confirmPassword) return showError('Passwords do not match.');
+    if (!acceptedTerms) return showError('Please agree to the terms to continue.');
 
     const result = await store.register({ name, email, password, role: 'organizer' });
     if (result.success) {
@@ -124,7 +119,7 @@ export default function AuthModal({ onClose }) {
       return;
     }
 
-    setError(result.error || 'Registration failed.');
+    showError(result.error || 'Registration failed.');
   };
 
   return (
@@ -186,7 +181,7 @@ export default function AuthModal({ onClose }) {
             <img src="/icon.svg" alt="FairPlay" style={{ width: '100%', height: '100%', filter: 'drop-shadow(0 0 15px rgba(6, 182, 212, 0.5))' }} />
           </div>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.18)', color: '#67e8f9', fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
-            <i className={authMode === 'supabase' ? 'bi bi-shield-lock' : authMode === 'hybrid' ? 'bi bi-layers' : 'bi bi-display'} />
+            <i className={authMode === 'disconnected' ? 'bi bi-exclamation-triangle' : 'bi bi-shield-lock'} />
             {authModeLabel}
           </div>
           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: '#f8fafc' }}>
@@ -198,7 +193,7 @@ export default function AuthModal({ onClose }) {
 
           <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 4, marginBottom: 14 }}>
             <button
-              onClick={() => { setMode('login'); setError(''); setNotice(''); }}
+              onClick={() => { setMode('login'); setNotice(''); }}
               style={{
                 flex: 1,
                 padding: '12px',
@@ -213,7 +208,7 @@ export default function AuthModal({ onClose }) {
               Sign In
             </button>
             <button
-              onClick={() => { setMode('register'); setError(''); setNotice(''); }}
+              onClick={() => { setMode('register'); setNotice(''); }}
               style={{
                 flex: 1,
                 padding: '12px',
@@ -231,12 +226,6 @@ export default function AuthModal({ onClose }) {
         </div>
 
         <div style={{ padding: '0 32px 20px' }}>
-          {error && (
-            <div style={{ padding: 12, borderRadius: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#fca5a5', fontSize: 13, marginBottom: 20, textAlign: 'center' }}>
-              {error}
-            </div>
-          )}
-
           {notice && (
             <div style={{ padding: 12, borderRadius: 12, background: 'rgba(14,165,233,0.1)', border: '1px solid rgba(14,165,233,0.2)', color: '#bae6fd', fontSize: 13, marginBottom: 20, textAlign: 'center' }}>
               {notice}

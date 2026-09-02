@@ -220,27 +220,25 @@ export default function LiveBracket({
             Rankings update whenever a round-robin match is saved.
           </div>
           <div style={{ marginTop: 14, overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', color: '#f8fbff' }}>
+            <table className="live-bracket-standings">
               <thead>
-                <tr style={{ color: '#8ea5c3', fontSize: 11 }}>
+                <tr>
                   {['Rank', 'Team', 'P', 'W', 'L', 'D', 'Pts', 'Diff'].map((header) => (
-                    <th key={header} style={{ textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
-                      {header}
-                    </th>
+                    <th key={header}>{header}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {tournament.standings.map((entry) => (
                   <tr key={entry.teamId}>
-                    <td style={{ padding: '9px 10px' }}>{entry.rank}</td>
-                    <td style={{ padding: '9px 10px', fontWeight: 700 }}>{entry.teamName}</td>
-                    <td style={{ padding: '9px 10px' }}>{entry.played}</td>
-                    <td style={{ padding: '9px 10px' }}>{entry.wins}</td>
-                    <td style={{ padding: '9px 10px' }}>{entry.losses}</td>
-                    <td style={{ padding: '9px 10px' }}>{entry.draws}</td>
-                    <td style={{ padding: '9px 10px', color: '#67e8f9', fontWeight: 700 }}>{entry.points}</td>
-                    <td style={{ padding: '9px 10px' }}>{entry.scoreDifference}</td>
+                    <td>{entry.rank}</td>
+                    <td className="live-bracket-standings-team">{entry.teamName}</td>
+                    <td>{entry.played}</td>
+                    <td>{entry.wins}</td>
+                    <td>{entry.losses}</td>
+                    <td>{entry.draws}</td>
+                    <td className="live-bracket-standings-points">{entry.points}</td>
+                    <td>{entry.scoreDifference}</td>
                   </tr>
                 ))}
               </tbody>

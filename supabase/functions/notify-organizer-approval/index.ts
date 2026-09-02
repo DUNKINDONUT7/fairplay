@@ -36,26 +36,34 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
   const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
   const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || 'FairPlay <onboarding@resend.dev>';
   const defaultLoginUrl = Deno.env.get('SITE_URL') || Deno.env.get('APP_URL') || '';
 
-  if (!supabaseUrl || !serviceRoleKey || !resendApiKey) {
+  if (!supabaseUrl || !anonKey || !resendApiKey) {
     return jsonResponse({ error: 'Email service is not configured.' }, 500);
   }
 
   const authHeader = req.headers.get('Authorization') || '';
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+
+  // One client, running as the caller — the anon key, not
+  // SUPABASE_SERVICE_ROLE_KEY (this project's auto-injected value for that
+  // does not authenticate as service_role; see notify-judge-invite for how
+  // that was confirmed). Nothing here needs elevated access: the
+  // "Allow profile list for demo dashboards" RLS policy already lets any
+  // authenticated user read profiles.role, so the caller's own session is
+  // enough to check it.
+  const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const { data: authData, error: authError } = await callerClient.auth.getUser();
   if (authError || !authData?.user) {
     return jsonResponse({ error: 'Unauthorized.' }, 401);
   }
 
-  const { data: adminProfile, error: profileError } = await supabase
+  const { data: adminProfile, error: profileError } = await callerClient
     .from('profiles')
     .select('role')
     .eq('id', authData.user.id)
@@ -75,7 +83,7 @@ serve(async (req) => {
   }
 
   const safeName = escapeHtml(name);
-  const safeLoginUrl = escapeHtml(loginUrl || 'https://fairplay-gray.vercel.app');
+  const safeLoginUrl = escapeHtml(loginUrl || 'https://fairplay-kappa.vercel.app');
 
   const emailResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',

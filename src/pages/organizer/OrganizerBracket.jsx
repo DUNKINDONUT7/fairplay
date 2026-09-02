@@ -14,7 +14,6 @@ import { ensureTournamentAutomation } from '../../services/automationService';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
 import { normalizeEntrants } from '../../utils/bracketEngine';
 
-const demoModeEnabled = import.meta.env.VITE_DEMO_MODE !== 'false';
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
 function isPointsSystemEvent(event) {
@@ -58,7 +57,6 @@ const ENTRANT_SOURCE_LABELS = {
   registrations: 'From approved registrations',
   event: 'From event roster',
   manual: 'Added manually',
-  demo: 'Demo placeholder',
 };
 
 function getTournamentDedupeKey(tournament) {
@@ -92,7 +90,7 @@ function uniqueTournaments(tournaments = []) {
   );
 }
 
-function buildEntrants({ event, teams, registrations, allowDemo = true }) {
+function buildEntrants({ event, teams, registrations }) {
   const eventId = String(event?.id || '');
   const eventTeams = teams
     .filter((team) => String(team.eventId) === eventId)
@@ -142,19 +140,9 @@ function buildEntrants({ event, teams, registrations, allowDemo = true }) {
     return normalizeEntrants(contestants);
   }
 
-  if (!allowDemo || !demoModeEnabled) {
-    return [];
-  }
-
-  return normalizeEntrants(
-    Array.from({ length: 8 }, (_, index) => ({
-      id: `${event.id}-demo-${index + 1}`,
-      name: `Demo Team ${index + 1}`,
-      type: 'team',
-      source: 'demo',
-      seed: index + 1,
-    }))
-  );
+  // Nothing to seed a bracket with yet. The entrant list shows its empty
+  // state so the organizer adds real teams, registrations, or contestants.
+  return [];
 }
 
 export default function OrganizerBracket() {
@@ -303,7 +291,6 @@ export default function OrganizerBracket() {
       event: currentEvent,
       teams,
       registrations,
-      allowDemo: !isPointsSystemEvent(currentEvent),
     });
 
     setSeedEntrants(nextEntrants);
@@ -360,7 +347,7 @@ export default function OrganizerBracket() {
 
   const resetSeeds = () => {
     if (!currentEvent) return;
-    setSeedEntrants(buildEntrants({ event: currentEvent, teams, registrations, allowDemo: !performanceMode }));
+    setSeedEntrants(buildEntrants({ event: currentEvent, teams, registrations }));
     info('Seeds reset from the latest event data.');
   };
 
@@ -661,13 +648,6 @@ export default function OrganizerBracket() {
           )}
         </div>
 
-        {!performanceMode && seedSummary.some((entrant) => entrant.source === 'demo') && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderRadius: 12, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 13, fontWeight: 600 }}>
-            <i className="bi bi-exclamation-triangle" />
-            This bracket is using placeholder "Demo" entrants because no real teams, registrations, or contestants were found yet. Add real entrants below before publishing.
-          </div>
-        )}
-
         {performanceMode ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20 }}>
             <div style={liveScoreCardStyle}>
@@ -748,9 +728,6 @@ export default function OrganizerBracket() {
                 <div>
                   <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
                     {entrant.name}
-                    {entrant.source === 'demo' && (
-                      <span style={{ fontSize: 10, fontWeight: 800, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#b45309', letterSpacing: '0.04em' }}>DEMO</span>
-                    )}
                   </div>
                   <div style={{ color: '#64748b', fontSize: 12 }}>{entrant.type}</div>
                 </div>

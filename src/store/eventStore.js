@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 import { mockEvents } from '../data/events';
+import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import {
@@ -243,6 +243,9 @@ async function saveEventPayload(payload, { select = false, mode = 'upsert' } = {
   };
 }
 
+// With Supabase connected the real events load over this; the bundled sample
+// events are only the starting content for a build with no database behind it,
+// so screens have something to render instead of sitting empty.
 const initialEvents = isSupabaseConfigured
   ? []
   : mockEvents.map((event, index) => normalizeEvent(event, index));

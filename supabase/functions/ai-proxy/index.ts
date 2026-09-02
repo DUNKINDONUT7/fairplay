@@ -68,7 +68,7 @@ serve(async (req) => {
     Authorization: `Bearer ${apiKey}`,
   };
   if (provider === 'openrouter') {
-    headers['HTTP-Referer'] = req.headers.get('origin') || 'https://fairplay-gray.vercel.app';
+    headers['HTTP-Referer'] = req.headers.get('origin') || 'https://fairplay-kappa.vercel.app';
     headers['X-Title'] = 'FairPlay';
   }
 

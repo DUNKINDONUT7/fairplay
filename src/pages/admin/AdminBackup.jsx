@@ -120,7 +120,7 @@ export default function AdminBackup() {
     setMessage(
       isSupabaseConfigured
         ? 'Backup loaded into this browser tab only — it has not been written to the database. Refreshing or navigating away will discard it.'
-        : 'Backup restored to local demo data.'
+        : 'Backup loaded into this browser tab only.'
     );
   }
 
@@ -136,7 +136,7 @@ export default function AdminBackup() {
         message={
           isSupabaseConfigured
             ? 'This loads the backup into your current browser tab only — it does NOT write back to the database. The moment you navigate away or refresh, the app reloads real data from Supabase and this restored view is gone. Use this to inspect a backup, not as disaster recovery.'
-            : 'This replaces the current in-browser demo data with the backup contents.'
+            : 'This replaces the data currently loaded in this browser tab with the backup contents.'
         }
         confirmLabel="Restore"
         onCancel={() => setPendingRestore(null)}

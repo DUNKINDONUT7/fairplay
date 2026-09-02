@@ -341,39 +341,54 @@ export default function Landing() {
         return;
       }
 
-      const [eventsRes, judgesRes, scoresRes, teamsRes] = await Promise.all([
-        supabase.from('events').select('id,title,type,status,description,location,start_date,end_date,participants,max_participants,metadata'),
-        supabase.from('judges').select('id,name'),
-        // Bounded to the most recent rows — this table gets one row per
-        // judge x contestant x event and grows without limit as the platform
-        // accumulates history. This is a "live" widget, so a recent window
-        // is also the more meaningful number, not just the cheaper one.
-        supabase.from('scores').select('id,total_score,criteria_scores,team_id,participant_id,contestant_id,contestant_name,judge_id,judge_name,locked,event_title,event_id,created_at,updated_at').order('updated_at', { ascending: false }).limit(300),
-        supabase.from('teams').select('id,name'),
-      ]);
+      try {
+        // A rejected request here (a browser privacy/security block, a
+        // dropped connection, anything below the HTTP layer) must not leave
+        // this stuck on "Loading..." forever — every exit path below has to
+        // reach setDashboard, which is why this whole block is wrapped.
+        const [eventsRes, judgesRes, scoresRes, teamsRes] = await Promise.all([
+          supabase.from('events').select('id,title,type,status,description,location,start_date,end_date,participants,max_participants,metadata'),
+          supabase.from('judges').select('id,name'),
+          // Bounded to the most recent rows — this table gets one row per
+          // judge x contestant x event and grows without limit as the platform
+          // accumulates history. This is a "live" widget, so a recent window
+          // is also the more meaningful number, not just the cheaper one.
+          supabase.from('scores').select('id,total_score,criteria_scores,team_id,participant_id,contestant_id,contestant_name,judge_id,judge_name,locked,event_title,event_id,created_at,updated_at').order('updated_at', { ascending: false }).limit(300),
+          supabase.from('teams').select('id,name'),
+        ]);
 
-      const firstError = eventsRes.error || judgesRes.error || scoresRes.error || teamsRes.error;
-      if (firstError) {
+        const firstError = eventsRes.error || judgesRes.error || scoresRes.error || teamsRes.error;
+        if (firstError) {
+          if (isActive) {
+            setDashboard(prev => ({
+              ...prev,
+              loading: false,
+              error: firstError.message || 'Failed to load dashboard data.',
+            }));
+            setEventShowcase({ loading: false, ongoing: [], upcoming: [] });
+          }
+          return;
+        }
+
+        if (isActive) {
+          const liveData = buildLiveDashboardData({
+            events: eventsRes.data || [],
+            judges: judgesRes.data || [],
+            scores: scoresRes.data || [],
+            teams: teamsRes.data || [],
+          });
+          setDashboard(liveData.dashboard);
+          setEventShowcase(liveData.eventShowcase);
+        }
+      } catch (error) {
         if (isActive) {
           setDashboard(prev => ({
             ...prev,
             loading: false,
-            error: firstError.message || 'Failed to load dashboard data.',
+            error: error?.message || 'Failed to load dashboard data.',
           }));
           setEventShowcase({ loading: false, ongoing: [], upcoming: [] });
         }
-        return;
-      }
-
-      if (isActive) {
-        const liveData = buildLiveDashboardData({
-          events: eventsRes.data || [],
-          judges: judgesRes.data || [],
-          scores: scoresRes.data || [],
-          teams: teamsRes.data || [],
-        });
-        setDashboard(liveData.dashboard);
-        setEventShowcase(liveData.eventShowcase);
       }
     };
 
@@ -439,7 +454,7 @@ export default function Landing() {
         .steps-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:32px; }
         .roles-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:18px; }
         @media(max-width:1024px){ .feat-grid{ grid-template-columns:repeat(2,1fr)!important; } .steps-grid,.roles-grid{ grid-template-columns:repeat(2,1fr)!important; } }
-        @media(max-width:768px) { .hero-grid{ grid-template-columns:1fr!important; } .fp-canvas-wrap{ height:340px!important; } .feat-grid,.steps-grid,.roles-grid{ grid-template-columns:1fr!important; } }
+        @media(max-width:768px) { .hero-grid{ grid-template-columns:1fr!important; } .feat-grid,.steps-grid,.roles-grid{ grid-template-columns:1fr!important; } }
       `}</style>
 
       {/* ── NAV ─────────────────────────────────────────────────────────────── */}
@@ -463,7 +478,7 @@ export default function Landing() {
           <canvas ref={canvasRef} style={{ width: '100%', height: '100%', display: 'block' }} />
         </div>
 
-        <div className="hero-grid" style={{ position: 'relative', zIndex: 1, width: '100%', padding: '110px clamp(20px,4vw,64px) 80px', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 56, alignItems: 'center' }}>
+        <div className="hero-grid" style={{ position: 'relative', zIndex: 1, width: '100%', padding: 'clamp(72px, 5vw + 50px, 112px) clamp(20px,4vw,64px) clamp(48px, 6vw, 80px)', display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 'clamp(28px, 6vw, 56px)', alignItems: 'center' }}>
 
           {/* Left — Text */}
           <div>
@@ -713,17 +728,17 @@ export default function Landing() {
               <Trophy size={26} color="#fff" />
             </div>
           <h2 style={{ fontSize: 'clamp(26px,4.5vw,48px)', fontWeight: 900, color: '#fff', letterSpacing: '-0.04em', marginBottom: 14, lineHeight: 1.08 }}>
-            Run a stronger event demo with real AI-assisted workflows.
+            Run stronger events with real AI-assisted workflows.
           </h2>
           <p style={{ color: 'rgba(255,255,255,0.72)', fontSize: 16, lineHeight: 1.72, maxWidth: 580, margin: '0 auto 30px' }}>
-            FairPlay supports the full event lifecycle. Show it with confidence: real rubric generation, live role flows, and premium product-level presentation.
+            FairPlay supports the full event lifecycle: rubric generation, live role flows, and results your participants can trust.
           </p>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button onClick={() => navigate('/?modal=register')} style={{ border: 'none', borderRadius: 10, padding: '14px 28px', background: '#fff', color: '#1d4ed8', fontWeight: 800, cursor: 'pointer', fontSize: 15 }}>
               Create Your Account
             </button>
             <button onClick={() => navigate('/?modal=login')} style={{ border: '1px solid rgba(255,255,255,0.28)', borderRadius: 10, padding: '14px 28px', background: 'rgba(255,255,255,0.08)', color: '#fff', fontWeight: 700, cursor: 'pointer', fontSize: 15 }}>
-              Use Demo Access
+              Sign In
             </button>
           </div>
         </div>
