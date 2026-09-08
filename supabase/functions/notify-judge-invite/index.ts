@@ -32,9 +32,15 @@ function escapeHtml(value: string) {
 function buildScheduleBlock(startDate: string, startTime: string, endTime: string, location: string) {
   let dateLabel = '';
   if (startDate) {
-    const parsed = new Date(startDate);
-    if (!Number.isNaN(parsed.getTime())) {
-      dateLabel = parsed.toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    try {
+      const parsed = new Date(startDate);
+      if (!Number.isNaN(parsed.getTime())) {
+        dateLabel = parsed.toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      }
+    } catch {
+      // Malformed date from the caller — skip the date row rather than
+      // failing the whole invite send over a cosmetic field.
+      dateLabel = '';
     }
   }
 
