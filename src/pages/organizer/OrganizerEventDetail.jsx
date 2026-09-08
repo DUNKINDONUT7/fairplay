@@ -265,7 +265,7 @@ export default function OrganizerEventDetail() {
   const { success: notifySuccess, error: notifyError } = useNotificationStore();
   const { getEventById, fetchEvents, updateEvent } = useEventStore();
   const { fetchAudienceScores, getAudienceSummary, subscribeToAudienceScores } = useAudienceScoreStore();
-  const { fetchInvites, inviteJudge, getInvitesForEvent } = useJudgeStore();
+  const { fetchInvites, inviteJudge, revokeInvite, getInvitesForEvent } = useJudgeStore();
   const [fullscreenQR, setFullscreenQR] = useState(null);
   const [showAddContestant, setShowAddContestant] = useState(false);
   const [showAddScorer, setShowAddScorer] = useState(false);
@@ -276,6 +276,10 @@ export default function OrganizerEventDetail() {
   const [inviteError, setInviteError] = useState('');
   const [showInvitePanel, setShowInvitePanel] = useState(false);
   const [confirmingEndSession, setConfirmingEndSession] = useState(false);
+  const [confirmingRevokeInvite, setConfirmingRevokeInvite] = useState(null);
+  const [revokingInviteId, setRevokingInviteId] = useState(null);
+  const [inviteSearch, setInviteSearch] = useState('');
+  const [inviteStatusFilter, setInviteStatusFilter] = useState('all');
 
   useEffect(() => {
     if (user?.id) fetchEvents(user.id);
@@ -403,7 +407,47 @@ export default function OrganizerEventDetail() {
     }
   }
 
+  async function handleRevokeInvite() {
+    if (!confirmingRevokeInvite) return;
+    setRevokingInviteId(confirmingRevokeInvite.id);
+    try {
+      await revokeInvite(confirmingRevokeInvite.id, event.id);
+      notifySuccess(`${confirmingRevokeInvite.judgeName}'s access has been revoked.`);
+    } catch (err) {
+      notifyError(err.message || 'Unable to revoke this invite.');
+    } finally {
+      setRevokingInviteId(null);
+      setConfirmingRevokeInvite(null);
+    }
+  }
+
   const judgeInvites = getInvitesForEvent(event.id);
+  const inviteCounts = judgeInvites.reduce((acc, invite) => {
+    acc.all += 1;
+    acc[invite.status] = (acc[invite.status] || 0) + 1;
+    return acc;
+  }, { all: 0, pending: 0, claimed: 0, revoked: 0 });
+  const INVITE_STATUS_RANK = { pending: 0, claimed: 1, revoked: 2 };
+  const INVITE_STATUS_STYLES = {
+    pending: { fg: '#64748b', bg: 'rgba(100,116,139,0.12)' },
+    claimed: { fg: '#10b981', bg: 'rgba(16,185,129,0.12)' },
+    revoked: { fg: '#dc2626', bg: 'rgba(220,38,38,0.12)' },
+  };
+  const filteredInvites = judgeInvites
+    .filter((invite) => {
+      if (inviteStatusFilter !== 'all' && invite.status !== inviteStatusFilter) return false;
+      if (!inviteSearch.trim()) return true;
+      const q = inviteSearch.trim().toLowerCase();
+      return invite.judgeName.toLowerCase().includes(q) || invite.judgeEmail.toLowerCase().includes(q);
+    })
+    // Pending needs the organizer's attention soonest, so it leads even
+    // though the list is otherwise most-recent-first — only matters once a
+    // single "All" view is mixing statuses; a status filter already narrows
+    // to one bucket, so recency alone still governs there.
+    .sort((a, b) => {
+      if (inviteStatusFilter !== 'all') return 0;
+      return (INVITE_STATUS_RANK[a.status] ?? 1) - (INVITE_STATUS_RANK[b.status] ?? 1);
+    });
 
   return (
     <>
@@ -414,6 +458,14 @@ export default function OrganizerEventDetail() {
       confirmLabel="End Session"
       onCancel={() => setConfirmingEndSession(false)}
       onConfirm={handleToggleScoringStatus}
+    />
+    <ConfirmDialog
+      open={Boolean(confirmingRevokeInvite)}
+      title="Revoke this judge's access?"
+      message={confirmingRevokeInvite ? `${confirmingRevokeInvite.judgeName} (${confirmingRevokeInvite.judgeEmail}) will no longer be able to open their emailed scoring link, even if they already claimed it. This can't be undone — you'd need to send a fresh invite to let them back in.` : ''}
+      confirmLabel="Revoke Access"
+      onCancel={() => setConfirmingRevokeInvite(null)}
+      onConfirm={handleRevokeInvite}
     />
     {fullscreenQR && (
       <QRFullscreenModal
@@ -684,22 +736,107 @@ export default function OrganizerEventDetail() {
                   </form>
 
                   {judgeInvites.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 220, overflowY: 'auto' }}>
-                      {judgeInvites.map((invite) => (
-                        <div key={invite.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 12px', borderRadius: 10, background: '#ffffff', border: '1px solid #e2e8f0' }}>
-                          <div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{invite.judgeName}</div>
-                            <div style={{ fontSize: 11, color: '#64748b' }}>{invite.judgeEmail}</div>
-                          </div>
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, padding: '3px 10px', borderRadius: 999,
-                            background: invite.status === 'claimed' ? 'rgba(16,185,129,0.12)' : 'rgba(100,116,139,0.12)',
-                            color: invite.status === 'claimed' ? '#10b981' : '#64748b',
-                          }}>
-                            {invite.status}
-                          </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {/* Status filter chips — scale to any list size by narrowing instead of just scrolling further */}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {[
+                          { key: 'all', label: 'All', count: inviteCounts.all },
+                          { key: 'pending', label: 'Pending', count: inviteCounts.pending || 0 },
+                          { key: 'claimed', label: 'Claimed', count: inviteCounts.claimed || 0 },
+                          { key: 'revoked', label: 'Revoked', count: inviteCounts.revoked || 0 },
+                        ].filter((chip) => chip.key === 'all' || chip.count > 0).map((chip) => (
+                          <button
+                            key={chip.key}
+                            type="button"
+                            onClick={() => setInviteStatusFilter(chip.key)}
+                            style={{
+                              padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                              border: inviteStatusFilter === chip.key ? '1px solid #2563eb' : '1px solid #e2e8f0',
+                              background: inviteStatusFilter === chip.key ? 'rgba(37,99,235,0.1)' : '#ffffff',
+                              color: inviteStatusFilter === chip.key ? '#2563eb' : '#64748b',
+                            }}
+                          >
+                            {chip.label} ({chip.count})
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Search only earns its space once scrolling a plain list stops being enough */}
+                      {judgeInvites.length > 5 && (
+                        <input
+                          value={inviteSearch}
+                          onChange={(e) => setInviteSearch(e.target.value)}
+                          placeholder="Search by name or email..."
+                          style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none' }}
+                        />
+                      )}
+
+                      {filteredInvites.length === 0 ? (
+                        <div style={{ padding: '18px 8px', textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>
+                          {inviteSearch.trim() || inviteStatusFilter !== 'all'
+                            ? 'No judges match this filter.'
+                            : 'No invites yet.'}
                         </div>
-                      ))}
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 340, overflowY: 'auto', paddingRight: 2 }}>
+                          {filteredInvites.map((invite) => {
+                            const statusStyle = INVITE_STATUS_STYLES[invite.status] || INVITE_STATUS_STYLES.pending;
+                            return (
+                              <div
+                                key={invite.id}
+                                style={{
+                                  display: 'flex', alignItems: 'center', gap: 10,
+                                  padding: '8px 12px', borderRadius: 10, background: '#ffffff',
+                                  border: '1px solid #e2e8f0', borderLeft: `3px solid ${statusStyle.fg}`,
+                                }}
+                              >
+                                <div style={{
+                                  width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                  background: statusStyle.bg, color: statusStyle.fg, fontWeight: 800, fontSize: 13,
+                                }} aria-hidden="true">
+                                  {invite.judgeName.trim().charAt(0).toUpperCase() || '?'}
+                                </div>
+
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeName}>
+                                    {invite.judgeName}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeEmail}>
+                                    {invite.judgeEmail}
+                                  </div>
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                  <span style={{
+                                    fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
+                                    minWidth: 62, textAlign: 'center', whiteSpace: 'nowrap',
+                                    background: statusStyle.bg, color: statusStyle.fg,
+                                  }}>
+                                    {invite.status}
+                                  </span>
+                                  {invite.status !== 'revoked' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmingRevokeInvite(invite)}
+                                      disabled={revokingInviteId === invite.id}
+                                      title="Revoke this judge's access"
+                                      style={{
+                                        padding: '6px 12px', borderRadius: 999, border: '1px solid #fecaca', whiteSpace: 'nowrap',
+                                        background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 700,
+                                        cursor: revokingInviteId === invite.id ? 'not-allowed' : 'pointer',
+                                        opacity: revokingInviteId === invite.id ? 0.6 : 1,
+                                      }}
+                                    >
+                                      Revoke
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

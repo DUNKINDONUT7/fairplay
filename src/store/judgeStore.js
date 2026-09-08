@@ -182,7 +182,7 @@ const useJudgeStore = create(
               event_id: assignment.eventId,
               status: assignment.status,
               assigned_at: assignment.assignedAt,
-            }], { onConflict: 'id' })
+            }], { onConflict: 'judge_id,event_id' })
             .select()
             .single();
           if (error) throw error;
@@ -256,8 +256,19 @@ const useJudgeStore = create(
           throw new Error('Judge invites require FairPlay to be connected to Supabase.');
         }
 
+        const event = useEventStore.getState().getEventById(eventId);
+
         const { data, error } = await supabase.functions.invoke('notify-judge-invite', {
-          body: { eventId, eventTitle, judgeName: name, judgeEmail: email },
+          body: {
+            eventId,
+            eventTitle,
+            judgeName: name,
+            judgeEmail: email,
+            eventStartDate: event?.startDate || null,
+            eventStartTime: event?.startTime || null,
+            eventEndTime: event?.endTime || null,
+            eventLocation: event?.location || null,
+          },
         });
 
         if (error) {
@@ -267,9 +278,21 @@ const useJudgeStore = create(
         if (data?.error) throw new Error(data.error);
 
         await get().fetchInvites(eventId);
-        const event = useEventStore.getState().getEventById(eventId);
         await useNotificationStore.getState().notifyJudgeInvited({ id: data?.inviteId, token: data?.token, judgeEmail: email, judgeName: name, eventTitle }, event);
         return data;
+      },
+
+      revokeInvite: async (inviteId, eventId) => {
+        if (!isSupabaseConfigured || !supabase) {
+          throw new Error('Judge invites require FairPlay to be connected to Supabase.');
+        }
+
+        const { error } = await supabase.rpc('revoke_judge_invite', { p_invite_id: inviteId });
+        if (error) throw new Error(error.message);
+
+        await get().fetchInvites(eventId);
+        await get().fetchJudges();
+        return true;
       },
 
       getInvitesForEvent: (eventId) => {

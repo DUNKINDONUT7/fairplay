@@ -26,6 +26,35 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#039;');
 }
 
+// Every field is optional — the invite must still send if the event has no
+// schedule filled in yet, so the block only renders the rows it actually has
+// and returns '' (no block at all) when there's nothing to show.
+function buildScheduleBlock(startDate: string, startTime: string, endTime: string, location: string) {
+  let dateLabel = '';
+  if (startDate) {
+    const parsed = new Date(startDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      dateLabel = parsed.toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    }
+  }
+
+  let timeLabel = '';
+  if (startTime && endTime) timeLabel = `${startTime} – ${endTime}`;
+  else if (startTime) timeLabel = startTime;
+
+  const rows: string[] = [];
+  if (dateLabel) rows.push(`<div><strong>Date:</strong> ${escapeHtml(dateLabel)}</div>`);
+  if (timeLabel) rows.push(`<div><strong>Time:</strong> ${escapeHtml(timeLabel)}</div>`);
+  if (location) rows.push(`<div><strong>Venue:</strong> ${escapeHtml(location)}</div>`);
+
+  if (rows.length === 0) return '';
+
+  return `
+            <div style="margin-top:16px;padding:14px 16px;border-radius:12px;background:#f0f9ff;border:1px solid #bae6fd;font-size:14px;line-height:1.8;color:#0f172a">
+              ${rows.join('\n              ')}
+            </div>`;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -83,6 +112,10 @@ serve(async (req) => {
   const eventTitle = String(body.eventTitle || 'FairPlay Event').trim();
   const judgeEmail = String(body.judgeEmail || '').trim().toLowerCase();
   const judgeName = String(body.judgeName || '').trim();
+  const eventStartDate = body.eventStartDate ? String(body.eventStartDate) : '';
+  const eventStartTime = body.eventStartTime ? String(body.eventStartTime) : '';
+  const eventEndTime = body.eventEndTime ? String(body.eventEndTime) : '';
+  const eventLocation = body.eventLocation ? String(body.eventLocation) : '';
 
   if (!eventId || Number.isNaN(eventId)) {
     return jsonResponse({ error: 'A valid eventId is required.' }, 400);
@@ -118,6 +151,7 @@ serve(async (req) => {
   const safeName = escapeHtml(judgeName);
   const safeEventTitle = escapeHtml(eventTitle);
   const safeInviteUrl = escapeHtml(inviteUrl);
+  const scheduleHtml = buildScheduleBlock(eventStartDate, eventStartTime, eventEndTime, eventLocation);
 
   const emailResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -134,7 +168,7 @@ serve(async (req) => {
           <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
             <h1 style="margin:0 0 12px;color:#2563eb;font-size:26px">Judge invitation</h1>
             <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
-            <p style="font-size:15px;line-height:1.6">You've been invited to judge <strong>${safeEventTitle}</strong> on FairPlay. Use the link below to access your personal scoring session — no account setup needed.</p>
+            <p style="font-size:15px;line-height:1.6">You've been invited to judge <strong>${safeEventTitle}</strong> on FairPlay. Use the link below to access your personal scoring session — no account setup needed.</p>${scheduleHtml}
             <a href="${safeInviteUrl}" style="display:inline-block;margin-top:14px;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Open my scoring link</a>
             <p style="margin-top:22px;color:#64748b;font-size:13px">If the button does not work, open this link: ${safeInviteUrl}</p>
             <p style="margin-top:8px;color:#94a3b8;font-size:12px">This link is unique to you — please don't share it.</p>

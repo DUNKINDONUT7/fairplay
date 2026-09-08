@@ -36,7 +36,7 @@ create table if not exists public.events (
   approval_workflow jsonb default '[]'::jsonb,
   external_judge_invites jsonb default '[]'::jsonb,
   audience_attendance integer default 0,
-  attendance_tracking boolean default false,
+  attendance_tracking boolean default false,z
   tournament_format text default 'single',
   status text default 'draft',
   start_date timestamptz,
@@ -306,6 +306,16 @@ alter table public.registrations add column if not exists individual_details jso
 
 alter table public.scores alter column id type text using id::text;
 alter table public.scores alter column judge_id type text using judge_id::text;
+
+-- judge_assignments.id was originally bigint, same as scores.id above, but
+-- every write path (claim_judge_invite, JudgeSessionGate.jsx, judgeStore.js)
+-- has always built it as a composite "{judgeId}_{eventId}" string — a value
+-- like '12345_67' was never a valid bigint literal, so every one of those
+-- inserts/upserts has been silently failing (or, for claim_judge_invite,
+-- visibly erroring with "column 'id' is of type bigint but expression is of
+-- type text") until this migration brings the column in line with what the
+-- application has assumed all along.
+alter table public.judge_assignments alter column id type text using id::text;
 alter table public.scores add column if not exists contestant_id text;
 alter table public.scores add column if not exists contestant_name text;
 alter table public.scores add column if not exists event_title text;
@@ -812,9 +822,24 @@ begin
     values (v_judge_id, v_invite.judge_name, lower(trim(v_invite.judge_email)), 'active', 0, timezone('utc', now()));
   end if;
 
+  -- Conflict target is the real identity constraint
+  -- (judge_assignments_judge_event_unique on judge_id+event_id), not the
+  -- synthetic `id` — a judge who already has an assignment row from an
+  -- older insert path (a differently-formatted id) would otherwise hit a
+  -- duplicate-key violation instead of being matched and updated.
+  --
+  -- Named by ON CONFLICT ON CONSTRAINT rather than ON CONFLICT (judge_id,
+  -- event_id): this function's own `returns table` declares judge_id and
+  -- event_id as implicit output variables, and plpgsql resolves a bare
+  -- column list in that position against both the variables and the table's
+  -- columns, which Postgres then rejects as ambiguous. A constraint name is
+  -- a plain identifier, not a column reference, so it sidesteps that lookup
+  -- entirely — this is exactly the same class of bug fixed above for
+  -- revoke_judge_invite's `event_id`, just not fixable by table-qualifying
+  -- since ON CONFLICT's column-list form can't take a table alias.
   insert into public.judge_assignments (id, judge_id, event_id, status, assigned_at)
   values (v_judge_id::text || '_' || v_invite.event_id::text, v_judge_id, v_invite.event_id, 'active', timezone('utc', now()))
-  on conflict (id) do update set status = 'active';
+  on conflict on constraint judge_assignments_judge_event_unique do update set status = 'active';
 
   update public.judge_invites
   set status = 'claimed', claimed_at = timezone('utc', now())
@@ -825,6 +850,69 @@ end;
 $$;
 
 grant execute on function public.claim_judge_invite(text) to anon, authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Revoke a judge invite: lets an organizer/admin cut off a judge who was
+-- already emailed a link but should no longer be able to enter the scoring
+-- session (e.g. a no-show). One action covers both cases — not-yet-claimed
+-- (the invite itself is flagged, so claim_judge_invite's existing revoked
+-- check at claim time blocks it) and already-claimed (the matching
+-- judge_assignments row is flagged too, so JudgeLiveScoring/JudgeSessionGate
+-- and the scores RLS below can reject that judge going forward).
+--
+-- Sending a brand-new invite (a new token/row) is the intended "undo": on
+-- claim it resets the assignment to 'active' via the existing on-conflict
+-- clause above, so this function does not need its own un-revoke path.
+-- ----------------------------------------------------------------------------
+
+alter table public.judge_invites add column if not exists revoked_at timestamptz;
+alter table public.judge_invites add column if not exists revoked_by text;
+
+create or replace function public.revoke_judge_invite(p_invite_id bigint)
+returns table (invite_id bigint, event_id bigint, assignment_revoked boolean)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_invite public.judge_invites%rowtype;
+  v_judge_id bigint;
+  v_hit boolean := false;
+begin
+  if not public.is_staff_user() then
+    raise exception 'Organizer or admin access required.';
+  end if;
+
+  select * into v_invite from public.judge_invites where id = p_invite_id;
+  if v_invite.id is null then
+    raise exception 'Invite not found.';
+  end if;
+
+  update public.judge_invites
+  set status = 'revoked', revoked_at = timezone('utc', now()), revoked_by = auth.uid()::text
+  where id = p_invite_id;
+
+  select judges.id into v_judge_id
+  from public.judges
+  where judges.email = lower(trim(v_invite.judge_email))
+  limit 1;
+
+  if v_judge_id is not null then
+    -- Bare `event_id` here previously collided with the returns-table output
+    -- column of the same name, plpgsql picked the wrong one, and Postgres
+    -- rejected the whole statement as ambiguous — table-qualify it.
+    update public.judge_assignments ja
+    set status = 'revoked'
+    where ja.judge_id = v_judge_id and ja.event_id = v_invite.event_id;
+    v_hit := found;
+  end if;
+
+  return query select v_invite.id, v_invite.event_id, v_hit;
+end;
+$$;
+
+revoke all on function public.revoke_judge_invite(bigint) from public, anon;
+grant execute on function public.revoke_judge_invite(bigint) to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- Score immutability: once a score is locked, nothing can change or delete
@@ -866,18 +954,47 @@ on public.scores for select
 to anon, authenticated
 using (true);
 
+-- Deny-list, not allow-list: scores.judge_id is left NULL by scoreStore.js's
+-- own writes and by anonymous QR/audience scoring, so a policy that required
+-- a matching judge_assignments row would break those existing, legitimate
+-- write paths (NULL never matches, so this function returns false for them
+-- and they pass through unaffected). This only blocks a judge_id that
+-- matches an assignment the organizer has explicitly revoked.
+create or replace function public.judge_assignment_revoked(p_judge_id text, p_event_id bigint)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.judge_assignments ja
+    where ja.judge_id::text = p_judge_id
+      and ja.event_id = p_event_id
+      and ja.status = 'revoked'
+  );
+$$;
+
+grant execute on function public.judge_assignment_revoked(text, bigint) to anon, authenticated;
+
 drop policy if exists "Scores can be inserted unlocked" on public.scores;
 create policy "Scores can be inserted unlocked"
 on public.scores for insert
 to anon, authenticated
-with check (coalesce(locked, false) = false);
+with check (
+  coalesce(locked, false) = false
+  and not public.judge_assignment_revoked(judge_id, event_id)
+);
 
 drop policy if exists "Unlocked scores can be updated" on public.scores;
 create policy "Unlocked scores can be updated"
 on public.scores for update
 to anon, authenticated
 using (coalesce(locked, false) = false)
-with check (true);
+with check (
+  coalesce(locked, false) = false
+  and not public.judge_assignment_revoked(judge_id, event_id)
+);
 
 drop policy if exists "Staff can delete scores" on public.scores;
 create policy "Staff can delete scores"

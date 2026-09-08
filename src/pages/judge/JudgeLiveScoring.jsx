@@ -202,6 +202,8 @@ export default function JudgeLiveScoring() {
   const [submitted, setSubmitted] = useState({}); // { contestantId: true }
   const [activeContestantId, setActiveContestantId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [revoked, setRevoked] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     const stored = getStoredJudge();
@@ -217,6 +219,26 @@ export default function JudgeLiveScoring() {
       ) || (inviteEventId != null ? allEvents.find((e) => String(e.id) === String(inviteEventId)) : null);
       if (!matched) return;
       setEvent(matched);
+
+      // Revoked judges keep their localStorage identity but must not see
+      // scoring content again — check the actual assignment status before
+      // restoring anything.
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: assignmentRow } = await supabase
+            .from('judge_assignments')
+            .select('status')
+            .eq('judge_id', stored.judgeId)
+            .eq('event_id', matched.id)
+            .maybeSingle();
+          if (assignmentRow?.status === 'revoked') {
+            setRevoked(true);
+            return;
+          }
+        } catch {
+          // Non-critical — fall through to normal load if the check itself fails
+        }
+      }
 
       // Restore existing scores from Supabase
       if (isSupabaseConfigured && supabase) {
@@ -301,6 +323,21 @@ export default function JudgeLiveScoring() {
   async function submitContestant(contestantId) {
     if (!isComplete(contestantId) || saving) return;
     setSaving(true);
+    setSaveError('');
+
+    if (isSupabaseConfigured && supabase) {
+      const { data: assignmentRow } = await supabase
+        .from('judge_assignments')
+        .select('status')
+        .eq('judge_id', judge.judgeId)
+        .eq('event_id', event.id)
+        .maybeSingle();
+      if (assignmentRow?.status === 'revoked') {
+        setRevoked(true);
+        setSaving(false);
+        return;
+      }
+    }
 
     const criteria = event?.criteria || [];
     const s = scores[contestantId] || {};
@@ -324,7 +361,17 @@ export default function JudgeLiveScoring() {
           updated_at: new Date().toISOString(),
         };
 
-        await supabase.from('scores').upsert([scorePayload]);
+        // upsert() does not throw on a DB/RLS rejection — it resolves with
+        // { error } — so that has to be checked explicitly, or a rejected
+        // write (e.g. a revoked judge's score blocked by RLS) would still
+        // fall through to "submitted" with no sign anything went wrong.
+        const { error: saveError } = await supabase.from('scores').upsert([scorePayload]);
+        if (saveError) {
+          setSaveError('Could not save this score — check your connection and try again.');
+          setSaving(false);
+          return;
+        }
+
         await notifyScoreSubmitted({
           ...scorePayload,
           eventId: event.id,
@@ -335,7 +382,9 @@ export default function JudgeLiveScoring() {
           judgeName: judge.judgeName,
         }, event, 'submitted');
       } catch {
-        // Non-critical — state still updates locally
+        setSaveError('Could not save this score — check your connection and try again.');
+        setSaving(false);
+        return;
       }
     } else {
       await notifyScoreSubmitted({
@@ -366,6 +415,21 @@ export default function JudgeLiveScoring() {
         <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <i className="bi bi-arrow-repeat animate-spin" style={{ fontSize: 36, color: '#2563eb' }} />
           <p style={{ color: '#64748b', marginTop: 16 }}>Loading session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (revoked) {
+    return (
+      <div style={fullPage}>
+        <AnimatedBackground />
+        <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
+          <i className="bi bi-slash-circle" style={{ fontSize: 52, color: '#dc2626', display: 'block', marginBottom: 16 }} />
+          <div style={{ fontWeight: 800, fontSize: 22, color: '#0f172a', marginBottom: 8 }}>Access Revoked</div>
+          <p style={{ color: '#64748b', fontSize: 15, maxWidth: 340, margin: '0 auto' }}>
+            Your access to this event has been revoked by the organizer.<br />Contact them if you think this is a mistake.
+          </p>
         </div>
       </div>
     );
@@ -599,6 +663,17 @@ export default function JudgeLiveScoring() {
                     <span style={{ fontWeight: 800, fontSize: 24, color: '#2563eb' }}>
                       {getWeightedTotal(activeContestant.id)} / 10
                     </span>
+                  </div>
+                )}
+
+                {saveError && (
+                  <div style={{
+                    padding: '12px 16px', borderRadius: 12, marginBottom: 12,
+                    background: '#fef2f2', border: '1.5px solid #fecaca', color: '#dc2626',
+                    fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8,
+                  }}>
+                    <i className="bi bi-exclamation-triangle-fill" />
+                    {saveError}
                   </div>
                 )}
 

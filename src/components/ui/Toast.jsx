@@ -8,11 +8,19 @@ const ICONS = {
   info: 'ℹ',
 };
 
+// Solid, dark, high-contrast backgrounds — a fixed-position overlay must stay
+// readable regardless of what page it floats over. The previous version used
+// near-transparent tinted backgrounds with hardcoded white message text; that
+// only works over a dark page. Over the app's many light-themed pages
+// (OrganizerEventDetail, judge/organizer forms, etc.) the white text on a
+// barely-tinted light background was effectively invisible — every
+// notifySuccess/notifyError call was firing correctly but never legible,
+// which read as the whole action silently doing nothing.
 const COLORS = {
-  success: { bg: 'rgba(16, 185, 129, 0.15)', border: 'rgba(16, 185, 129, 0.3)', text: '#10b981' },
-  error: { bg: 'rgba(239, 68, 68, 0.15)', border: 'rgba(239, 68, 68, 0.3)', text: '#ef4444' },
-  warning: { bg: 'rgba(251, 191, 36, 0.15)', border: 'rgba(251, 191, 36, 0.3)', text: '#fbbf24' },
-  info: { bg: 'rgba(6, 182, 212, 0.15)', border: 'rgba(6, 182, 212, 0.3)', text: '#06b6d4' },
+  success: { bg: '#065f46', border: 'rgba(52,211,153,0.5)', icon: '#6ee7b7' },
+  error: { bg: '#7f1d1d', border: 'rgba(248,113,113,0.5)', icon: '#fca5a5' },
+  warning: { bg: '#78350f', border: 'rgba(251,191,36,0.5)', icon: '#fcd34d' },
+  info: { bg: '#164e63', border: 'rgba(34,211,238,0.5)', icon: '#67e8f9' },
 };
 
 export default function ToastContainer() {
@@ -47,10 +55,10 @@ export default function ToastContainer() {
               }}
             >
               <span style={{
-                width: 28, height: 28, borderRadius: 8,
-                background: colors.bg, border: `1px solid ${colors.border}`,
+                width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                background: 'rgba(255,255,255,0.12)', border: `1px solid ${colors.border}`,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                color: colors.text, fontWeight: 700, fontSize: 14,
+                color: colors.icon, fontWeight: 700, fontSize: 14,
               }}>
                 {ICONS[toast.type]}
               </span>

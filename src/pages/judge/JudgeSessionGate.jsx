@@ -55,17 +55,35 @@ async function findOrCreateJudge(email, name) {
 }
 
 async function assignJudgeToEvent(judgeId, eventId) {
-  if (!isSupabaseConfigured || !supabase) return;
+  if (!isSupabaseConfigured || !supabase) return { revoked: false };
 
   try {
+    // Check first — an unconditional upsert would flip a revoked assignment
+    // back to 'active' every time this judge reopens the QR link/session.
+    // Matched by judge_id+event_id (the real judge_assignments_judge_event_unique
+    // constraint), not the synthetic id — an older row for this judge+event
+    // may have been created with a different id format.
+    const { data: existing } = await supabase
+      .from('judge_assignments')
+      .select('status')
+      .eq('judge_id', judgeId)
+      .eq('event_id', eventId)
+      .maybeSingle();
+
+    if (existing?.status === 'revoked') {
+      return { revoked: true };
+    }
+
     await supabase
       .from('judge_assignments')
       .upsert(
         { id: `${judgeId}_${eventId}`, judge_id: judgeId, event_id: eventId, status: 'active', assigned_at: new Date().toISOString() },
-        { onConflict: 'id' }
+        { onConflict: 'judge_id,event_id' }
       );
+    return { revoked: false };
   } catch {
     // Non-critical — continue even if assignment fails
+    return { revoked: false };
   }
 }
 
@@ -107,7 +125,11 @@ export default function JudgeSessionGate() {
         if (isTournament) {
           navigate(`/scorer/live/${sessionId}`);
         } else {
-          await assignJudgeToEvent(stored.judgeId, matched.id);
+          const result = await assignJudgeToEvent(stored.judgeId, matched.id);
+          if (result.revoked) {
+            setPhase('revoked');
+            return;
+          }
           navigate(`/judge/live/${sessionId}`);
         }
         return;
@@ -165,7 +187,12 @@ export default function JudgeSessionGate() {
       if (isTournament) {
         navigate(`/scorer/live/${sessionId}`);
       } else {
-        await assignJudgeToEvent(judge.id, event.id);
+        const result = await assignJudgeToEvent(judge.id, event.id);
+        if (result.revoked) {
+          setErrorMsg('Your access to this event has been revoked by the organizer.');
+          setSubmitting(false);
+          return;
+        }
         navigate(`/judge/live/${sessionId}`);
       }
     } catch (err) {
@@ -190,6 +217,18 @@ export default function JudgeSessionGate() {
         <i className="bi bi-exclamation-triangle" style={{ fontSize: 48, color: '#ef4444', marginBottom: 16 }} />
         <div style={{ fontWeight: 800, fontSize: 20, color: '#0f172a', marginBottom: 8 }}>Session not found</div>
         <p style={{ color: '#64748b' }}>This QR code or session link is invalid or has expired.</p>
+      </div>
+    );
+  }
+
+  if (phase === 'revoked') {
+    return (
+      <div style={fullPage}>
+        <i className="bi bi-slash-circle" style={{ fontSize: 48, color: '#dc2626', marginBottom: 16 }} />
+        <div style={{ fontWeight: 800, fontSize: 20, color: '#0f172a', marginBottom: 8 }}>Access Revoked</div>
+        <p style={{ color: '#64748b', maxWidth: 360, textAlign: 'center' }}>
+          Your access to this event has been revoked by the organizer. Contact them if you think this is a mistake.
+        </p>
       </div>
     );
   }
