@@ -9,6 +9,7 @@ import useScoreStore from '../../store/scoreStore';
 import useNotificationStore from '../../store/notificationStore';
 import useAuthStore from '../../store/authStore';
 import useAttendanceStore from '../../store/attendanceStore';
+import { buildAppUrl } from '../../utils/appUrl';
 import btechLogo from '../../../assets/logo/BTECH.jpg';
 
 const JUDGE_CATEGORIES = ['judge'];
@@ -627,8 +628,8 @@ export default function OrganizerCertificates() {
       template,
       notes: '',
       verificationCode: 'FP-PREVIEW',
-      verificationUrl: `${window.location.origin}/events/${selectedEvent.id}`,
-      qrValue: `${window.location.origin}/events/${selectedEvent.id}?certificate=FP-PREVIEW`,
+      verificationUrl: buildAppUrl(`/events/${selectedEvent.id}`),
+      qrValue: buildAppUrl(`/events/${selectedEvent.id}?certificate=FP-PREVIEW`),
     };
   };
 

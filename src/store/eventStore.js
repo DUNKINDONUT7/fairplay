@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { mockEvents } from '../data/events';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import {
@@ -250,6 +250,29 @@ const initialEvents = isSupabaseConfigured
   ? []
   : mockEvents.map((event, index) => normalizeEvent(event, index));
 
+let eventsRealtimeBound = false;
+let eventsRealtimeFilter = null;
+
+function ensureEventsRealtime(filter) {
+  if (!isSupabaseConfigured || !supabase || eventsRealtimeBound) {
+    eventsRealtimeFilter = filter;
+    return;
+  }
+
+  eventsRealtimeFilter = filter;
+  eventsRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'events',
+    onChange: () => {
+      const state = useEventStore.getState();
+      if (typeof state.fetchEvents === 'function') {
+        state.fetchEvents(eventsRealtimeFilter, { silent: true });
+      }
+    },
+  });
+}
+
 const useEventStore = create(
   persist(
     (set, get) => ({
@@ -257,8 +280,11 @@ const useEventStore = create(
       loading: false,
       error: null,
 
-      fetchEvents: async (organizerId) => {
-        set({ loading: true, error: null });
+      fetchEvents: async (organizerId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
         const organizerBusinessId = getBusinessActorId(organizerId);
 
         if (!isSupabaseConfigured) {
@@ -291,6 +317,7 @@ const useEventStore = create(
             loading: false,
             error: null,
           });
+          ensureEventsRealtime(organizerId);
 
           return organizerId
             ? resolvedEvents.filter((event) =>
@@ -301,7 +328,9 @@ const useEventStore = create(
             : resolvedEvents;
         } catch (error) {
           console.error('Error fetching events:', error.message);
-          set({ loading: false, error: error.message, events: [] });
+          if (!silent) {
+            set({ loading: false, error: error.message, events: [] });
+          }
           return [];
         }
       },

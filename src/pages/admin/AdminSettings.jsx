@@ -3,6 +3,7 @@ import DashboardLayout from '../../components/layout/DashboardLayout';
 import useAILogsStore from '../../store/aiLogsStore';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
+import { getAppBaseUrl } from '../../utils/appUrl';
 
 export default function AdminSettings() {
   const { authMode, sessionSource, users, refreshProfiles } = useAuthStore();
@@ -16,7 +17,7 @@ export default function AdminSettings() {
 
   const settings = useMemo(() => [
     { label: 'Platform Name', value: import.meta.env.VITE_APP_NAME || document.title || 'FairPlay' },
-    { label: 'Current Site URL', value: window.location.origin },
+    { label: 'Current Site URL', value: getAppBaseUrl() || 'Not configured' },
     { label: 'Auth Mode', value: authMode },
     { label: 'Session Source', value: sessionSource },
     { label: 'Supabase URL Configured', value: import.meta.env.VITE_SUPABASE_URL ? 'Yes' : 'No' },

@@ -11,6 +11,7 @@ import useTeamStore from '../../store/teamStore';
 import useRegistrationStore from '../../store/registrationStore';
 import useScoreStore from '../../store/scoreStore';
 import { ensureTournamentAutomation } from '../../services/automationService';
+import { buildAppUrl } from '../../utils/appUrl';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
 import { normalizeEntrants } from '../../utils/bracketEngine';
 
@@ -487,7 +488,7 @@ export default function OrganizerBracket() {
 
   const copyPublicLink = async () => {
     if (!currentTournament?.eventId) return;
-    const link = `${window.location.origin}/events/${currentTournament.eventId}/brackets`;
+    const link = buildAppUrl(`/events/${currentTournament.eventId}/brackets`);
     try {
       await navigator.clipboard.writeText(link);
       success('Public bracket link copied.');

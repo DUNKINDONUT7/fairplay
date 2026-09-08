@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 
 function createNumericId() {
   // Wide random range — team registration is bursty near deadlines, and a
@@ -48,6 +48,29 @@ function normalizeTeam(team) {
   };
 }
 
+let teamsRealtimeBound = false;
+let teamsRealtimeEventId = null;
+
+function ensureTeamsRealtime(eventId) {
+  if (!isSupabaseConfigured || !supabase || teamsRealtimeBound) {
+    teamsRealtimeEventId = eventId;
+    return;
+  }
+
+  teamsRealtimeEventId = eventId;
+  teamsRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'teams',
+    onChange: () => {
+      const state = useTeamStore.getState();
+      if (typeof state.fetchTeams === 'function') {
+        state.fetchTeams(teamsRealtimeEventId, { silent: true });
+      }
+    },
+  });
+}
+
 const useTeamStore = create(
   persist(
     (set, get) => ({
@@ -55,8 +78,11 @@ const useTeamStore = create(
       loading: false,
       error: null,
 
-      fetchTeams: async (eventId) => {
-        set({ loading: true, error: null });
+      fetchTeams: async (eventId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           const teams = eventId
@@ -82,10 +108,13 @@ const useTeamStore = create(
             loading: false,
             error: null,
           });
+          ensureTeamsRealtime(eventId);
           return teams;
         } catch (error) {
           console.error('Error fetching teams:', error.message);
-          set({ loading: false, error: error.message, teams: eventId ? get().teams.filter((team) => String(team.eventId) !== String(eventId)) : [] });
+          if (!silent) {
+            set({ loading: false, error: error.message, teams: eventId ? get().teams.filter((team) => String(team.eventId) !== String(eventId)) : [] });
+          }
           return [];
         }
       },

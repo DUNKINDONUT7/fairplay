@@ -8,6 +8,7 @@ import useAudienceScoreStore from '../../store/audienceScoreStore';
 import useJudgeStore from '../../store/judgeStore';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
+import { buildAppUrl } from '../../utils/appUrl';
 import { inferTeamLimitConfig, getParticipantLimitMessage, TEAM_EVENT_CATEGORIES } from '../../utils/teamEventRules';
 
 const TOURNAMENT_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
@@ -29,6 +30,13 @@ async function copyLink(value, { success, error }) {
 
 function getSubEventName(subEvent) {
   return String(subEvent?.name || subEvent?.title || '').trim();
+}
+
+function formatEventDate(value) {
+  if (!value) return '—';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 function AddScorerModal({ event, onAdd, onClose }) {
@@ -265,7 +273,7 @@ export default function OrganizerEventDetail() {
   const { success: notifySuccess, error: notifyError } = useNotificationStore();
   const { getEventById, fetchEvents, updateEvent } = useEventStore();
   const { fetchAudienceScores, getAudienceSummary, subscribeToAudienceScores } = useAudienceScoreStore();
-  const { fetchInvites, inviteJudge, revokeInvite, getInvitesForEvent } = useJudgeStore();
+  const { fetchInvites, inviteJudge, revokeInvite, deleteInvite, getInvitesForEvent } = useJudgeStore();
   const [fullscreenQR, setFullscreenQR] = useState(null);
   const [showAddContestant, setShowAddContestant] = useState(false);
   const [showAddScorer, setShowAddScorer] = useState(false);
@@ -278,8 +286,11 @@ export default function OrganizerEventDetail() {
   const [confirmingEndSession, setConfirmingEndSession] = useState(false);
   const [confirmingRevokeInvite, setConfirmingRevokeInvite] = useState(null);
   const [revokingInviteId, setRevokingInviteId] = useState(null);
+  const [confirmingDeleteInvite, setConfirmingDeleteInvite] = useState(null);
+  const [deletingInviteId, setDeletingInviteId] = useState(null);
   const [inviteSearch, setInviteSearch] = useState('');
   const [inviteStatusFilter, setInviteStatusFilter] = useState('all');
+  const [inviteSortOrder, setInviteSortOrder] = useState('newest');
 
   useEffect(() => {
     if (user?.id) fetchEvents(user.id);
@@ -350,7 +361,7 @@ export default function OrganizerEventDetail() {
     const existing = event.scorerAssignments || [];
     await updateEvent(id, { scorerAssignments: [...existing, assignment] });
     setShowAddScorer(false);
-    const url = `${window.location.origin}/scorer/session/${token}`;
+    const url = buildAppUrl(`/scorer/session/${token}`);
     setFullscreenQR({ value: url, label: `Scorer: ${name}${subEventName ? ` · ${subEventName}` : ''}`, code: null, scorerName: name, subEventName });
   }
 
@@ -381,9 +392,9 @@ export default function OrganizerEventDetail() {
     );
   }
 
-  const judgeQRValue = `${window.location.origin}/judge/open/${event.id}`;
-  const participantQRValue = `${window.location.origin}/participant/register?eventId=${event.id}`;
-  const audienceQRValue = `${window.location.origin}/audience/${event.id}`;
+  const judgeQRValue = buildAppUrl(`/judge/open/${event.id}`);
+  const participantQRValue = buildAppUrl(`/participant/register?eventId=${event.id}`);
+  const audienceQRValue = buildAppUrl(`/audience/${event.id}`);
   const audienceEnabled = Boolean(event.audienceImpactEnabled ?? event.audienceImpact);
   const audienceSummary = getAudienceSummary(event.id);
 
@@ -412,12 +423,26 @@ export default function OrganizerEventDetail() {
     setRevokingInviteId(confirmingRevokeInvite.id);
     try {
       await revokeInvite(confirmingRevokeInvite.id, event.id);
-      notifySuccess(`${confirmingRevokeInvite.judgeName}'s access has been revoked.`);
+      notifySuccess(`${confirmingRevokeInvite.judgeName}'s access has been canceled.`);
     } catch (err) {
       notifyError(err.message || 'Unable to revoke this invite.');
     } finally {
       setRevokingInviteId(null);
       setConfirmingRevokeInvite(null);
+    }
+  }
+
+  async function handleDeleteInvite() {
+    if (!confirmingDeleteInvite) return;
+    setDeletingInviteId(confirmingDeleteInvite.id);
+    try {
+      await deleteInvite(confirmingDeleteInvite.id, event.id);
+      notifySuccess(`Removed the invite for ${confirmingDeleteInvite.judgeName}.`);
+    } catch (err) {
+      notifyError(err.message || 'Unable to delete this invite.');
+    } finally {
+      setDeletingInviteId(null);
+      setConfirmingDeleteInvite(null);
     }
   }
 
@@ -429,10 +454,16 @@ export default function OrganizerEventDetail() {
   }, { all: 0, pending: 0, claimed: 0, revoked: 0 });
   const INVITE_STATUS_RANK = { pending: 0, claimed: 1, revoked: 2 };
   const INVITE_STATUS_STYLES = {
-    pending: { fg: '#64748b', bg: 'rgba(100,116,139,0.12)' },
-    claimed: { fg: '#10b981', bg: 'rgba(16,185,129,0.12)' },
-    revoked: { fg: '#dc2626', bg: 'rgba(220,38,38,0.12)' },
+    pending: { fg: '#64748b', bg: 'rgba(100,116,139,0.12)', border: '#cbd5e1' },
+    claimed: { fg: '#047857', bg: 'rgba(16,185,129,0.12)', border: '#86efac' },
+    revoked: { fg: '#b91c1c', bg: 'rgba(220,38,38,0.12)', border: '#fca5a5' },
   };
+  const INVITE_FILTER_OPTIONS = [
+    { key: 'all', label: 'All', count: inviteCounts.all },
+    { key: 'pending', label: 'Pending', count: inviteCounts.pending || 0 },
+    { key: 'claimed', label: 'Claimed', count: inviteCounts.claimed || 0 },
+    { key: 'revoked', label: 'Revoked', count: inviteCounts.revoked || 0 },
+  ].filter((chip) => chip.key === 'all' || chip.count > 0);
   const filteredInvites = judgeInvites
     .filter((invite) => {
       if (inviteStatusFilter !== 'all' && invite.status !== inviteStatusFilter) return false;
@@ -441,12 +472,16 @@ export default function OrganizerEventDetail() {
       return invite.judgeName.toLowerCase().includes(q) || invite.judgeEmail.toLowerCase().includes(q);
     })
     // Pending needs the organizer's attention soonest, so it leads even
-    // though the list is otherwise most-recent-first — only matters once a
+    // though the list is otherwise date-ordered — only matters once a
     // single "All" view is mixing statuses; a status filter already narrows
-    // to one bucket, so recency alone still governs there.
+    // to one bucket, so the date order alone governs there.
     .sort((a, b) => {
-      if (inviteStatusFilter !== 'all') return 0;
-      return (INVITE_STATUS_RANK[a.status] ?? 1) - (INVITE_STATUS_RANK[b.status] ?? 1);
+      if (inviteStatusFilter === 'all') {
+        const rankDiff = (INVITE_STATUS_RANK[a.status] ?? 1) - (INVITE_STATUS_RANK[b.status] ?? 1);
+        if (rankDiff !== 0) return rankDiff;
+      }
+      const dateDiff = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      return inviteSortOrder === 'oldest' ? dateDiff : -dateDiff;
     });
 
   return (
@@ -461,9 +496,9 @@ export default function OrganizerEventDetail() {
     />
     <ConfirmDialog
       open={Boolean(confirmingRevokeInvite)}
-      title="Revoke this judge's access?"
-      message={confirmingRevokeInvite ? `${confirmingRevokeInvite.judgeName} (${confirmingRevokeInvite.judgeEmail}) will no longer be able to open their emailed scoring link, even if they already claimed it. This can't be undone — you'd need to send a fresh invite to let them back in.` : ''}
-      confirmLabel="Revoke Access"
+      title="Cancel this judge's access?"
+      message={confirmingRevokeInvite ? `${confirmingRevokeInvite.judgeName} (${confirmingRevokeInvite.judgeEmail}) will no longer be able to use the emailed scoring link, even if they already opened it. This removes their access for this event until a new invite is sent.` : ''}
+      confirmLabel="Cancel Access"
       onCancel={() => setConfirmingRevokeInvite(null)}
       onConfirm={handleRevokeInvite}
     />
@@ -519,8 +554,8 @@ export default function OrganizerEventDetail() {
             {[
               { label: 'Type', value: event.eventType || event.type },
               { label: 'Format', value: event.format || 'In-person' },
-              { label: 'Start Date', value: event.startDate || '—' },
-              { label: 'End Date', value: event.endDate || '—' },
+              { label: 'Start Date', value: formatEventDate(event.startDate) },
+              { label: 'End Date', value: formatEventDate(event.endDate) },
               { label: 'Location', value: event.location || '—' },
               { label: 'Scoring', value: event.scoringType || '—' },
             ].map(({ label, value }) => (
@@ -688,159 +723,209 @@ export default function OrganizerEventDetail() {
               </div>
 
               {/* Invite Judges — collapsible, verified per-judge email access */}
-              <button
-                type="button"
-                onClick={() => setShowInvitePanel((v) => !v)}
+              <div
                 style={{
-                  alignSelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '10px 14px', borderRadius: 12, border: '1px solid #e2e8f0', background: '#f8fafc',
-                  color: '#0f172a', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                  alignSelf: 'stretch',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 0,
+                  borderRadius: 18,
+                  border: '1px solid #dbeafe',
+                  background: '#f8fbff',
+                  overflow: 'hidden',
+                  boxShadow: '0 8px 20px rgba(37, 99, 235, 0.06)',
                 }}
               >
-                <span><i className="bi bi-envelope-paper" style={{ marginRight: 8, color: '#2563eb' }} />Invite a judge by email {judgeInvites.length > 0 ? `(${judgeInvites.length})` : ''}</span>
-                <i className={`bi ${showInvitePanel ? 'bi-chevron-up' : 'bi-chevron-down'}`} />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setShowInvitePanel((v) => !v)}
+                  style={{
+                    alignSelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '14px 16px', border: 'none', background: 'linear-gradient(135deg, rgba(37,99,235,0.1), rgba(14,165,233,0.08))',
+                    color: '#0f172a', fontWeight: 800, fontSize: 14, cursor: 'pointer', textAlign: 'left',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', color: '#fff', fontSize: 15 }}>
+                      <i className="bi bi-envelope-paper" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Verified access</div>
+                      <div style={{ fontSize: 14, color: '#0f172a', fontWeight: 800 }}>Invite Judges {judgeInvites.length > 0 ? `(${judgeInvites.length})` : ''}</div>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={{ padding: '5px 9px', borderRadius: 999, background: '#ffffff', color: '#2563eb', border: '1px solid #bfdbfe', fontSize: 11, fontWeight: 800 }}>
+                      {judgeInvites.length}
+                    </span>
+                    <i className={`bi ${showInvitePanel ? 'bi-chevron-up' : 'bi-chevron-down'}`} style={{ fontSize: 18, color: '#2563eb' }} />
+                  </div>
+                </button>
 
-              {showInvitePanel && (
-                <div style={{ alignSelf: 'stretch', display: 'flex', flexDirection: 'column', gap: 10, padding: 14, borderRadius: 14, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                  <form onSubmit={handleInviteJudge} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    <input
-                      value={inviteName}
-                      onChange={(e) => setInviteName(e.target.value)}
-                      placeholder="Judge full name"
-                      style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none' }}
-                      disabled={inviteSending}
-                    />
-                    <input
-                      type="email"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      placeholder="judge@email.com"
-                      style={{ padding: '10px 14px', borderRadius: 12, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none' }}
-                      disabled={inviteSending}
-                    />
-                    {inviteError && (
-                      <div style={{ fontSize: 12, color: '#dc2626' }}>{inviteError}</div>
-                    )}
-                    <button
-                      type="submit"
-                      disabled={inviteSending || !inviteName.trim() || !inviteEmail.trim()}
-                      style={{
-                        padding: '11px 16px', borderRadius: 12, border: 'none',
-                        background: 'linear-gradient(135deg,#2563eb,#0ea5e9)', color: '#fff', fontWeight: 800, fontSize: 13,
-                        cursor: inviteSending ? 'not-allowed' : 'pointer', opacity: inviteSending ? 0.7 : 1,
-                      }}
-                    >
-                      {inviteSending ? 'Sending...' : 'Send Invite'}
-                    </button>
-                  </form>
-
-                  {judgeInvites.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      {/* Status filter chips — scale to any list size by narrowing instead of just scrolling further */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {[
-                          { key: 'all', label: 'All', count: inviteCounts.all },
-                          { key: 'pending', label: 'Pending', count: inviteCounts.pending || 0 },
-                          { key: 'claimed', label: 'Claimed', count: inviteCounts.claimed || 0 },
-                          { key: 'revoked', label: 'Revoked', count: inviteCounts.revoked || 0 },
-                        ].filter((chip) => chip.key === 'all' || chip.count > 0).map((chip) => (
-                          <button
-                            key={chip.key}
-                            type="button"
-                            onClick={() => setInviteStatusFilter(chip.key)}
-                            style={{
-                              padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                              border: inviteStatusFilter === chip.key ? '1px solid #2563eb' : '1px solid #e2e8f0',
-                              background: inviteStatusFilter === chip.key ? 'rgba(37,99,235,0.1)' : '#ffffff',
-                              color: inviteStatusFilter === chip.key ? '#2563eb' : '#64748b',
-                            }}
-                          >
-                            {chip.label} ({chip.count})
-                          </button>
-                        ))}
+                {showInvitePanel && (
+                  <div style={{ alignSelf: 'stretch', display: 'flex', flexDirection: 'column', gap: 14, padding: 16, background: '#ffffff' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label style={{ fontSize: 11, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Judge name</label>
+                        <input
+                          value={inviteName}
+                          onChange={(e) => setInviteName(e.target.value)}
+                          placeholder="e.g. Rica"
+                          style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none', background: '#fff' }}
+                          disabled={inviteSending}
+                        />
                       </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        <label style={{ fontSize: 11, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Email address</label>
+                        <input
+                          type="email"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          placeholder="judge@email.com"
+                          style={{ padding: '10px 12px', borderRadius: 12, border: '1px solid #cbd5e1', fontSize: 14, outline: 'none', background: '#fff' }}
+                          disabled={inviteSending}
+                        />
+                      </div>
+                    </div>
 
-                      {/* Search only earns its space once scrolling a plain list stops being enough */}
-                      {judgeInvites.length > 5 && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
+                        Invite a judge by email. The message includes the event schedule plus a secure access link for scoring.
+                        <div style={{ marginTop: 4, color: '#475569' }}>
+                          QR codes stay available as an emergency fallback; you can revoke access anytime if a judge no longer needs to attend.
+                        </div>
+                      </div>
+                      <button
+                        type="submit"
+                        onClick={handleInviteJudge}
+                        disabled={inviteSending || !inviteName.trim() || !inviteEmail.trim()}
+                        style={{
+                          padding: '11px 18px', borderRadius: 12, border: 'none',
+                          background: inviteSending || !inviteName.trim() || !inviteEmail.trim()
+                            ? 'linear-gradient(135deg, #cbd5e1, #94a3b8)'
+                            : 'linear-gradient(135deg,#2563eb,#0ea5e9)',
+                          color: '#fff', fontWeight: 800, fontSize: 13,
+                          cursor: inviteSending || !inviteName.trim() || !inviteEmail.trim() ? 'not-allowed' : 'pointer',
+                          boxShadow: inviteSending || !inviteName.trim() || !inviteEmail.trim() ? 'none' : '0 10px 20px rgba(37,99,235,0.25)',
+                        }}
+                      >
+                        <i className="bi bi-send-fill" style={{ marginRight: 6 }} />
+                        {inviteSending ? 'Sending...' : 'Send Invite'}
+                      </button>
+                    </div>
+
+                    {inviteError && (
+                      <div style={{ fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '8px 10px' }}>
+                        {inviteError}
+                      </div>
+                    )}
+
+                    {judgeInvites.length > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <div style={{ fontSize: 11, color: '#475569', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            Invite list
+                          </div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {INVITE_FILTER_OPTIONS.map((chip) => (
+                              <button
+                                key={chip.key}
+                                type="button"
+                                onClick={() => setInviteStatusFilter(chip.key)}
+                                style={{
+                                  padding: '4px 10px', borderRadius: 999, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                                  border: inviteStatusFilter === chip.key ? '1px solid #2563eb' : '1px solid #e2e8f0',
+                                  background: inviteStatusFilter === chip.key ? 'rgba(37,99,235,0.1)' : '#f8fafc',
+                                  color: inviteStatusFilter === chip.key ? '#2563eb' : '#64748b',
+                                }}
+                              >
+                                {chip.label} ({chip.count})
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         <input
                           value={inviteSearch}
                           onChange={(e) => setInviteSearch(e.target.value)}
                           placeholder="Search by name or email..."
-                          style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none' }}
+                          style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid #cbd5e1', fontSize: 12, outline: 'none', background: '#fff' }}
                         />
-                      )}
 
-                      {filteredInvites.length === 0 ? (
-                        <div style={{ padding: '18px 8px', textAlign: 'center', fontSize: 12, color: '#94a3b8' }}>
-                          {inviteSearch.trim() || inviteStatusFilter !== 'all'
-                            ? 'No judges match this filter.'
-                            : 'No invites yet.'}
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 340, overflowY: 'auto', paddingRight: 2 }}>
-                          {filteredInvites.map((invite) => {
-                            const statusStyle = INVITE_STATUS_STYLES[invite.status] || INVITE_STATUS_STYLES.pending;
-                            return (
-                              <div
-                                key={invite.id}
-                                style={{
-                                  display: 'flex', alignItems: 'center', gap: 10,
-                                  padding: '8px 12px', borderRadius: 10, background: '#ffffff',
-                                  border: '1px solid #e2e8f0', borderLeft: `3px solid ${statusStyle.fg}`,
-                                }}
-                              >
-                                <div style={{
-                                  width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
-                                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                  background: statusStyle.bg, color: statusStyle.fg, fontWeight: 800, fontSize: 13,
-                                }} aria-hidden="true">
-                                  {invite.judgeName.trim().charAt(0).toUpperCase() || '?'}
-                                </div>
-
-                                <div style={{ minWidth: 0, flex: 1 }}>
-                                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeName}>
-                                    {invite.judgeName}
+                        {filteredInvites.length === 0 ? (
+                          <div style={{ padding: '18px 8px', textAlign: 'center', fontSize: 12, color: '#94a3b8', borderRadius: 12, background: '#f8fafc', border: '1px dashed #cbd5e1' }}>
+                            {inviteSearch.trim() || inviteStatusFilter !== 'all'
+                              ? 'No judges match this filter.'
+                              : 'No invites yet.'}
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 340, overflowY: 'auto', paddingRight: 2 }}>
+                            {filteredInvites.map((invite) => {
+                              const statusStyle = INVITE_STATUS_STYLES[invite.status] || INVITE_STATUS_STYLES.pending;
+                              return (
+                                <div
+                                  key={invite.id}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', gap: 10,
+                                    padding: '10px 12px', borderRadius: 12, background: '#ffffff',
+                                    border: `1px solid ${statusStyle.border}`, borderLeft: `4px solid ${statusStyle.fg}`,
+                                    boxShadow: '0 2px 10px rgba(15, 23, 42, 0.03)',
+                                  }}
+                                >
+                                  <div style={{
+                                    width: 32, height: 32, borderRadius: '50%', flexShrink: 0,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    background: statusStyle.bg, color: statusStyle.fg, fontWeight: 800, fontSize: 13,
+                                    border: `1px solid ${statusStyle.border}`,
+                                  }} aria-hidden="true">
+                                    {invite.judgeName.trim().charAt(0).toUpperCase() || '?'}
                                   </div>
-                                  <div style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeEmail}>
-                                    {invite.judgeEmail}
+
+                                  <div style={{ minWidth: 0, flex: 1 }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeName}>
+                                      {invite.judgeName}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={invite.judgeEmail}>
+                                      {invite.judgeEmail}
+                                    </div>
+                                  </div>
+
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                                    <span style={{
+                                      fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
+                                      minWidth: 62, textAlign: 'center', whiteSpace: 'nowrap',
+                                      background: statusStyle.bg, color: statusStyle.fg, border: `1px solid ${statusStyle.border}`,
+                                      textTransform: 'capitalize',
+                                    }}>
+                                      {invite.status}
+                                    </span>
+                                    {invite.status !== 'revoked' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmingRevokeInvite(invite)}
+                                        disabled={revokingInviteId === invite.id}
+                                        title="Cancel this judge's access"
+                                        style={{
+                                          padding: '6px 12px', borderRadius: 999, border: '1px solid #fecaca', whiteSpace: 'nowrap',
+                                          background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 700,
+                                          cursor: revokingInviteId === invite.id ? 'not-allowed' : 'pointer',
+                                          opacity: revokingInviteId === invite.id ? 0.6 : 1,
+                                        }}
+                                      >
+                                        Cancel Access
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
-
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                                  <span style={{
-                                    fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 999,
-                                    minWidth: 62, textAlign: 'center', whiteSpace: 'nowrap',
-                                    background: statusStyle.bg, color: statusStyle.fg,
-                                  }}>
-                                    {invite.status}
-                                  </span>
-                                  {invite.status !== 'revoked' && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setConfirmingRevokeInvite(invite)}
-                                      disabled={revokingInviteId === invite.id}
-                                      title="Revoke this judge's access"
-                                      style={{
-                                        padding: '6px 12px', borderRadius: 999, border: '1px solid #fecaca', whiteSpace: 'nowrap',
-                                        background: '#fef2f2', color: '#dc2626', fontSize: 11, fontWeight: 700,
-                                        cursor: revokingInviteId === invite.id ? 'not-allowed' : 'pointer',
-                                        opacity: revokingInviteId === invite.id ? 0.6 : 1,
-                                      }}
-                                    >
-                                      Revoke
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -934,7 +1019,7 @@ export default function OrganizerEventDetail() {
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 14 }}>
                 {event.scorerAssignments.map((assignment) => {
-                  const url = `${window.location.origin}/scorer/session/${assignment.token}`;
+                  const url = buildAppUrl(`/scorer/session/${assignment.token}`);
                   return (
                     <div key={assignment.id} style={{ ...nestedPanel, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, position: 'relative' }}>
                       <button

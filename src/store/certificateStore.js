@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { buildAppUrl } from '../utils/appUrl';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 import useNotificationStore from './notificationStore';
 
@@ -241,7 +242,7 @@ const useCertificateStore = create(
           if (!existingCertificate) newlyIssued.push(recipient.id || recipient.name);
 
           const verificationCode = existingCertificate?.verificationCode || `FP-${String(event.id)}-${index + 1}`.toUpperCase();
-          const verificationUrl = `${window.location.origin}/certificates/${verificationCode}`;
+          const verificationUrl = buildAppUrl(`/certificates/${verificationCode}`);
 
           return normalizeCertificate({
             id: existingCertificate?.id || `cert-${event.id}-${index + 1}-${Date.now()}`,

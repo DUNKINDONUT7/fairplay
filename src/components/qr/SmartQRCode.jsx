@@ -1,10 +1,11 @@
 import React from 'react';
 import { QRCodeSVG } from 'qrcode.react';
+import { buildAppUrl } from '../../utils/appUrl';
 
 export default function SmartQRCode({ token, size = 200 }) {
-  // The scanner device will navigate to this absolute URL, 
+  // The scanner device will navigate to this absolute URL,
   // where the QRResolver acts as a secure traffic controller.
-  const qrUrl = `${window.location.origin}/scan/${token}`;
+  const qrUrl = buildAppUrl(`/scan/${token}`);
 
   return (
     <div style={{

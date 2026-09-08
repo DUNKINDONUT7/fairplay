@@ -1,12 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { getAppBaseUrl } from '../utils/appUrl';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 
 const SUPABASE_AUTH_ENABLED = isSupabaseConfigured;
-const APP_URL =
-  import.meta.env.VITE_SITE_URL ||
-  import.meta.env.VITE_APP_URL ||
-  (typeof window !== 'undefined' ? window.location.origin : '');
+const APP_URL = getAppBaseUrl();
 
 // Every account lives in Supabase Auth. There are no built-in local logins:
 // a login Supabase rejects is simply a failed login, and nothing client-side

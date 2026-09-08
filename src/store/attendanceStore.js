@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 
 function createAttendanceId() {
   // Wide random range — QR check-in is bursty by nature (a whole class
@@ -27,6 +27,29 @@ function normalizeAttendance(record) {
   };
 }
 
+let attendanceRealtimeBound = false;
+let attendanceRealtimeEventId = null;
+
+function ensureAttendanceRealtime(eventId) {
+  if (!isSupabaseConfigured || !supabase || attendanceRealtimeBound) {
+    attendanceRealtimeEventId = eventId;
+    return;
+  }
+
+  attendanceRealtimeEventId = eventId;
+  attendanceRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'attendance',
+    onChange: () => {
+      const state = useAttendanceStore.getState();
+      if (typeof state.fetchAttendance === 'function') {
+        state.fetchAttendance(attendanceRealtimeEventId, { silent: true });
+      }
+    },
+  });
+}
+
 const useAttendanceStore = create(
   persist(
     (set, get) => ({
@@ -34,8 +57,11 @@ const useAttendanceStore = create(
       loading: false,
       error: null,
 
-      fetchAttendance: async (eventId) => {
-        set({ loading: true, error: null });
+      fetchAttendance: async (eventId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           const rows = eventId
@@ -59,10 +85,13 @@ const useAttendanceStore = create(
             loading: false,
             error: null,
           });
+          ensureAttendanceRealtime(eventId);
           return attendance;
         } catch (error) {
           console.error('Error fetching attendance:', error.message);
-          set({ loading: false, error: error.message, attendance: [] });
+          if (!silent) {
+            set({ loading: false, error: error.message, attendance: [] });
+          }
           return [];
         }
       },

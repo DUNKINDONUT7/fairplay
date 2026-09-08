@@ -46,8 +46,12 @@ serve(async (req) => {
     .eq('id', authData.user.id)
     .maybeSingle();
 
-  if (profileError || callerProfile?.role !== 'admin') {
-    return jsonResponse({ error: 'Admin access required.' }, 403);
+  if (profileError || !callerProfile) {
+    return jsonResponse({ error: 'Caller profile could not be loaded.' }, 403);
+  }
+
+  if (callerProfile.role !== 'admin' && callerProfile.role !== 'organizer') {
+    return jsonResponse({ error: 'Admin or organizer access required.' }, 403);
   }
 
   const body = await req.json().catch(() => ({}));
@@ -58,6 +62,24 @@ serve(async (req) => {
   }
   if (userId === authData.user.id) {
     return jsonResponse({ error: 'You cannot delete your own account.' }, 400);
+  }
+
+  const { data: targetProfile, error: targetProfileError } = await supabase
+    .from('profiles')
+    .select('id, role, email')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (targetProfileError) {
+    return jsonResponse({ error: targetProfileError.message }, 500);
+  }
+
+  if (!targetProfile) {
+    return jsonResponse({ error: 'User not found.' }, 404);
+  }
+
+  if (callerProfile.role !== 'admin' && targetProfile.role !== 'judge') {
+    return jsonResponse({ error: 'Organizers can only remove judge accounts.' }, 403);
   }
 
   const { error: profileDeleteError } = await supabase.from('profiles').delete().eq('id', userId);

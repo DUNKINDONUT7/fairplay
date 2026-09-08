@@ -83,8 +83,18 @@ serve(async (req) => {
   const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || (gmailUser ? `FairPlay <${gmailUser}>` : '');
   const siteUrl = (Deno.env.get('SITE_URL') || Deno.env.get('APP_URL') || '').replace(/\/$/, '');
 
-  if (!supabaseUrl || !anonKey || !gmailUser || !gmailAppPassword) {
-    return jsonResponse({ error: 'Email service is not configured.' }, 500);
+  const missingSecrets = [
+    !supabaseUrl ? 'SUPABASE_URL' : null,
+    !anonKey ? 'SUPABASE_ANON_KEY' : null,
+    !gmailUser ? 'GMAIL_USER' : null,
+    !gmailAppPassword ? 'GMAIL_APP_PASSWORD' : null,
+  ].filter(Boolean);
+
+  if (missingSecrets.length > 0) {
+    return jsonResponse({
+      error: 'Email service is not configured. Missing Supabase Edge Function secrets: ' + missingSecrets.join(', '),
+      missingSecrets,
+    }, 500);
   }
 
   const authHeader = req.headers.get('Authorization') || '';
@@ -141,17 +151,34 @@ serve(async (req) => {
   }
 
   const token = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
-  const inviteId = Date.now();
+  const temporaryPassword = Array.from({ length: 10 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
 
-  const { error: insertError } = await callerClient.from('judge_invites').insert({
-    id: inviteId,
-    event_id: eventId,
-    event_title: eventTitle,
-    judge_email: judgeEmail,
-    judge_name: judgeName,
-    token,
-    status: 'pending',
-  });
+  let inviteId = Math.round(Date.now() * 1000 + Math.random() * 1000);
+  let insertError = null;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    inviteId = Math.round(Date.now() * 1000 + Math.random() * 1000);
+
+    const insertResult = await callerClient.from('judge_invites').insert({
+      id: inviteId,
+      event_id: eventId,
+      event_title: eventTitle,
+      judge_email: judgeEmail,
+      judge_name: judgeName,
+      token,
+      status: 'pending',
+    });
+
+    insertError = insertResult.error;
+
+    if (!insertError) {
+      break;
+    }
+
+    if (insertError.code !== '23505') {
+      break;
+    }
+  }
 
   if (insertError) {
     return jsonResponse({ error: insertError.message }, 500);
@@ -166,15 +193,71 @@ serve(async (req) => {
   const safeInviteUrl = escapeHtml(inviteUrl);
   const scheduleHtml = buildScheduleBlock(eventStartDate, eventStartTime, eventEndTime, eventLocation);
 
+  let authUserId: string | null = null;
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+
+  if (serviceRoleKey) {
+    const serviceRoleClient = createClient(supabaseUrl, serviceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    const { data: existingUsersData, error: listUsersError } = await serviceRoleClient.auth.admin.listUsers();
+
+    if (!listUsersError) {
+      const existingUser = existingUsersData?.users?.find((user) => user.email?.toLowerCase() === judgeEmail) || null;
+
+      if (existingUser) {
+        authUserId = existingUser.id;
+        await serviceRoleClient.auth.admin.updateUserById(existingUser.id, {
+          password: temporaryPassword,
+          user_metadata: { full_name: judgeName, role: 'judge' },
+        });
+
+        await serviceRoleClient
+          .from('profiles')
+          .upsert(
+            {
+              id: existingUser.id,
+              email: judgeEmail,
+              full_name: judgeName,
+              role: 'judge',
+              status: 'active',
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'id' }
+          );
+      } else {
+        const { data: createdUserData, error: createUserError } = await serviceRoleClient.auth.admin.createUser({
+          email: judgeEmail,
+          password: temporaryPassword,
+          email_confirm: true,
+          user_metadata: { full_name: judgeName, role: 'judge' },
+        });
+
+        if (createUserError) {
+          console.warn('Judge auth user create failed:', createUserError.message);
+        } else {
+          authUserId = createdUserData?.user?.id || null;
+        }
+      }
+    } else {
+      console.warn('Judge auth user lookup failed:', listUsersError.message);
+    }
+  }
+
   const emailHtml = `
         <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
           <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
             <h1 style="margin:0 0 12px;color:#2563eb;font-size:26px">Judge invitation</h1>
             <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
-            <p style="font-size:15px;line-height:1.6">You've been invited to judge <strong>${safeEventTitle}</strong> on FairPlay. Use the link below to access your personal scoring session — no account setup needed.</p>${scheduleHtml}
-            <a href="${safeInviteUrl}" style="display:inline-block;margin-top:14px;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Open my scoring link</a>
+            <p style="font-size:15px;line-height:1.6">You've been invited to judge <strong>${safeEventTitle}</strong> on FairPlay. Use the secure access link below to open your scoring session.</p>${scheduleHtml}
+            <div style="margin-top:16px;padding:14px 16px;border-radius:12px;background:#f8fafc;border:1px solid #dbeafe;font-size:14px;line-height:1.8;color:#0f172a">
+              <div><strong>Login Email:</strong> ${escapeHtml(judgeEmail)}</div>
+              <div><strong>Temporary Password:</strong> ${escapeHtml(temporaryPassword)}</div>
+            </div>
+            <a href="${safeInviteUrl}" style="display:inline-block;margin-top:16px;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Open my scoring link</a>
             <p style="margin-top:22px;color:#64748b;font-size:13px">If the button does not work, open this link: ${safeInviteUrl}</p>
-            <p style="margin-top:8px;color:#94a3b8;font-size:12px">This link is unique to you — please don't share it.</p>
+            <p style="margin-top:8px;color:#94a3b8;font-size:12px">This link is unique to you, and the organizer can cancel access any time if attendance changes. The QR code remains as an emergency fallback only.</p>
           </div>
         </div>
       `;
@@ -185,6 +268,8 @@ serve(async (req) => {
   // cloud blocks 25/465/587 outbound; Supabase's edge-runtime, a separate,
   // self-hosted project, does not — worth re-confirming if this ever moves
   // off Supabase).
+  let emailSent = false;
+
   try {
     const client = new SMTPClient({
       connection: {
@@ -198,17 +283,28 @@ serve(async (req) => {
       },
     });
 
-    await client.send({
-      from: fromEmail,
-      to: judgeEmail,
-      subject: `You've been invited to judge ${eventTitle}`,
-      html: emailHtml,
-    });
-
-    await client.close();
+    try {
+      await client.send({
+        from: fromEmail,
+        to: judgeEmail,
+        subject: `You've been invited to judge ${eventTitle}`,
+        html: emailHtml,
+      });
+      emailSent = true;
+    } finally {
+      try {
+        await client.close();
+      } catch (closeError) {
+        console.warn('SMTP close warning after send:', closeError instanceof Error ? closeError.message : closeError);
+      }
+    }
   } catch (err) {
     return jsonResponse({ error: err instanceof Error ? err.message : 'Unable to send invite email.' }, 502);
   }
 
-  return jsonResponse({ sent: true, token, inviteId });
+  if (!emailSent) {
+    return jsonResponse({ error: 'Invite email was not sent.' }, 502);
+  }
+
+  return jsonResponse({ sent: true, token, inviteId, emailSent: true });
 });

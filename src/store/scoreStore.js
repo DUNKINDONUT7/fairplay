@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import useEventStore from './eventStore';
 import useNotificationStore from './notificationStore';
 import useAudienceScoreStore from './audienceScoreStore';
@@ -46,6 +46,29 @@ function findScoreEvent(eventId) {
     null;
 }
 
+let scoresRealtimeBound = false;
+let scoresRealtimeEventId = null;
+
+function ensureScoresRealtime(eventId) {
+  if (!isSupabaseConfigured || !supabase || scoresRealtimeBound) {
+    scoresRealtimeEventId = eventId;
+    return;
+  }
+
+  scoresRealtimeEventId = eventId;
+  scoresRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'scores',
+    onChange: () => {
+      const state = useScoreStore.getState();
+      if (typeof state.fetchScores === 'function') {
+        state.fetchScores(scoresRealtimeEventId, { silent: true });
+      }
+    },
+  });
+}
+
 const useScoreStore = create(
   persist(
     (set, get) => ({
@@ -54,8 +77,11 @@ const useScoreStore = create(
       loading: false,
       error: null,
 
-      fetchScores: async (eventId) => {
-        set({ loading: true, error: null });
+      fetchScores: async (eventId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           set({ loading: false });
@@ -82,12 +108,15 @@ const useScoreStore = create(
           } else {
             set({ loading: false, error: null });
           }
+          ensureScoresRealtime(eventId);
 
           return eventId ? get().getScoresForEvent(eventId) : Object.values(get().scores);
         } catch (error) {
           console.error('Error fetching scores:', error.message);
           // Keep local scores intact on fetch failure
-          set({ loading: false, error: error.message });
+          if (!silent) {
+            set({ loading: false, error: error.message });
+          }
           return eventId ? get().getScoresForEvent(eventId) : Object.values(get().scores);
         }
       },

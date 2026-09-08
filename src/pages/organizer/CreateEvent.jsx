@@ -23,6 +23,7 @@ import {
   getParticipantLimitMessage,
   getTeamLimitPreset,
 } from '../../utils/teamEventRules';
+import { buildAppUrl } from '../../utils/appUrl';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -364,7 +365,7 @@ export default function CreateEvent() {
   }, [criteriaDraft.criteria]);
 
   const judgeQRValue = useMemo(
-    () => `${window.location.origin}${judgeAssets.accessLink}`,
+    () => buildAppUrl(judgeAssets.accessLink),
     [judgeAssets.accessLink]
   );
   const teamLimitPreview = useMemo(
@@ -1853,7 +1854,7 @@ export default function CreateEvent() {
                     <div style={{ marginTop: 16 }}>
                       <Field label={competitionMode === 'tournament' ? 'Scorer access link' : 'Judge access link'}>
                         <div style={copyFieldStyle}>
-                          <span style={{ overflowWrap: 'anywhere', color: '#0f172a' }}>{`${window.location.origin}${judgeAssets.accessLink}`}</span>
+                          <span style={{ overflowWrap: 'anywhere', color: '#0f172a' }}>{buildAppUrl(judgeAssets.accessLink)}</span>
                         </div>
                       </Field>
                     </div>
@@ -1862,7 +1863,7 @@ export default function CreateEvent() {
                         <i className="bi bi-copy" />
                         <span>Copy code</span>
                       </button>
-                      <button onClick={() => handleCopy(`${window.location.origin}${judgeAssets.accessLink}`, 'Access link')} style={secondaryButtonStyle}>
+                      <button onClick={() => handleCopy(buildAppUrl(judgeAssets.accessLink), 'Access link')} style={secondaryButtonStyle}>
                         <i className="bi bi-link-45deg" />
                         <span>Copy link</span>
                       </button>

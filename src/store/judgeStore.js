@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { getBusinessActorId, getActorIdentityKeys, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import useEventStore from './eventStore';
@@ -28,6 +28,49 @@ function normalizeAssignment(assignment) {
   };
 }
 
+let judgesRealtimeBound = false;
+let judgesRealtimeEventId = null;
+
+function ensureJudgesRealtime(eventId) {
+  if (!isSupabaseConfigured || !supabase || judgesRealtimeBound) {
+    judgesRealtimeEventId = eventId;
+    return;
+  }
+
+  judgesRealtimeEventId = eventId;
+  judgesRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'judges',
+    onChange: () => {
+      const state = useJudgeStore.getState();
+      if (typeof state.fetchJudges === 'function') {
+        state.fetchJudges({ silent: true });
+      }
+    },
+  });
+
+  subscribeToTable({
+    table: 'judge_assignments',
+    onChange: () => {
+      const state = useJudgeStore.getState();
+      if (typeof state.fetchJudges === 'function') {
+        state.fetchJudges({ silent: true });
+      }
+    },
+  });
+
+  subscribeToTable({
+    table: 'judge_invites',
+    onChange: () => {
+      const state = useJudgeStore.getState();
+      if (typeof state.fetchJudges === 'function') {
+        state.fetchJudges({ silent: true });
+      }
+    },
+  });
+}
+
 const useJudgeStore = create(
   persist(
     (set, get) => ({
@@ -37,8 +80,11 @@ const useJudgeStore = create(
       loading: false,
       error: null,
 
-      fetchJudges: async () => {
-        set({ loading: true, error: null });
+      fetchJudges: async (options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           set({ loading: false });
@@ -57,10 +103,13 @@ const useJudgeStore = create(
           const judges = (judgesResponse.data || []).map(normalizeJudge);
           const assignments = (assignmentsResponse.data || []).map(normalizeAssignment);
           set({ judges, assignments, loading: false, error: null });
+          ensureJudgesRealtime();
           return judges;
         } catch (error) {
           console.error('Error fetching judges:', error.message);
-          set({ loading: false, error: error.message, judges: [], assignments: [] });
+          if (!silent) {
+            set({ loading: false, error: error.message, judges: [], assignments: [] });
+          }
           return [];
         }
       },
@@ -258,22 +307,31 @@ const useJudgeStore = create(
 
         const event = useEventStore.getState().getEventById(eventId);
 
-        const { data, error } = await supabase.functions.invoke('notify-judge-invite', {
-          body: {
-            eventId,
-            eventTitle,
-            judgeName: name,
-            judgeEmail: email,
-            eventStartDate: event?.startDate || null,
-            eventStartTime: event?.startTime || null,
-            eventEndTime: event?.endTime || null,
-            eventLocation: event?.location || null,
-          },
-        });
+        let data;
+        let error;
+
+        try {
+          ({ data, error } = await supabase.functions.invoke('notify-judge-invite', {
+            body: {
+              eventId,
+              eventTitle,
+              judgeName: name,
+              judgeEmail: email,
+              eventStartDate: event?.startDate || null,
+              eventStartTime: event?.startTime || null,
+              eventEndTime: event?.endTime || null,
+              eventLocation: event?.location || null,
+            },
+          }));
+        } catch (invokeError) {
+          console.error('Judge invite function invocation failed:', invokeError);
+          const bodyFromResponse = await invokeError?.context?.json?.().catch(() => null);
+          throw new Error(bodyFromResponse?.error || invokeError?.message || 'Unable to reach the judge invite email function.');
+        }
 
         if (error) {
           const bodyFromResponse = await error.context?.json?.().catch(() => null);
-          throw new Error(bodyFromResponse?.error || data?.error || error.message);
+          throw new Error(bodyFromResponse?.error || data?.error || error.message || 'Unable to send judge invite email.');
         }
         if (data?.error) throw new Error(data.error);
 
@@ -287,11 +345,59 @@ const useJudgeStore = create(
           throw new Error('Judge invites require FairPlay to be connected to Supabase.');
         }
 
+        const { data: inviteData, error: inviteLookupError } = await supabase
+          .from('judge_invites')
+          .select('judge_email')
+          .eq('id', inviteId)
+          .maybeSingle();
+
+        if (inviteLookupError) throw new Error(inviteLookupError.message);
+
+        const judgeEmail = String(inviteData?.judge_email || '').trim().toLowerCase();
+
+        if (judgeEmail) {
+          const { data: profileData, error: profileLookupError } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('email', judgeEmail)
+            .maybeSingle();
+
+          if (profileLookupError) throw new Error(profileLookupError.message);
+
+          if (profileData?.id) {
+            try {
+              const { data: deletionData, error: deleteError } = await supabase.functions.invoke('delete-user', {
+                body: { userId: profileData.id },
+              });
+
+              if (deleteError) throw deleteError;
+              if (deletionData?.error) throw new Error(deletionData.error);
+            } catch (deleteUserError) {
+              console.warn('Unable to delete judge auth account during revoke:', deleteUserError);
+            }
+          }
+        }
+
         const { error } = await supabase.rpc('revoke_judge_invite', { p_invite_id: inviteId });
         if (error) throw new Error(error.message);
 
         await get().fetchInvites(eventId);
         await get().fetchJudges();
+        return true;
+      },
+
+      deleteInvite: async (inviteId, eventId) => {
+        if (!isSupabaseConfigured || !supabase) {
+          throw new Error('Judge invites require FairPlay to be connected to Supabase.');
+        }
+
+        const { error } = await supabase.rpc('delete_judge_invite', { p_invite_id: inviteId });
+        if (error) throw new Error(error.message);
+
+        set((state) => ({
+          invites: state.invites.filter((invite) => String(invite.id) !== String(inviteId)),
+        }));
+        await get().fetchInvites(eventId);
         return true;
       },
 

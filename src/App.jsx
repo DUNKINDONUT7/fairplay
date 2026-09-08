@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
-import { Component, Suspense, lazy, useEffect } from 'react';
+import { Component, Suspense, lazy, useEffect, useState } from 'react';
 import useAuthStore from './store/authStore';
 import ToastContainer from './components/ui/Toast';
 import GlobalAuthModal from './components/auth/GlobalAuthModal';
@@ -240,6 +240,108 @@ function AppErrorFallback({ onRetry }) {
   );
 }
 
+function useIsMobileViewport() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth < 1024;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
+    const update = () => setIsMobile(mediaQuery.matches);
+
+    update();
+
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', update);
+      return () => mediaQuery.removeEventListener('change', update);
+    }
+
+    mediaQuery.addListener(update);
+    return () => mediaQuery.removeListener(update);
+  }, []);
+
+  return isMobile;
+}
+
+function MobileAccessBlocked({ message }) {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        background: 'linear-gradient(135deg, #eff6ff, #f0f9ff)',
+        color: '#0f172a',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 24,
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 520,
+          background: '#ffffff',
+          border: '1px solid #bfdbfe',
+          borderRadius: 24,
+          padding: 32,
+          textAlign: 'center',
+          boxShadow: '0 20px 60px rgba(37,99,235,0.12)',
+        }}
+      >
+        <div
+          style={{
+            width: 72,
+            height: 72,
+            borderRadius: 22,
+            background: 'linear-gradient(135deg,#2563eb,#0ea5e9)',
+            color: '#fff',
+            display: 'grid',
+            placeItems: 'center',
+            margin: '0 auto 18px',
+            fontSize: 28,
+          }}
+        >
+          <i className="bi bi-shield-lock" />
+        </div>
+        <h1 style={{ margin: '0 0 10px', fontSize: 24, fontWeight: 900 }}>Mobile App Access Restricted</h1>
+        <p style={{ margin: '0 0 20px', color: '#64748b', fontSize: 14, lineHeight: 1.7 }}>
+          {message || 'This area is not available in the mobile app. Admin and organizer tools are intentionally excluded for security and usability.'}
+        </p>
+        <Link
+          to="/"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            padding: '12px 18px',
+            borderRadius: 14,
+            background: 'linear-gradient(135deg,#1d4ed8,#0ea5e9)',
+            color: '#fff',
+            fontWeight: 800,
+            textDecoration: 'none',
+          }}
+        >
+          <i className="bi bi-house" />
+          Go to FairPlay
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function MobileRestrictedRoute({ children, message }) {
+  const isMobile = useIsMobileViewport();
+
+  if (isMobile) {
+    return <MobileAccessBlocked message={message} />;
+  }
+
+  return children;
+}
+
 function AppNotFound() {
   return (
     <div
@@ -339,39 +441,39 @@ export default function App() {
           <Route path="/scan/:token" element={<QRResolver />} />
 
           {/* Admin Routes */}
-          <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
-          <Route path="/admin/analytics" element={<ProtectedRoute role="admin"><AdminAnalytics /></ProtectedRoute>} />
-          <Route path="/admin/users" element={<ProtectedRoute role="admin"><AdminUsers /></ProtectedRoute>} />
-          <Route path="/admin/roles" element={<ProtectedRoute roles={APPROVAL_ROLES}><AdminRoles /></ProtectedRoute>} />
-          <Route path="/admin/audit" element={<ProtectedRoute role="admin"><AdminAudit /></ProtectedRoute>} />
-          <Route path="/admin/ai-monitor" element={<ProtectedRoute role="admin"><AdminAIMonitor /></ProtectedRoute>} />
-          <Route path="/admin/reports" element={<ProtectedRoute role="admin"><AdminReports /></ProtectedRoute>} />
-          <Route path="/admin/settings" element={<ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute>} />
-          <Route path="/admin/backup" element={<ProtectedRoute role="admin"><AdminBackup /></ProtectedRoute>} />
-          <Route path="/admin/profile" element={<ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute>} />
+          <Route path="/admin" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/analytics" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminAnalytics /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/users" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminUsers /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/roles" element={<MobileRestrictedRoute><ProtectedRoute roles={APPROVAL_ROLES}><AdminRoles /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/audit" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminAudit /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/ai-monitor" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminAIMonitor /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/reports" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminReports /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/settings" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/backup" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminBackup /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/admin/profile" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute></MobileRestrictedRoute>} />
 
           {/* Approval Routes */}
-          <Route path="/approvals" element={<ProtectedRoute roles={APPROVAL_ROLES}><AdminRoles /></ProtectedRoute>} />
-          <Route path="/institute-coordinator" element={<ProtectedRoute role="institute-coordinator"><AdminRoles /></ProtectedRoute>} />
-          <Route path="/sports-head" element={<ProtectedRoute role="sports-head"><AdminRoles /></ProtectedRoute>} />
-          <Route path="/osds" element={<ProtectedRoute role="osds"><AdminRoles /></ProtectedRoute>} />
+          <Route path="/approvals" element={<MobileRestrictedRoute><ProtectedRoute roles={APPROVAL_ROLES}><AdminRoles /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/institute-coordinator" element={<MobileRestrictedRoute><ProtectedRoute role="institute-coordinator"><AdminRoles /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/sports-head" element={<MobileRestrictedRoute><ProtectedRoute role="sports-head"><AdminRoles /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/osds" element={<MobileRestrictedRoute><ProtectedRoute role="osds"><AdminRoles /></ProtectedRoute></MobileRestrictedRoute>} />
 
           {/* Organizer Routes */}
-          <Route path="/organizer" element={<ProtectedRoute role="organizer"><OrganizerDashboard /></ProtectedRoute>} />
-          <Route path="/organizer/create-event" element={<ProtectedRoute role="organizer"><CreateEvent /></ProtectedRoute>} />
-          <Route path="/organizer/events" element={<ProtectedRoute role="organizer"><OrganizerEvents /></ProtectedRoute>} />
-          <Route path="/organizer/contestants" element={<ProtectedRoute role="organizer"><OrganizerContestants /></ProtectedRoute>} />
-          <Route path="/organizer/judges" element={<ProtectedRoute role="organizer"><OrganizerJudges /></ProtectedRoute>} />
-          <Route path="/organizer/schedule" element={<ProtectedRoute role="organizer"><OrganizerSchedule /></ProtectedRoute>} />
-          <Route path="/organizer/venues" element={<ProtectedRoute role="organizer"><OrganizerVenues /></ProtectedRoute>} />
-          <Route path="/organizer/reports" element={<ProtectedRoute role="organizer"><OrganizerReports /></ProtectedRoute>} />
-          <Route path="/organizer/settings" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />
-          <Route path="/organizer/brackets" element={<ProtectedRoute role="organizer"><OrganizerBracket /></ProtectedRoute>} />
-          <Route path="/organizer/scoring" element={<ProtectedRoute role="organizer"><OrganizerScoring /></ProtectedRoute>} />
-          <Route path="/organizer/events/:id" element={<ProtectedRoute role="organizer"><OrganizerEventDetail /></ProtectedRoute>} />
-          <Route path="/organizer/verify/:token" element={<ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute>} />
-          <Route path="/organizer/certificates" element={<ProtectedRoute role="organizer"><OrganizerCertificates /></ProtectedRoute>} />
-          <Route path="/organizer/profile" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />
+          <Route path="/organizer" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerDashboard /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/create-event" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><CreateEvent /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/events" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerEvents /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/contestants" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerContestants /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/judges" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerJudges /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/schedule" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerSchedule /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/venues" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerVenues /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/reports" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerReports /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/settings" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/brackets" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerBracket /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/scoring" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerScoring /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/events/:id" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerEventDetail /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/verify/:token" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/certificates" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerCertificates /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/profile" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute></MobileRestrictedRoute>} />
 
           {/* Judge Routes */}
           <Route path="/judge" element={<ProtectedRoute role="judge"><JudgeDashboard /></ProtectedRoute>} />
