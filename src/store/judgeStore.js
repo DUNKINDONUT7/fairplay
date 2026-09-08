@@ -362,11 +362,17 @@ const useJudgeStore = create(
       name: 'fairplay_judges',
       merge: (persistedState, currentState) => {
         if (isSupabaseConfigured) {
+          // judges/assignments were already excluded from a stale
+          // localStorage snapshot overriding a fresh fetchJudges() — invites
+          // needs the exact same protection, or a page load briefly (and on
+          // a slow connection, not-so-briefly) shows whatever invite list
+          // was cached from a previous visit until fetchInvites() catches up.
           return {
             ...currentState,
             ...(persistedState || {}),
             judges: currentState.judges,
             assignments: currentState.assignments,
+            invites: currentState.invites,
           };
         }
 
