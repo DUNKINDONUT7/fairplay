@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -72,11 +73,17 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
-  const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
-  const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || 'FairPlay <onboarding@resend.dev>';
+  // Sending via the organizer's own Gmail account over SMTP — no sender
+  // domain to verify, unlike Resend/SendGrid-style transactional APIs.
+  // GMAIL_USER must have 2-Step Verification on, with GMAIL_APP_PASSWORD
+  // being a 16-character App Password (myaccount.google.com/apppasswords),
+  // not the account's real login password.
+  const gmailUser = Deno.env.get('GMAIL_USER') || '';
+  const gmailAppPassword = Deno.env.get('GMAIL_APP_PASSWORD') || '';
+  const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || (gmailUser ? `FairPlay <${gmailUser}>` : '');
   const siteUrl = (Deno.env.get('SITE_URL') || Deno.env.get('APP_URL') || '').replace(/\/$/, '');
 
-  if (!supabaseUrl || !anonKey || !resendApiKey) {
+  if (!supabaseUrl || !anonKey || !gmailUser || !gmailAppPassword) {
     return jsonResponse({ error: 'Email service is not configured.' }, 500);
   }
 
@@ -159,17 +166,7 @@ serve(async (req) => {
   const safeInviteUrl = escapeHtml(inviteUrl);
   const scheduleHtml = buildScheduleBlock(eventStartDate, eventStartTime, eventEndTime, eventLocation);
 
-  const emailResponse = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [judgeEmail],
-      subject: `You've been invited to judge ${eventTitle}`,
-      html: `
+  const emailHtml = `
         <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
           <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
             <h1 style="margin:0 0 12px;color:#2563eb;font-size:26px">Judge invitation</h1>
@@ -180,13 +177,37 @@ serve(async (req) => {
             <p style="margin-top:8px;color:#94a3b8;font-size:12px">This link is unique to you — please don't share it.</p>
           </div>
         </div>
-      `,
-    }),
-  });
+      `;
 
-  const result = await emailResponse.json().catch(() => ({}));
-  if (!emailResponse.ok) {
-    return jsonResponse({ error: result?.message || 'Unable to send invite email.' }, 502);
+  // Port 465 with implicit TLS — a single encrypted connection from the
+  // start, no STARTTLS negotiation step. Confirmed reachable from this
+  // runtime with a live probe before wiring this in (Deno Deploy's own
+  // cloud blocks 25/465/587 outbound; Supabase's edge-runtime, a separate,
+  // self-hosted project, does not — worth re-confirming if this ever moves
+  // off Supabase).
+  try {
+    const client = new SMTPClient({
+      connection: {
+        hostname: 'smtp.gmail.com',
+        port: 465,
+        tls: true,
+        auth: {
+          username: gmailUser,
+          password: gmailAppPassword,
+        },
+      },
+    });
+
+    await client.send({
+      from: fromEmail,
+      to: judgeEmail,
+      subject: `You've been invited to judge ${eventTitle}`,
+      html: emailHtml,
+    });
+
+    await client.close();
+  } catch (err) {
+    return jsonResponse({ error: err instanceof Error ? err.message : 'Unable to send invite email.' }, 502);
   }
 
   return jsonResponse({ sent: true, token, inviteId });
