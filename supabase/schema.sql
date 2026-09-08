@@ -860,9 +860,15 @@ grant execute on function public.claim_judge_invite(text) to anon, authenticated
 -- judge_assignments row is flagged too, so JudgeLiveScoring/JudgeSessionGate
 -- and the scores RLS below can reject that judge going forward).
 --
--- Sending a brand-new invite (a new token/row) is the intended "undo": on
--- claim it resets the assignment to 'active' via the existing on-conflict
--- clause above, so this function does not need its own un-revoke path.
+-- Flags every invite row for this judge+event, not just the one clicked.
+-- A judge with more than one invite to the same event (a duplicate send, a
+-- resend before this feature existed, leftover test data) would otherwise
+-- still have an untouched, claimable invite sitting there — claiming it
+-- runs the same on-conflict-do-update in claim_judge_invite and silently
+-- resurrects the assignment we just revoked. Sending a genuinely brand-new
+-- invite is still the intended "undo": it does not exist yet at revoke
+-- time, so this update cannot touch it, and claiming it later still resets
+-- the assignment via the existing on-conflict clause above.
 -- ----------------------------------------------------------------------------
 
 alter table public.judge_invites add column if not exists revoked_at timestamptz;
@@ -888,9 +894,13 @@ begin
     raise exception 'Invite not found.';
   end if;
 
+  -- Every invite for this exact judge_email + event, not just p_invite_id —
+  -- see the comment above the function for why a single-row update leaves a
+  -- resurrection path open.
   update public.judge_invites
   set status = 'revoked', revoked_at = timezone('utc', now()), revoked_by = auth.uid()::text
-  where id = p_invite_id;
+  where event_id = v_invite.event_id
+    and lower(trim(judge_email)) = lower(trim(v_invite.judge_email));
 
   select judges.id into v_judge_id
   from public.judges
@@ -913,6 +923,35 @@ $$;
 
 revoke all on function public.revoke_judge_invite(bigint) from public, anon;
 grant execute on function public.revoke_judge_invite(bigint) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Delete a judge invite record outright — for clearing out duplicates,
+-- typos, and test entries so the list stays legible, distinct from revoke
+-- (which keeps a record that access was cut off). Only removes the invite
+-- row itself; the judge/assignment/scores it may have produced are left
+-- alone, since those can be shared with other invites for the same
+-- judge+event and deleting them here would be a much bigger, unrelated
+-- blast radius than "tidy up this one row".
+-- ----------------------------------------------------------------------------
+
+create or replace function public.delete_judge_invite(p_invite_id bigint)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_staff_user() then
+    raise exception 'Organizer or admin access required.';
+  end if;
+
+  delete from public.judge_invites where id = p_invite_id;
+  return found;
+end;
+$$;
+
+revoke all on function public.delete_judge_invite(bigint) from public, anon;
+grant execute on function public.delete_judge_invite(bigint) to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- Score immutability: once a score is locked, nothing can change or delete
