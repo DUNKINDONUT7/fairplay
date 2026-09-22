@@ -37,70 +37,99 @@ export default function PublicEventNav({
   ];
 
   return (
-    <header
-      style={{
-        height: 70,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '0 24px',
-        gap: 16,
-        flexWrap: 'wrap',
-        position: fixed ? 'fixed' : 'sticky',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 100,
-        ...t.header,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 24, minWidth: 0 }}>
+    <>
+      {/* A real media query, not JS/flex-shrink math — on narrow screens the
+          breadcrumb (event title) is dropped entirely so it can never compete
+          with the nav for space. The nav itself never wraps; it scrolls
+          horizontally instead, so the header's height never grows and
+          overlaps the page content beneath it. */}
+      <style>{`
+        .fp-public-nav-breadcrumb { display: flex; }
+        @media (max-width: 640px) {
+          .fp-public-nav-breadcrumb { display: none; }
+          .fp-public-nav-links { justify-content: flex-start !important; }
+        }
+      `}</style>
+      <header
+        style={{
+          height: 70,
+          minHeight: 70,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 16px',
+          gap: 12,
+          position: fixed ? 'fixed' : 'sticky',
+          top: 0,
+          left: 0,
+          right: 0,
+          zIndex: 100,
+          ...t.header,
+        }}
+      >
         <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', flexShrink: 0 }}>
-          <span style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#2563eb,#0ea5e9)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 900 }}>F</span>
+          <span style={{ width: 34, height: 34, borderRadius: 10, background: 'linear-gradient(135deg,#2563eb,#0ea5e9)', color: '#fff', display: 'grid', placeItems: 'center', fontWeight: 900, flexShrink: 0 }}>F</span>
           <span style={{ fontSize: 18, fontWeight: 900, color: t.brandText }}>FairPlay</span>
         </Link>
 
         {eventTitle && (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, color: t.brandText, opacity: 0.55, fontSize: 13, fontWeight: 700 }}>
-            <i className="bi bi-chevron-right" style={{ fontSize: 11 }} />
+          <span
+            className="fp-public-nav-breadcrumb"
+            style={{ alignItems: 'center', gap: 8, minWidth: 0, flexShrink: 1, color: t.brandText, opacity: 0.55, fontSize: 13, fontWeight: 700 }}
+          >
+            <i className="bi bi-chevron-right" style={{ fontSize: 11, flexShrink: 0 }} />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220 }}>{eventTitle}</span>
           </span>
         )}
-      </div>
 
-      <nav style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        {tabs.map((tab) => (
-          <Link
-            key={tab.key}
-            to={tab.to}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '9px 14px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none',
-              ...(activeTab === tab.key ? t.tabActive : t.tabInactive),
-            }}
-          >
-            <i className={`bi ${tab.icon}`} />
-            {tab.label}
+        <nav
+          className="fp-public-nav-links"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'nowrap',
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            scrollbarWidth: 'none',
+            minWidth: 0,
+            flex: '1 1 auto',
+            justifyContent: 'flex-end',
+          }}
+        >
+          {tabs.map((tab) => (
+            <Link
+              key={tab.key}
+              to={tab.to}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+                padding: '9px 14px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none',
+                ...(activeTab === tab.key ? t.tabActive : t.tabInactive),
+              }}
+            >
+              <i className={`bi ${tab.icon}`} />
+              {tab.label}
+            </Link>
+          ))}
+
+          <Link to="/#features" style={{ flexShrink: 0, padding: '9px 14px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.tabInactive }}>
+            <i className="bi bi-collection" /> All Events
           </Link>
-        ))}
 
-        <Link to="/#features" style={{ padding: '9px 14px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.tabInactive }}>
-          <i className="bi bi-collection" /> All Events
-        </Link>
+          {showRegister && (
+            <Link
+              to={`/participant/register?eventId=${eventId}`}
+              style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 900, fontSize: 13, textDecoration: 'none', ...t.register }}
+            >
+              <i className="bi bi-person-plus" /> Register
+            </Link>
+          )}
 
-        {showRegister && (
-          <Link
-            to={`/participant/register?eventId=${eventId}`}
-            style={{ padding: '9px 16px', borderRadius: 10, fontWeight: 900, fontSize: 13, textDecoration: 'none', ...t.register }}
-          >
-            <i className="bi bi-person-plus" /> Register
+          <Link to="/?modal=login" style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.signIn }}>
+            Sign In
           </Link>
-        )}
-
-        <Link to="/?modal=login" style={{ padding: '9px 16px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.signIn }}>
-          Sign In
-        </Link>
-      </nav>
-    </header>
+        </nav>
+      </header>
+    </>
   );
 }
