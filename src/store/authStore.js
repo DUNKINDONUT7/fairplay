@@ -282,8 +282,18 @@ const useAuthStore = create(
         set({ loading: true, authMode: 'supabase', sessionSource: 'supabase' });
 
         try {
+          // getSession() serializes through the browser's Web Locks API. A
+          // stale lock left behind by a tab that was hard-reloaded mid-
+          // request (e.g. a fresh deploy reloading an open tab) can make it
+          // hang forever — it never resolves *or* rejects, so the try/catch
+          // below can't save us. Bound it so a stuck lock can't leave the
+          // whole app (and the login modal, gated on this same loading
+          // flag) permanently stuck loading.
           const [{ data: sessionData }, profiles] = await Promise.all([
-            supabase.auth.getSession(),
+            Promise.race([
+              supabase.auth.getSession(),
+              new Promise((resolve) => setTimeout(() => resolve({ data: { session: null } }), 8000)),
+            ]),
             fetchProfilesList().catch(() => []),
           ]);
 
