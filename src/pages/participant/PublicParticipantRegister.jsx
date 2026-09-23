@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useRegistrationStore from '../../store/registrationStore';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
@@ -46,6 +47,7 @@ export default function PublicParticipantRegister() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('eventId');
+  const { user } = useAuthStore();
   const { fetchEvents } = useEventStore();
   const { submitPublicRegistration } = useRegistrationStore();
 
@@ -74,6 +76,17 @@ export default function PublicParticipantRegister() {
 
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Pre-fill from the signed-in participant account so the submitted email
+  // matches what ParticipantDashboard/Schedule/Scores match registrations
+  // against (by email) — a freely-typed email that differs even slightly
+  // from the account's login email otherwise leaves an otherwise-successful
+  // registration invisible everywhere that looks up "my" events.
+  useEffect(() => {
+    if (!user) return;
+    if (!name && user.name) setName(user.name);
+    if (!email && user.email) setEmail(user.email);
+  }, [user]);
   const [registered, setRegistered] = useState(null);
 
   useEffect(() => {

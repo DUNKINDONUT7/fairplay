@@ -21,6 +21,22 @@ function eventTypeIcon(type) {
   return TYPE_ICON[String(type).toLowerCase()] || 'bi-trophy-fill';
 }
 
+// Email is the primary match (and now pre-filled from the account at
+// registration time), but a registration submitted before that fix — or
+// typed with a slightly different email — would otherwise be invisible
+// here forever despite having gone through fine. Falling back to an exact
+// name match rescues those without requiring anyone to re-register.
+function isMyRegistration(registration, user) {
+  if (!user) return false;
+  const email = String(registration.email || '').trim().toLowerCase();
+  const userEmail = String(user.email || '').trim().toLowerCase();
+  if (email && userEmail && email === userEmail) return true;
+
+  const participantName = String(registration.participantName || '').trim().toLowerCase();
+  const userName = String(user.name || '').trim().toLowerCase();
+  return Boolean(participantName && userName && participantName === userName);
+}
+
 function statusMeta(event) {
   const status = String(event?.status || '').toLowerCase();
   if (status === 'completed') return { label: 'Completed', color: '#64748b', background: '#f1f5f9' };
@@ -39,10 +55,10 @@ export default function ParticipantSchedule() {
   }, [fetchEvents, fetchRegistrations]);
 
   const schedule = useMemo(() => {
-    if (!user?.email) return [];
+    if (!user) return [];
     const myEventIds = new Set(
       registrations
-        .filter((registration) => (registration.email || '').toLowerCase() === user.email.toLowerCase())
+        .filter((registration) => isMyRegistration(registration, user))
         .map((registration) => String(registration.eventId))
     );
 

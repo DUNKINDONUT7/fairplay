@@ -22,6 +22,22 @@ function eventTypeIcon(type) {
   return EVENT_TYPE_ICON[type] || 'bi-trophy-fill';
 }
 
+// Email is the primary match (now pre-filled from the account at
+// registration time), but falls back to an exact name match so a
+// registration submitted before that fix, or with a slightly different
+// typed email, still shows up here instead of looking like it never went
+// through.
+function isMyRegistration(registration, user) {
+  if (!user) return false;
+  const email = String(registration.email || '').trim().toLowerCase();
+  const userEmail = String(user.email || '').trim().toLowerCase();
+  if (email && userEmail && email === userEmail) return true;
+
+  const participantName = String(registration.participantName || '').trim().toLowerCase();
+  const userName = String(user.name || '').trim().toLowerCase();
+  return Boolean(participantName && userName && participantName === userName);
+}
+
 function IconChip({ icon, color, size = 44 }) {
   return (
     <span style={{
@@ -54,9 +70,9 @@ export default function ParticipantDashboard() {
   );
 
   const myRegistrations = useMemo(() => {
-    if (!user?.email) return [];
-    return registrations.filter((r) => (r.email || '').toLowerCase() === user.email.toLowerCase());
-  }, [registrations, user?.email]);
+    if (!user) return [];
+    return registrations.filter((r) => isMyRegistration(r, user));
+  }, [registrations, user]);
 
   const myQrToken = myRegistrations[0]?.individualDetails?.qrToken || myRegistrations[0]?.id || null;
 
