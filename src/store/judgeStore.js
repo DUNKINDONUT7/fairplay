@@ -4,6 +4,7 @@ import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supab
 import { getBusinessActorId, getActorIdentityKeys, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import useEventStore from './eventStore';
+import useAuthStore from './authStore';
 
 function normalizeJudge(judge) {
   return {
@@ -305,26 +306,16 @@ const useJudgeStore = create(
           throw new Error('Judge invites require FairPlay to be connected to Supabase.');
         }
 
-        // functions.invoke() reads the access token from whatever session is
-        // cached in memory. A tab left idle can miss its background refresh
-        // (browsers throttle JS timers in backgrounded tabs), so that token
-        // quietly goes dead while the client still looks "logged in" — the
-        // Edge Function's own auth check then rejects it with
-        // "Unauthorized.". refreshSession() forces a real refresh over the
-        // network (getSession() only refreshes conditionally and can return
-        // the same dead token), and the resulting token is pinned to this
-        // call explicitly rather than trusted to whatever the SDK has
-        // cached internally.
-        let accessToken = null;
-        try {
-          const refreshResult = await Promise.race([
-            supabase.auth.refreshSession(),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Session refresh timed out.')), 8000)),
-          ]);
-          accessToken = refreshResult?.data?.session?.access_token || null;
-        } catch {
-          accessToken = null;
-        }
+        // getSession()/refreshSession() both go through supabase-js's
+        // internal session lock, which has proven unreliable in this
+        // environment (a prior fix that called them here just traded the
+        // Edge Function's "Unauthorized." for these hanging/failing
+        // instead — reproduced even immediately after a fresh sign-in).
+        // authStore.token is the same access token, already sitting in
+        // memory from that sign-in (login()/onAuthStateChange both set it)
+        // — using it directly needs no extra Supabase Auth call, so it
+        // can't hit that lock at all.
+        const accessToken = useAuthStore.getState().token;
 
         if (!accessToken) {
           throw new Error('Your sign-in session has expired. Please sign out and sign back in, then send the invite again.');
