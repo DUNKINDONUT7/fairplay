@@ -75,7 +75,15 @@ function describeAuthError(error, { action = 'signing in' } = {}) {
     return 'Unable to reach the server right now. Check your internet connection and try again.';
   }
 
-  return `Something went wrong while ${action}. Please try again in a moment.`;
+  // Every recognized case above returns before this point. Anything that
+  // reaches here is unanticipated, so — unlike the branches above, which
+  // intentionally hide Supabase's wording — the raw message is appended
+  // rather than swallowed, since a silent generic message left this class
+  // of failure (e.g. a database trigger error) completely undiagnosable
+  // from the UI alone.
+  const rawDetail = String(error?.message || '').trim();
+  const suffix = rawDetail ? ` (${rawDetail.slice(0, 200)})` : '';
+  return `Something went wrong while ${action}. Please try again in a moment.${suffix}`;
 }
 
 function buildOrganizerApplication(userData = {}) {
