@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useRegistrationStore from '../../store/registrationStore';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
@@ -43,6 +43,7 @@ function getSubEventName(subEvent) {
 
 export default function PublicParticipantRegister() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const eventId = searchParams.get('eventId');
   const { fetchEvents } = useEventStore();
@@ -353,10 +354,10 @@ export default function PublicParticipantRegister() {
             <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>
               {event?.title || 'This event'} is already ongoing, so new registrations are no longer accepted.
             </p>
-            <a href={`/events/${eventId}`} style={{ ...secondaryActionButton, textDecoration: 'none' }}>
-              <i className="bi bi-eye" />
-              View Event Preview
-            </a>
+            <button type="button" onClick={() => navigate('/participant')} style={secondaryActionButton}>
+              <i className="bi bi-arrow-left" />
+              Back to Dashboard
+            </button>
           </div>
         </div>
       </div>
