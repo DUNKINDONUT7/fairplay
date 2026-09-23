@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import {
   buildRounds,
   calculateChampion,
@@ -107,6 +107,26 @@ function buildChampionshipReportSnapshot(tournament, match, champion) {
   };
 }
 
+let tournamentsRealtimeBound = false;
+let tournamentsRealtimeFilter;
+
+function ensureTournamentsRealtime(eventId) {
+  tournamentsRealtimeFilter = eventId;
+  if (!isSupabaseConfigured || !supabase || tournamentsRealtimeBound) return;
+
+  tournamentsRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'tournaments',
+    onChange: () => {
+      const state = useTournamentStore.getState();
+      if (typeof state.fetchTournaments === 'function') {
+        state.fetchTournaments(tournamentsRealtimeFilter, { silent: true });
+      }
+    },
+  });
+}
+
 const useTournamentStore = create(
   persist(
     (set, get) => ({
@@ -114,8 +134,11 @@ const useTournamentStore = create(
       loading: false,
       error: null,
 
-      fetchTournaments: async (eventId) => {
-        set({ loading: true, error: null });
+      fetchTournaments: async (eventId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           const tournaments = eventId
@@ -124,6 +147,8 @@ const useTournamentStore = create(
           set({ loading: false });
           return tournaments;
         }
+
+        ensureTournamentsRealtime(eventId);
 
         try {
           let query = supabase.from('tournaments').select('*').order('created_at', { ascending: false });

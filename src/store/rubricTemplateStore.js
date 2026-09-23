@@ -1,6 +1,24 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+
+let templatesRealtimeBound = false;
+
+function ensureTemplatesRealtime() {
+  if (!isSupabaseConfigured || !supabase || templatesRealtimeBound) return;
+
+  templatesRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'rubric_templates',
+    onChange: () => {
+      const state = useRubricTemplateStore.getState();
+      if (typeof state.fetchTemplates === 'function') {
+        state.fetchTemplates({ silent: true });
+      }
+    },
+  });
+}
 
 function normalizeTemplate(row) {
   return {
@@ -21,9 +39,13 @@ const useRubricTemplateStore = create(
       templates: [],
       loading: false,
 
-      fetchTemplates: async () => {
+      fetchTemplates: async (options = {}) => {
+        const { silent = false } = options;
         if (!isSupabaseConfigured) return get().templates;
-        set({ loading: true });
+        ensureTemplatesRealtime();
+        if (!silent) {
+          set({ loading: true });
+        }
         try {
           const { data, error } = await supabase
             .from('rubric_templates')

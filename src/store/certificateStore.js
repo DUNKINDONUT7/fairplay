@@ -1,8 +1,28 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { buildAppUrl } from '../utils/appUrl';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import useNotificationStore from './notificationStore';
+
+let certificatesRealtimeBound = false;
+let certificatesRealtimeFilter;
+
+function ensureCertificatesRealtime(eventId) {
+  certificatesRealtimeFilter = eventId;
+  if (!isSupabaseConfigured || !supabase || certificatesRealtimeBound) return;
+
+  certificatesRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'certificates',
+    onChange: () => {
+      const state = useCertificateStore.getState();
+      if (typeof state.fetchCertificates === 'function') {
+        state.fetchCertificates(certificatesRealtimeFilter, { silent: true });
+      }
+    },
+  });
+}
 
 const defaultTemplate = {
   title: 'Certificate of Achievement',
@@ -190,14 +210,19 @@ const useCertificateStore = create(
       loading: false,
       error: null,
 
-      fetchCertificates: async (eventId) => {
-        set({ loading: true, error: null });
+      fetchCertificates: async (eventId, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         if (!isSupabaseConfigured) {
           const records = eventId ? get().getCertificatesByEvent(eventId) : get().certificates;
           set({ loading: false });
           return records;
         }
+
+        ensureCertificatesRealtime(eventId);
 
         try {
           const { data, error } = await tryFetchCertificates(eventId);

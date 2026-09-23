@@ -1,7 +1,27 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
+
+let venuesRealtimeBound = false;
+let venuesRealtimeActor;
+
+function ensureVenuesRealtime(actor) {
+  venuesRealtimeActor = actor;
+  if (!isSupabaseConfigured || !supabase || venuesRealtimeBound) return;
+
+  venuesRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'event_locations',
+    onChange: () => {
+      const state = useVenueStore.getState();
+      if (typeof state.fetchVenues === 'function') {
+        state.fetchVenues(venuesRealtimeActor, { silent: true });
+      }
+    },
+  });
+}
 
 function createVenueId() {
   return Date.now() + Math.floor(Math.random() * 10000);
@@ -78,8 +98,11 @@ const useVenueStore = create(
       loading: false,
       error: null,
 
-      fetchVenues: async (actor) => {
-        set({ loading: true, error: null });
+      fetchVenues: async (actor, options = {}) => {
+        const { silent = false } = options;
+        if (!silent) {
+          set({ loading: true, error: null });
+        }
 
         const organizerBusinessId = getBusinessActorId(actor);
         if (!isSupabaseConfigured) {
@@ -92,6 +115,8 @@ const useVenueStore = create(
           set({ loading: false, error: null });
           return filtered;
         }
+
+        ensureVenuesRealtime(actor);
 
         try {
           const { data, error } = await supabase.from('event_locations').select('*').order('name');

@@ -31,6 +31,7 @@ function normalizeAssignment(assignment) {
 
 let judgesRealtimeBound = false;
 let judgesRealtimeEventId = null;
+let invitesRealtimeEventId = null;
 
 function ensureJudgesRealtime(eventId) {
   if (!isSupabaseConfigured || !supabase || judgesRealtimeBound) {
@@ -67,6 +68,12 @@ function ensureJudgesRealtime(eventId) {
       const state = useJudgeStore.getState();
       if (typeof state.fetchJudges === 'function') {
         state.fetchJudges({ silent: true });
+      }
+      // fetchJudges() above doesn't touch the separate `invites` list (only
+      // fetchInvites does) — without this, the Invite Judges panel stayed
+      // stale until a manual reload even though judges/assignments updated.
+      if (invitesRealtimeEventId && typeof state.fetchInvites === 'function') {
+        state.fetchInvites(invitesRealtimeEventId);
       }
     },
   });
@@ -273,6 +280,9 @@ const useJudgeStore = create(
 
       fetchInvites: async (eventId) => {
         if (!isSupabaseConfigured || !eventId) return get().invites;
+
+        invitesRealtimeEventId = eventId;
+        ensureJudgesRealtime();
 
         try {
           const { data, error } = await supabase

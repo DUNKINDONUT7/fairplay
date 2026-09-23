@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { validateRegistrationConflict } from '../services/eventWorkflowService';
 import useEventStore from './eventStore';
 import useTeamStore from './teamStore';
@@ -115,6 +115,30 @@ function buildRegistrationPayload(registration) {
   };
 }
 
+let registrationsRealtimeBound = false;
+let registrationsRealtimeFilter;
+
+// Mirrors the singleton pattern in eventStore/judgeStore: one subscription
+// for the whole app, silently re-fetching whenever any row in the table
+// changes, so a new registration shows up for anyone watching (e.g. the
+// organizer's Contestants list) without needing a manual page reload.
+function ensureRegistrationsRealtime(eventId) {
+  registrationsRealtimeFilter = eventId;
+  if (!isSupabaseConfigured || !supabase || registrationsRealtimeBound) return;
+
+  registrationsRealtimeBound = true;
+
+  subscribeToTable({
+    table: 'registrations',
+    onChange: () => {
+      const state = useRegistrationStore.getState();
+      if (typeof state.fetchRegistrations === 'function') {
+        state.fetchRegistrations(registrationsRealtimeFilter);
+      }
+    },
+  });
+}
+
 async function persistRegistration(registration) {
   if (!isSupabaseConfigured) return;
 
@@ -168,6 +192,8 @@ const useRegistrationStore = create(
             ? get().registrations.filter((registration) => String(registration.eventId) === String(eventId))
             : get().registrations;
         }
+
+        ensureRegistrationsRealtime(eventId);
 
         try {
           let query = supabase.from('registrations').select('*').order('created_at', { ascending: false });
