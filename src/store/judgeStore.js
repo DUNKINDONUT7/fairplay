@@ -305,6 +305,20 @@ const useJudgeStore = create(
           throw new Error('Judge invites require FairPlay to be connected to Supabase.');
         }
 
+        // functions.invoke() below sends whatever access token is currently
+        // in memory. A tab left idle can miss its background token refresh
+        // (browsers throttle JS timers in backgrounded tabs), so the token
+        // quietly expires while the client still looks "logged in" — the
+        // Edge Function's own auth.getUser() check then rejects it with
+        // "Unauthorized.", which is exactly what surfaces here otherwise.
+        // getSession() refreshes an expired session before returning, so
+        // calling it first (bounded — it can itself hang under a stuck
+        // browser session lock) makes sure a fresh token is used.
+        await Promise.race([
+          supabase.auth.getSession(),
+          new Promise((resolve) => setTimeout(resolve, 8000)),
+        ]).catch(() => null);
+
         const event = useEventStore.getState().getEventById(eventId);
 
         let data;
