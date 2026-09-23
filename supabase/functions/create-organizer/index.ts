@@ -30,10 +30,19 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  // The Supabase-auto-injected SUPABASE_SERVICE_ROLE_KEY has not
+  // authenticated as service_role in this project (same issue noted in
+  // notify-judge-invite), and the dashboard's Edge Function Secrets screen
+  // now outright refuses to let a secret name start with SUPABASE_ anyway
+  // (that prefix is reserved), so there is no way to override it under its
+  // original name even if the auto-injected value were wrong. The actual
+  // key has to be stored under a different name instead — set
+  // PROJECT_SERVICE_ROLE_KEY to the legacy-format service_role key from
+  // Project Settings > API Keys > "Legacy anon, service_role API keys".
+  const serviceRoleKey = Deno.env.get('PROJECT_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
   if (!supabaseUrl || !serviceRoleKey) {
-    return jsonResponse({ error: 'Admin service is not configured.' }, 500);
+    return jsonResponse({ error: 'Admin service is not configured. Set the PROJECT_SERVICE_ROLE_KEY secret.' }, 500);
   }
 
   const authHeader = req.headers.get('Authorization') || '';
