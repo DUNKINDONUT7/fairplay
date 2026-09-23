@@ -36,7 +36,7 @@ create table if not exists public.events (
   approval_workflow jsonb default '[]'::jsonb,
   external_judge_invites jsonb default '[]'::jsonb,
   audience_attendance integer default 0,
-  attendance_tracking boolean default false,z
+  attendance_tracking boolean default false,
   tournament_format text default 'single',
   status text default 'draft',
   start_date timestamptz,
