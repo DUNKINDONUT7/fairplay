@@ -13,14 +13,24 @@ export async function callAiProxy({ messages, model, temperature, responseFormat
     throw new Error('AI features require FairPlay to be connected to Supabase.');
   }
 
-  const { data, error } = await supabase.functions.invoke('ai-proxy', {
-    body: {
-      messages,
-      model,
-      temperature,
-      ...(responseFormat ? { response_format: responseFormat } : {}),
-    },
-  });
+  // functions.invoke() attaches the current session's access token
+  // internally, which serializes through the same browser Web Locks
+  // mechanism as auth.getSession() — a stale lock left by another tab can
+  // make this hang forever (never resolves, never rejects). Left
+  // unbounded, that silently defeats the local-fallback rubric generator
+  // in aiCriteriaEngine.js, since its try/catch never gets a chance to
+  // fire and the "Generating criteria..." UI is stuck for good.
+  const { data, error } = await Promise.race([
+    supabase.functions.invoke('ai-proxy', {
+      body: {
+        messages,
+        model,
+        temperature,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
+      },
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('AI request timed out.')), 25000)),
+  ]);
 
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
