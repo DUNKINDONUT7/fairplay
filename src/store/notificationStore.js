@@ -261,6 +261,27 @@ const useNotificationStore = create(
         });
       },
 
+      notifyRegistrationConfirmed: async (registration, event = null) => {
+        if (!registration?.id || !registration?.email) return null;
+        const eventTitle = event?.title || registration.category || 'the event';
+        return get().createSystemNotification({
+          title: 'Registration confirmed',
+          message: `You're registered for ${eventTitle}. The organizer will reach out with further details.`,
+          type: 'success',
+          category: 'registration-confirmed',
+          targetEmails: [registration.email],
+          sourceKey: `registration-confirmed:${registration.id}`,
+          entityType: 'registration',
+          entityId: registration.id,
+          actionUrl: '/participant/schedule',
+          metadata: {
+            eventId: registration.eventId,
+            eventTitle,
+            registrationType: registration.registrationType,
+          },
+        });
+      },
+
       notifyJudgeInvited: async (invite, event = null) => {
         if (!invite?.id && !invite?.token) return null;
         const eventTitle = event?.title || invite.eventTitle || 'an event';

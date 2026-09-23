@@ -484,6 +484,7 @@ const useRegistrationStore = create(
 
           await persistRegistration(registration);
           await useNotificationStore.getState().notifyRegistrationSubmitted(registration, event);
+          await useNotificationStore.getState().notifyRegistrationConfirmed(registration, event);
           return registration;
         } catch (error) {
           set({ status: 'error', error: error.message });

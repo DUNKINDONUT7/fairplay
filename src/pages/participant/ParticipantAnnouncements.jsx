@@ -14,6 +14,7 @@ const TYPE_META = {
 const CATEGORY_ICON = {
   'event-published': 'bi-calendar-plus-fill',
   'certificate-ready': 'bi-award-fill',
+  'registration-confirmed': 'bi-patch-check-fill',
 };
 
 function typeMeta(notification) {
