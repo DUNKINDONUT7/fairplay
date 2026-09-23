@@ -9,6 +9,22 @@ alter default privileges in schema public grant all on tables to anon, authentic
 alter default privileges in schema public grant all on sequences to anon, authenticated;
 alter default privileges in schema public grant execute on functions to anon, authenticated;
 
+-- service_role normally bypasses grants/RLS entirely by default in a
+-- Supabase project — this project's service_role has been observed
+-- returning "permission denied for table ..." on plain REST/table queries
+-- (confirmed for profiles and judge_invites; see notify-judge-invite and
+-- create-organizer, both of which had to work around it) even though its
+-- Admin Auth API calls (createUser, listUsers, etc.) work fine — those are
+-- a separate code path that only checks the JWT's role claim, not this
+-- schema's table grants. Explicit grants here fix the REST/table side.
+grant usage on schema public to service_role;
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+grant execute on all functions in schema public to service_role;
+alter default privileges in schema public grant all on tables to service_role;
+alter default privileges in schema public grant all on sequences to service_role;
+alter default privileges in schema public grant execute on functions to service_role;
+
 create table if not exists public.profiles (
   id text primary key,
   email text,
