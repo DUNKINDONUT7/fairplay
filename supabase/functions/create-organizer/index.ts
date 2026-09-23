@@ -30,6 +30,7 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
   // The Supabase-auto-injected SUPABASE_SERVICE_ROLE_KEY has not
   // authenticated as service_role in this project (same issue noted in
   // notify-judge-invite), and the dashboard's Edge Function Secrets screen
@@ -41,21 +42,24 @@ serve(async (req) => {
   // Project Settings > API Keys > "Legacy anon, service_role API keys".
   const serviceRoleKey = Deno.env.get('PROJECT_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
     return jsonResponse({ error: 'Admin service is not configured. Set the PROJECT_SERVICE_ROLE_KEY secret.' }, 500);
   }
 
   const authHeader = req.headers.get('Authorization') || '';
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+
+  // Caller-identity client only — anon key with the caller's own forwarded
+  // token, used solely to confirm who's asking and that they're an admin.
+  const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const { data: authData, error: authError } = await callerClient.auth.getUser();
   if (authError || !authData?.user) {
     return jsonResponse({ error: 'Unauthorized.' }, 401);
   }
 
-  const { data: callerProfile, error: profileError } = await supabase
+  const { data: callerProfile, error: profileError } = await callerClient
     .from('profiles')
     .select('role')
     .eq('id', authData.user.id)
@@ -64,6 +68,18 @@ serve(async (req) => {
   if (profileError || callerProfile?.role !== 'admin') {
     return jsonResponse({ error: 'Admin access required.' }, 403);
   }
+
+  // Privileged client — the real service role key, with its own default
+  // Authorization header left untouched. The Admin API below requires that
+  // header to literally be the service_role key; building this from the
+  // same client as the caller check above (overriding its Authorization
+  // with the caller's own token, as create-organizer originally did) is
+  // exactly what produced "User not allowed" — the Admin API saw the
+  // caller's regular session token instead of service_role, every time,
+  // regardless of whether the key itself was valid.
+  const serviceRoleClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
   const body = await req.json().catch(() => ({}));
   const name = String(body.name || '').trim();
@@ -80,7 +96,7 @@ serve(async (req) => {
     return jsonResponse({ error: 'Password must be at least 8 characters and include uppercase, lowercase, and a number.' }, 400);
   }
 
-  const { data: existingUsersData, error: listUsersError } = await supabase.auth.admin.listUsers();
+  const { data: existingUsersData, error: listUsersError } = await serviceRoleClient.auth.admin.listUsers();
   if (listUsersError) {
     return jsonResponse({ error: listUsersError.message }, 500);
   }
@@ -90,7 +106,7 @@ serve(async (req) => {
     return jsonResponse({ error: 'An account with this email already exists.' }, 409);
   }
 
-  const { data: createdUserData, error: createUserError } = await supabase.auth.admin.createUser({
+  const { data: createdUserData, error: createUserError } = await serviceRoleClient.auth.admin.createUser({
     email,
     password,
     email_confirm: true,
@@ -105,7 +121,7 @@ serve(async (req) => {
   // this same createUser call, but with status 'pending' (its default for
   // role 'organizer', built for the old self-service flow) — this upsert
   // overrides that: an admin-created organizer is active right away.
-  const { error: profileUpsertError } = await supabase
+  const { error: profileUpsertError } = await serviceRoleClient
     .from('profiles')
     .upsert(
       {
