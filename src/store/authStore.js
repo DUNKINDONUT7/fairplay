@@ -432,7 +432,20 @@ const useAuthStore = create(
           });
 
           if (error) throw error;
-          if (!data.user) throw new Error('Registration did not return a user.');
+
+          // Supabase's anti-enumeration behavior for signUp(): if the email
+          // already belongs to an account, it returns success with no error
+          // rather than an "already exists" error, so a caller can't probe
+          // which emails are registered — either data.user comes back empty,
+          // or a real-looking user with an empty identities array. Both mean
+          // the same thing here: this email is already taken.
+          if (!data.user || (Array.isArray(data.user.identities) && data.user.identities.length === 0)) {
+            set({ loading: false, initialized: true });
+            return {
+              success: false,
+              error: 'An account with this email already exists. Try signing in instead, or use a different email address.',
+            };
+          }
 
           if (!data.session) {
             // Email confirmation is required by this project's Supabase Auth
