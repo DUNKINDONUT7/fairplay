@@ -384,6 +384,7 @@ const useAuthStore = create(
 
           return { success: true, user: sessionUser };
         } catch (error) {
+          console.error('Login failed:', error);
           set({ loading: false, initialized: true });
           return { success: false, error: describeAuthError(error, { action: 'signing in' }) };
         }
@@ -460,6 +461,7 @@ const useAuthStore = create(
             message: 'Participant account created.',
           };
         } catch (error) {
+          console.error('Registration failed:', error);
           set({ loading: false, initialized: true });
           return {
             success: false,
@@ -496,6 +498,7 @@ const useAuthStore = create(
 
           return { success: true, userId: data?.userId };
         } catch (error) {
+          console.error('Create organizer failed:', error);
           return { success: false, error: error.message || 'Unable to create this organizer account.' };
         }
       },
