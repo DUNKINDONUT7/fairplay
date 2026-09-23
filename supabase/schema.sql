@@ -909,10 +909,15 @@ begin
   -- Every invite for this exact judge_email + event, not just p_invite_id —
   -- see the comment above the function for why a single-row update leaves a
   -- resurrection path open.
-  update public.judge_invites
+  --
+  -- Table-qualified for the same reason as judge_assignments' update below:
+  -- bare `event_id` collides with this function's returns-table output
+  -- column of the same name, and plpgsql picks the variable over the
+  -- column, which Postgres then rejects as ambiguous.
+  update public.judge_invites ji
   set status = 'revoked', revoked_at = timezone('utc', now()), revoked_by = auth.uid()::text
-  where event_id = v_invite.event_id
-    and lower(trim(judge_email)) = lower(trim(v_invite.judge_email));
+  where ji.event_id = v_invite.event_id
+    and lower(trim(ji.judge_email)) = lower(trim(v_invite.judge_email));
 
   select judges.id into v_judge_id
   from public.judges
