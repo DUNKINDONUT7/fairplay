@@ -98,6 +98,11 @@ serve(async (req) => {
   }
 
   const authHeader = req.headers.get('Authorization') || '';
+  const bearerToken = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+  if (!bearerToken) {
+    return jsonResponse({ error: 'Unauthorized.', reason: 'missing_bearer_token' }, 401);
+  }
 
   // Runs entirely as the caller — no service-role client, and the anon key
   // rather than SUPABASE_SERVICE_ROLE_KEY. This project's auto-injected
@@ -111,13 +116,24 @@ serve(async (req) => {
   // mirroring the existing SELECT policy's rule (role in admin/organizer).
   // With that in place, the caller's own session is sufficient for
   // everything below, same as any browser request through the anon key.
+  //
+  // getUser(jwt) is called with the token passed explicitly rather than
+  // relying on a client constructed with a forwarded Authorization header —
+  // the explicit form is the documented, unambiguous way to validate a
+  // caller's JWT in an Edge Function and avoids depending on how this
+  // client instance's internal request headers get wired for auth calls
+  // specifically (as opposed to plain table queries, which do still need
+  // the forwarded header below for RLS to see the right caller).
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
 
-  const { data: authData, error: authError } = await callerClient.auth.getUser();
+  const { data: authData, error: authError } = await callerClient.auth.getUser(bearerToken);
   if (authError || !authData?.user) {
-    return jsonResponse({ error: 'Unauthorized.' }, 401);
+    return jsonResponse({
+      error: 'Unauthorized.',
+      reason: authError?.message || 'no_user_for_token',
+    }, 401);
   }
 
   const { data: callerProfile, error: profileError } = await callerClient

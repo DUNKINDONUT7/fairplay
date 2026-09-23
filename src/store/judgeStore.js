@@ -305,19 +305,30 @@ const useJudgeStore = create(
           throw new Error('Judge invites require FairPlay to be connected to Supabase.');
         }
 
-        // functions.invoke() below sends whatever access token is currently
-        // in memory. A tab left idle can miss its background token refresh
-        // (browsers throttle JS timers in backgrounded tabs), so the token
-        // quietly expires while the client still looks "logged in" — the
-        // Edge Function's own auth.getUser() check then rejects it with
-        // "Unauthorized.", which is exactly what surfaces here otherwise.
-        // getSession() refreshes an expired session before returning, so
-        // calling it first (bounded — it can itself hang under a stuck
-        // browser session lock) makes sure a fresh token is used.
-        await Promise.race([
-          supabase.auth.getSession(),
-          new Promise((resolve) => setTimeout(resolve, 8000)),
-        ]).catch(() => null);
+        // functions.invoke() reads the access token from whatever session is
+        // cached in memory. A tab left idle can miss its background refresh
+        // (browsers throttle JS timers in backgrounded tabs), so that token
+        // quietly goes dead while the client still looks "logged in" — the
+        // Edge Function's own auth check then rejects it with
+        // "Unauthorized.". refreshSession() forces a real refresh over the
+        // network (getSession() only refreshes conditionally and can return
+        // the same dead token), and the resulting token is pinned to this
+        // call explicitly rather than trusted to whatever the SDK has
+        // cached internally.
+        let accessToken = null;
+        try {
+          const refreshResult = await Promise.race([
+            supabase.auth.refreshSession(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Session refresh timed out.')), 8000)),
+          ]);
+          accessToken = refreshResult?.data?.session?.access_token || null;
+        } catch {
+          accessToken = null;
+        }
+
+        if (!accessToken) {
+          throw new Error('Your sign-in session has expired. Please sign out and sign back in, then send the invite again.');
+        }
 
         const event = useEventStore.getState().getEventById(eventId);
 
@@ -326,6 +337,7 @@ const useJudgeStore = create(
 
         try {
           ({ data, error } = await supabase.functions.invoke('notify-judge-invite', {
+            headers: { Authorization: `Bearer ${accessToken}` },
             body: {
               eventId,
               eventTitle,
@@ -340,12 +352,14 @@ const useJudgeStore = create(
         } catch (invokeError) {
           console.error('Judge invite function invocation failed:', invokeError);
           const bodyFromResponse = await invokeError?.context?.json?.().catch(() => null);
-          throw new Error(bodyFromResponse?.error || invokeError?.message || 'Unable to reach the judge invite email function.');
+          const message = bodyFromResponse?.error || invokeError?.message || 'Unable to reach the judge invite email function.';
+          throw new Error(bodyFromResponse?.reason ? `${message} (${bodyFromResponse.reason})` : message);
         }
 
         if (error) {
           const bodyFromResponse = await error.context?.json?.().catch(() => null);
-          throw new Error(bodyFromResponse?.error || data?.error || error.message || 'Unable to send judge invite email.');
+          const message = bodyFromResponse?.error || data?.error || error.message || 'Unable to send judge invite email.';
+          throw new Error(bodyFromResponse?.reason ? `${message} (${bodyFromResponse.reason})` : message);
         }
         if (data?.error) throw new Error(data.error);
 
