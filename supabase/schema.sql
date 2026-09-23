@@ -304,6 +304,18 @@ alter table public.registrations add column if not exists team_name text;
 alter table public.registrations add column if not exists roster jsonb default '[]'::jsonb;
 alter table public.registrations add column if not exists individual_details jsonb default '{}'::jsonb;
 
+-- Re-running this file on a database that already has the scores RLS
+-- policies from a previous run (defined much further down, around the
+-- "Score immutability" section) hits "cannot alter type of a column used in
+-- a policy definition" here otherwise — those policies' WITH CHECK clauses
+-- call judge_assignment_revoked(judge_id, ...), which depends on judge_id's
+-- type. Dropping them before the type change and letting the later
+-- create policy statements recreate them keeps this file safely re-runnable
+-- on a fresh database (nothing to drop, silent no-op) and on one that has
+-- already been through a previous run.
+drop policy if exists "Scores can be inserted unlocked" on public.scores;
+drop policy if exists "Unlocked scores can be updated" on public.scores;
+
 alter table public.scores alter column id type text using id::text;
 alter table public.scores alter column judge_id type text using judge_id::text;
 
