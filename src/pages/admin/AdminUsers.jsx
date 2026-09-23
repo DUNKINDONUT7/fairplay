@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Lock, Trash2, Search, RefreshCw, Check, X, ShieldAlert } from 'lucide-react';
+import { Lock, Trash2, Search, RefreshCw, Check, X, ShieldAlert, UserPlus } from 'lucide-react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import useAuthStore from '../../store/authStore';
@@ -18,6 +18,7 @@ export default function AdminUsers() {
     deleteUser,
     approveOrganizerApplication,
     declineOrganizerApplication,
+    createOrganizerAccount,
     authMode,
   } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
@@ -27,6 +28,10 @@ export default function AdminUsers() {
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState('');
   const [userToDelete, setUserToDelete] = useState(null);
+  const [showAddOrganizer, setShowAddOrganizer] = useState(false);
+  const [newOrganizer, setNewOrganizer] = useState({ name: '', email: '', password: '' });
+  const [addOrganizerError, setAddOrganizerError] = useState('');
+  const [addingOrganizer, setAddingOrganizer] = useState(false);
 
   useEffect(() => {
     refreshProfiles();
@@ -109,6 +114,47 @@ export default function AdminUsers() {
     }
   }
 
+  function closeAddOrganizer() {
+    setShowAddOrganizer(false);
+    setNewOrganizer({ name: '', email: '', password: '' });
+    setAddOrganizerError('');
+  }
+
+  async function handleAddOrganizer(event) {
+    event.preventDefault();
+    setAddOrganizerError('');
+
+    const name = newOrganizer.name.trim();
+    const email = newOrganizer.email.trim().toLowerCase();
+    const password = newOrganizer.password;
+
+    if (!name || !email || !password) {
+      setAddOrganizerError('Please complete every field.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setAddOrganizerError('Enter a valid email address.');
+      return;
+    }
+    if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
+      setAddOrganizerError('Password must be at least 8 characters and include uppercase, lowercase, and a number.');
+      return;
+    }
+
+    setAddingOrganizer(true);
+    try {
+      const result = await createOrganizerAccount({ name, email, password });
+      if (!result.success) {
+        setAddOrganizerError(result.error || 'Unable to create this organizer account.');
+        return;
+      }
+      success(`Created organizer account for ${email}. Share the email and password with them directly.`);
+      closeAddOrganizer();
+    } finally {
+      setAddingOrganizer(false);
+    }
+  }
+
   async function handleDelete(user) {
     setBusy(`delete-${user.id}`);
     try {
@@ -177,11 +223,87 @@ export default function AdminUsers() {
           <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }} />
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search users by name, email, role..." style={searchStyle} />
         </div>
-        <button onClick={handleRefresh} disabled={busy === 'refresh'} style={secondaryButtonStyle}>
-          <RefreshCw size={16} />
-          Refresh Database
-        </button>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={() => setShowAddOrganizer(true)} style={primaryButtonStyle}>
+            <UserPlus size={16} />
+            Add Organizer
+          </button>
+          <button onClick={handleRefresh} disabled={busy === 'refresh'} style={secondaryButtonStyle}>
+            <RefreshCw size={16} />
+            Refresh Database
+          </button>
+        </div>
       </div>
+
+      {showAddOrganizer && (
+        <div onClick={closeAddOrganizer} style={modalOverlayStyle}>
+          <div onClick={(event) => event.stopPropagation()} style={modalCardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 4 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#0f172a' }}>Add Organizer</h2>
+                <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
+                  Organizer accounts are admin-only. Set their email and password directly — the account is active immediately.
+                </p>
+              </div>
+              <button type="button" onClick={closeAddOrganizer} style={modalCloseButtonStyle} aria-label="Close">
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddOrganizer} style={{ display: 'grid', gap: 14, marginTop: 16 }}>
+              <div>
+                <label style={modalLabelStyle}>Full Name</label>
+                <input
+                  value={newOrganizer.name}
+                  onChange={(event) => setNewOrganizer((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Juan dela Cruz"
+                  style={modalInputStyle}
+                  disabled={addingOrganizer}
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label style={modalLabelStyle}>Email Address</label>
+                <input
+                  type="email"
+                  value={newOrganizer.email}
+                  onChange={(event) => setNewOrganizer((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="organizer@email.com"
+                  style={modalInputStyle}
+                  disabled={addingOrganizer}
+                />
+              </div>
+              <div>
+                <label style={modalLabelStyle}>Password</label>
+                <input
+                  type="text"
+                  value={newOrganizer.password}
+                  onChange={(event) => setNewOrganizer((current) => ({ ...current, password: event.target.value }))}
+                  placeholder="At least 8 characters, upper + lower + number"
+                  style={modalInputStyle}
+                  disabled={addingOrganizer}
+                />
+              </div>
+
+              {addOrganizerError && (
+                <div style={{ padding: '10px 12px', borderRadius: 10, background: '#fef2f2', border: '1px solid #fecaca', color: '#dc2626', fontSize: 13 }}>
+                  {addOrganizerError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+                <button type="button" onClick={closeAddOrganizer} disabled={addingOrganizer} style={secondaryButtonStyle}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={addingOrganizer} style={primaryButtonStyle}>
+                  <UserPlus size={16} />
+                  {addingOrganizer ? 'Creating...' : 'Create Organizer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <div style={cardStyle}>
         <div style={{ overflowX: 'auto' }}>
@@ -247,6 +369,12 @@ const declineButtonStyle = { padding: '8px 14px', borderRadius: 10, background: 
 const toolbarStyle = { background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 16, padding: 16, boxShadow: '0 10px 24px rgba(15,23,42,0.06)', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 };
 const searchStyle = { padding: '10px 14px 10px 34px', borderRadius: 10, background: '#ffffff', border: '1px solid #e2e8f0', color: '#0f172a', fontSize: 13, outline: 'none', width: '100%' };
 const secondaryButtonStyle = { padding: '10px 16px', borderRadius: 10, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 };
+const primaryButtonStyle = { padding: '10px 16px', borderRadius: 10, background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', color: '#ffffff', border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8 };
+const modalOverlayStyle = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', zIndex: 1400, display: 'grid', placeItems: 'center', padding: 20 };
+const modalCardStyle = { width: 'min(440px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: '#ffffff', borderRadius: 18, padding: 24, border: '1px solid #e2e8f0', boxShadow: '0 24px 80px rgba(15,23,42,0.22)' };
+const modalCloseButtonStyle = { width: 32, height: 32, borderRadius: 8, background: '#f8fafc', border: '1px solid #e2e8f0', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b', flexShrink: 0 };
+const modalLabelStyle = { display: 'block', fontSize: 12, fontWeight: 700, color: '#475569', marginBottom: 6 };
+const modalInputStyle = { width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#0f172a', fontSize: 14, outline: 'none' };
 const thStyle = { padding: '12px 16px', textAlign: 'left', fontSize: 12, color: '#64748b', fontWeight: 700, textTransform: 'uppercase' };
 const tdStyle = { padding: '12px 16px', fontSize: 13, color: '#64748b', verticalAlign: 'top' };
 const avatarStyle = { width: 32, height: 32, borderRadius: 10, background: 'rgba(37,99,235,0.12)', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14 };

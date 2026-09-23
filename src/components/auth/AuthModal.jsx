@@ -106,11 +106,11 @@ export default function AuthModal({ onClose }) {
     if (password !== confirmPassword) return showError('Passwords do not match.');
     if (!acceptedTerms) return showError('Please agree to the terms to continue.');
 
-    const result = await store.register({ name, email, password, role: 'organizer' });
+    const result = await store.register({ name, email, password, role: 'participant' });
     if (result.success) {
-      if (result.requiresApproval || result.requiresEmailConfirmation) {
+      if (result.requiresEmailConfirmation) {
         setMode('login');
-        setNotice(result.message || 'Account created. An admin needs to approve it before you can sign in.');
+        setNotice(result.message || 'Account created. Check your email to confirm it, then sign in.');
         setLoginData({ email, password: '' });
         return;
       }
@@ -185,10 +185,10 @@ export default function AuthModal({ onClose }) {
             {authModeLabel}
           </div>
           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: '#f8fafc' }}>
-            {mode === 'login' ? 'Welcome Back' : 'Create Organizer Account'}
+            {mode === 'login' ? 'Welcome Back' : 'Create Participant Account'}
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 14 }}>
-            {mode === 'login' ? 'Access your FairPlay workspace and continue your workflow.' : 'Register as an organizer and go straight to your dashboard.'}
+            {mode === 'login' ? 'Access your FairPlay workspace and continue your workflow.' : 'Register as a participant and go straight to your dashboard.'}
           </p>
 
           <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 4, marginBottom: 14 }}>
@@ -269,7 +269,7 @@ export default function AuthModal({ onClose }) {
                   <input type="text" value={regData.name} onChange={(event) => setRegData((current) => ({ ...current, name: event.target.value }))} autoFocus style={inputStyle} />
                 </Field>
                 <div style={{ padding: '12px 14px', borderRadius: 12, background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.18)', color: '#bae6fd', fontSize: 13, fontWeight: 700 }}>
-                  Role: Organizer only. You will be redirected to the organizer dashboard after registration.
+                  Role: Participant only. You'll be taken straight to your dashboard after registration. Organizer accounts are created by an admin.
                 </div>
               </div>
 

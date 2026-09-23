@@ -389,12 +389,18 @@ const useAuthStore = create(
         }
       },
 
+      // Public self-registration only ever creates participant accounts now.
+      // Organizer accounts are admin-only (see createOrganizerAccount below)
+      // — this is a deliberate security boundary, not an oversight: letting
+      // anyone self-serve an organizer account (even pending-approval) meant
+      // anyone could create events, invite judges, and manage contestants
+      // the moment an admin got careless with an approval click.
       register: async (userData) => {
         set({ loading: true });
 
         const email = String(userData?.email || '').trim().toLowerCase();
         const password = String(userData?.password || '');
-        const role = 'organizer';
+        const role = 'participant';
         const name = String(userData?.name || '').trim() || email || 'FairPlay User';
 
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
@@ -405,7 +411,8 @@ const useAuthStore = create(
         try {
           // Real Supabase Auth signup — the password is hashed and stored by
           // Supabase itself, never touched by app code. The on_auth_user_created
-          // trigger (supabase/schema.sql) creates the matching profiles row.
+          // trigger (supabase/schema.sql) creates the matching profiles row,
+          // active immediately since only 'organizer' defaults to 'pending'.
           const { data, error } = await supabase.auth.signUp({
             email,
             password,
@@ -421,40 +428,17 @@ const useAuthStore = create(
           if (!data.session) {
             // Email confirmation is required by this project's Supabase Auth
             // settings — there's no active session yet, so we can't build a
-            // logged-in state. The trigger already created the profile as
-            // 'pending', so after confirming their email they'll still need
-            // an admin to approve them before they can sign in.
+            // logged-in state. They can sign in as soon as they confirm.
             set({ loading: false, initialized: true });
             return {
               success: true,
-              requiresApproval: true,
+              requiresApproval: false,
               requiresEmailConfirmation: true,
-              message: 'Check your email to confirm your account. An admin will also need to approve it before you can sign in.',
+              message: 'Check your email to confirm your account, then sign in.',
             };
           }
 
           const sessionUser = await buildSessionUser(data.user);
-
-          if (sessionUser?.status === 'pending') {
-            // Email confirmation is off for this project, so signUp() above
-            // already opened a real session — sign it back out immediately
-            // rather than let a not-yet-approved organizer into the dashboard.
-            await supabase.auth.signOut();
-            const users = await fetchProfilesList().catch(() => get().users);
-            set({
-              users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(users),
-              loading: false,
-              initialized: true,
-            });
-            return {
-              success: true,
-              requiresApproval: true,
-              requiresEmailConfirmation: false,
-              message: 'Your organizer account has been submitted for admin approval. You will be notified once approved.',
-            };
-          }
-
           const users = await fetchProfilesList().catch(() => get().users);
 
           set({
@@ -473,14 +457,46 @@ const useAuthStore = create(
             user: sessionUser,
             requiresApproval: false,
             requiresEmailConfirmation: false,
-            message: 'Organizer account created.',
+            message: 'Participant account created.',
           };
         } catch (error) {
           set({ loading: false, initialized: true });
           return {
             success: false,
-            error: describeAuthError(error, { action: 'creating your organizer account' }),
+            error: describeAuthError(error, { action: 'creating your account' }),
           };
+        }
+      },
+
+      // Admin-only: creates an already-active organizer account with a
+      // specific email/password the admin sets, via the create-organizer
+      // Edge Function (service role — a plain client-side signUp() here
+      // would replace the admin's own session with the new organizer's).
+      createOrganizerAccount: async ({ name, email, password }) => {
+        if (!SUPABASE_AUTH_ENABLED || !supabase) {
+          return { success: false, error: NOT_CONNECTED_MESSAGE };
+        }
+
+        try {
+          const { data, error } = await supabase.functions.invoke('create-organizer', {
+            body: { name, email, password },
+          });
+
+          if (error) {
+            const bodyFromResponse = await error.context?.json?.().catch(() => null);
+            throw new Error(bodyFromResponse?.error || data?.error || error.message || 'Unable to create this organizer account.');
+          }
+          if (data?.error) throw new Error(data.error);
+
+          const users = await fetchProfilesList().catch(() => get().users);
+          set({
+            users,
+            organizerApplications: buildOrganizerApplicationsFromUsers(users),
+          });
+
+          return { success: true, userId: data?.userId };
+        } catch (error) {
+          return { success: false, error: error.message || 'Unable to create this organizer account.' };
         }
       },
 
