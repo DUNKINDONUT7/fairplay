@@ -8,6 +8,32 @@ import useScoreStore from '../../store/scoreStore';
 import useRegistrationStore from '../../store/registrationStore';
 import SmartQRCode from '../../components/qr/SmartQRCode';
 
+const EVENT_TYPE_ICON = {
+  esports: 'bi-controller',
+  singing: 'bi-mic-fill',
+  dance: 'bi-music-note-beamed',
+  sportsfest: 'bi-award-fill',
+  academic: 'bi-mortarboard-fill',
+  hackathon: 'bi-laptop-fill',
+  pageant: 'bi-gem',
+};
+
+function eventTypeIcon(type) {
+  return EVENT_TYPE_ICON[type] || 'bi-trophy-fill';
+}
+
+function IconChip({ icon, color, size = 44 }) {
+  return (
+    <span style={{
+      width: size, height: size, borderRadius: size >= 40 ? 12 : 10,
+      background: `${color}16`, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color, fontSize: size >= 40 ? 20 : 16, flexShrink: 0,
+    }}>
+      <i className={`bi ${icon}`} />
+    </span>
+  );
+}
+
 export default function ParticipantDashboard() {
   const { user } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
@@ -67,26 +93,27 @@ export default function ParticipantDashboard() {
   return (
     <DashboardLayout title="Participant Dashboard" subtitle="Browse events, register, and view your scores">
       {/* Quick Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 16, marginBottom: 28 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 16, marginBottom: 28 }}>
         {[
-          { label: 'Open Events', value: openEvents.length, icon: '📅', color: '#2563eb' },
-          { label: 'Active Registrations', value: myRegistrations.length, icon: '✅', color: '#10b981' },
-          { label: 'Completed Events', value: completedCount, icon: '🏆', color: '#9333ea' },
-          { label: 'Your Ranking', value: myRank ? `#${myRank}` : '—', icon: '📊', color: '#d97706' },
+          { label: 'Open Events', value: openEvents.length, icon: 'bi-calendar-event-fill', color: '#2563eb' },
+          { label: 'Active Registrations', value: myRegistrations.length, icon: 'bi-check-circle-fill', color: '#10b981' },
+          { label: 'Completed Events', value: completedCount, icon: 'bi-trophy-fill', color: '#9333ea' },
+          { label: 'Your Ranking', value: myRank ? `#${myRank}` : '—', icon: 'bi-bar-chart-line-fill', color: '#d97706' },
         ].map((stat, i) => (
           <motion.div
             key={stat.label}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
+            whileHover={{ y: -3, boxShadow: '0 16px 34px rgba(37,99,235,0.12)' }}
             transition={{ delay: i * 0.08 }}
             style={{ ...cardStyle, padding: 20, borderLeft: `3px solid ${stat.color}` }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
               <div>
-                <p style={{ fontSize: 11, color: '#64748b', marginBottom: 4 }}>{stat.label}</p>
-                <p style={{ fontSize: 28, fontWeight: 800, color: stat.color }}>{stat.value}</p>
+                <p style={{ fontSize: 11, color: '#64748b', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{stat.label}</p>
+                <p style={{ fontSize: 28, fontWeight: 800, color: stat.color, margin: 0 }}>{stat.value}</p>
               </div>
-              <span style={{ fontSize: 24 }}>{stat.icon}</span>
+              <IconChip icon={stat.icon} color={stat.color} />
             </div>
           </motion.div>
         ))}
@@ -96,31 +123,40 @@ export default function ParticipantDashboard() {
       <div style={{ ...cardStyle, marginBottom: 28, display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap', background: 'linear-gradient(135deg, #eff6ff, #f0f9ff)', border: '1px solid #bfdbfe' }}>
         {myQrToken ? (
           <>
-            <div>
+            <div style={{ padding: 10, background: '#ffffff', borderRadius: 14, boxShadow: '0 6px 18px rgba(37,99,235,0.1)' }}>
               <SmartQRCode token={myQrToken} size={140} />
             </div>
             <div style={{ flex: 1, minWidth: '250px' }}>
-              <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>My Event Pass</h3>
+              <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: 10 }}>
+                <i className="bi bi-qr-code-scan" style={{ color: '#2563eb' }} />
+                My Event Pass
+              </h3>
               <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, marginBottom: '16px' }}>
                 Show this QR code to organizers for fast check-in, or to judges when it's your turn to perform.
               </p>
-              <span style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontSize: 12, fontWeight: 700 }}>Active Pass</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontSize: 12, fontWeight: 700 }}>
+                <i className="bi bi-shield-check" />
+                Active Pass
+              </span>
             </div>
           </>
         ) : (
-          <div style={{ flex: 1 }}>
-            <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>No Event Pass Yet</h3>
-            <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6 }}>
-              Register for an event below to get your personal check-in QR code.
-            </p>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
+            <IconChip icon="bi-qr-code" color="#2563eb" size={52} />
+            <div>
+              <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', marginBottom: '6px' }}>No Event Pass Yet</h3>
+              <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, margin: 0 }}>
+                Register for an event below to get your personal check-in QR code.
+              </p>
+            </div>
           </div>
         )}
       </div>
 
       {/* Search */}
-      <div style={{ ...cardStyle, marginBottom: 20 }}>
+      <div style={{ ...cardStyle, marginBottom: 20, padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 18 }}>🔍</span>
+          <i className="bi bi-search" style={{ fontSize: 16, color: '#94a3b8' }} />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -137,15 +173,16 @@ export default function ParticipantDashboard() {
 
       {/* Available Events */}
       <div style={cardStyle}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
-          📅 Available Events
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, color: '#0f172a' }}>
+          <IconChip icon="bi-calendar-event-fill" color="#2563eb" size={32} />
+          Available Events
         </h3>
 
         {filteredEvents.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>
-            <p style={{ fontSize: 40, marginBottom: 12 }}>📅</p>
+            <i className="bi bi-calendar-x" style={{ fontSize: 40, marginBottom: 12, display: 'block', color: '#cbd5e1' }} />
             <p style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', marginBottom: 4 }}>No events available</p>
-            <p style={{ fontSize: 13 }}>Check back later for new events</p>
+            <p style={{ fontSize: 13, margin: 0 }}>Check back later for new events</p>
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 12 }}>
@@ -154,6 +191,7 @@ export default function ParticipantDashboard() {
                 key={event.id}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
+                whileHover={{ borderColor: '#93c5fd', background: '#f0f7ff' }}
                 transition={{ delay: i * 0.05 }}
                 style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -164,19 +202,11 @@ export default function ParticipantDashboard() {
                 }}
               >
                 <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ fontSize: 24 }}>
-                      {event.type === 'esports' ? '🎮' :
-                       event.type === 'singing' ? '🎤' :
-                       event.type === 'dance' ? '💃' :
-                       event.type === 'sportsfest' ? '🏅' :
-                       event.type === 'academic' ? '📚' :
-                       event.type === 'hackathon' ? '💻' :
-                       event.type === 'pageant' ? '👑' : '🏆'}
-                    </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <IconChip icon={eventTypeIcon(event.type)} color="#2563eb" size={38} />
                     <div>
-                      <p style={{ fontWeight: 600, fontSize: 15, color: '#0f172a' }}>{event.title}</p>
-                      <p style={{ fontSize: 12, color: '#64748b' }}>
+                      <p style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', margin: 0 }}>{event.title}</p>
+                      <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>
                         {event.startDate || 'TBD'} · {event.location || 'Online'}
                         · {event.participants}/{event.maxParticipants || '∞'} participants
                       </p>
@@ -197,10 +227,11 @@ export default function ParticipantDashboard() {
                     padding: '10px 20px', borderRadius: 10,
                     background: 'linear-gradient(135deg, #2563eb, #0ea5e9)',
                     border: 'none', color: '#fff', fontWeight: 700, fontSize: 13,
-                    cursor: 'pointer',
+                    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
                   }}
                 >
                   Register Now
+                  <i className="bi bi-arrow-right" />
                 </motion.button>
               </motion.div>
             ))}
@@ -210,11 +241,13 @@ export default function ParticipantDashboard() {
 
       {/* Leaderboard Preview */}
       <div style={{ ...cardStyle, marginTop: 20 }}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8, color: '#0f172a' }}>
-          🏆 Live Leaderboard{myPrimaryEvent ? ` — ${myPrimaryEvent.title}` : ''}
+        <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 10, color: '#0f172a' }}>
+          <IconChip icon="bi-trophy-fill" color="#d97706" size={32} />
+          Live Leaderboard{myPrimaryEvent ? ` — ${myPrimaryEvent.title}` : ''}
         </h3>
         {myLeaderboard.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 32, color: '#64748b', fontSize: 14 }}>
+            <i className="bi bi-bar-chart" style={{ fontSize: 32, marginBottom: 10, display: 'block', color: '#cbd5e1' }} />
             {myPrimaryEvent ? 'No scores submitted yet for this event.' : 'Register for an ongoing event to see live rankings here.'}
           </div>
         ) : (
