@@ -189,6 +189,25 @@ const useNotificationStore = create(
         });
       },
 
+      notifyNewEventAvailable: async (event) => {
+        if (!event?.id) return null;
+        const title = event.title || event.name || 'A new event';
+        return get().createSystemNotification({
+          title: 'New event published',
+          message: `${title} is now open. Check it out and register if you're interested.`,
+          type: 'info',
+          category: 'event-published',
+          targetRoles: ['participant'],
+          sourceKey: `event-published:${event.id}`,
+          entityType: 'event',
+          entityId: event.id,
+          actionUrl: '/participant/events',
+          metadata: {
+            eventTitle: title,
+          },
+        });
+      },
+
       notifyScoreSubmitted: async (score, event = null, action = 'submitted') => {
         const eventId = score?.eventId || score?.event_id || event?.id;
         const contestantName = score?.contestantName || score?.contestant_name || 'a contestant';

@@ -62,7 +62,7 @@ export async function assignJudge(assignment) {
     console.error('assignJudge error:', error.message);
     throw error;
   }
-
+}
 
 export async function logJudgeStatus(statusLog) {
   if (!isSupabaseConfigured || !supabase) return statusLog;

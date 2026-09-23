@@ -354,6 +354,9 @@ const useEventStore = create(
             error: null,
           }));
           await useNotificationStore.getState().notifyEventCreated(normalizedEvent);
+          if (normalizedEvent.status !== 'draft') {
+            await useNotificationStore.getState().notifyNewEventAvailable(normalizedEvent);
+          }
           return normalizedEvent;
         }
 
@@ -395,6 +398,9 @@ const useEventStore = create(
             error: null,
           }));
           await useNotificationStore.getState().notifyEventCreated(createdEvent);
+          if (createdEvent.status !== 'draft') {
+            await useNotificationStore.getState().notifyNewEventAvailable(createdEvent);
+          }
           return createdEvent;
         } catch (error) {
           console.error('Error creating event:', error.message);
@@ -415,6 +421,10 @@ const useEventStore = create(
         set((state) => ({
           events: state.events.map((event) => (String(event.id) === String(eventId) ? updatedEvent : event)),
         }));
+
+        if (current.status === 'draft' && updatedEvent.status !== 'draft') {
+          await useNotificationStore.getState().notifyNewEventAvailable(updatedEvent);
+        }
 
         if (isSupabaseConfigured) {
           try {
