@@ -47,41 +47,41 @@ export default function ParticipantScores() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05 }}
-            style={{ background: 'rgba(15,20,25,0.6)', border: '1px solid rgba(6,182,212,0.1)', borderRadius: 16, padding: 24 }}
+            style={{ background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 16, padding: 24, boxShadow: '0 10px 30px rgba(37,99,235,0.06)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{result.event}</h3>
-              <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: result.status === 'completed' ? 'rgba(16,185,129,0.15)' : 'rgba(6,182,212,0.15)', color: result.status === 'completed' ? '#10b981' : '#06b6d4' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{result.event}</h3>
+              <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: result.status === 'completed' ? '#dcfce7' : '#dbeafe', color: result.status === 'completed' ? '#15803d' : '#2563eb' }}>
                 {result.status}
               </span>
             </div>
 
             {result.score !== null ? (
-              <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: 12, padding: 20, marginBottom: 12 }}>
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 20, marginBottom: 12 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   <div style={{ textAlign: 'center' }}>
-                    <p style={{ fontSize: 12, color: '#a0aec0', marginBottom: 4 }}>Score</p>
+                    <p style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>Score</p>
                     <p style={{ fontSize: 36, fontWeight: 900, color: '#10b981', margin: 0 }}>{result.score}</p>
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <p style={{ fontSize: 12, color: '#a0aec0', marginBottom: 4 }}>Rank</p>
-                    <p style={{ fontSize: 36, fontWeight: 900, color: '#06b6d4', margin: 0 }}>{result.rank ? `#${result.rank}` : 'N/A'}</p>
+                    <p style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>Rank</p>
+                    <p style={{ fontSize: 36, fontWeight: 900, color: '#2563eb', margin: 0 }}>{result.rank ? `#${result.rank}` : 'N/A'}</p>
                   </div>
                 </div>
-                <p style={{ textAlign: 'center', fontSize: 13, color: '#a0aec0', marginTop: 12, marginBottom: 0 }}>
+                <p style={{ textAlign: 'center', fontSize: 13, color: '#64748b', marginTop: 12, marginBottom: 0 }}>
                   Out of {result.total || 0} ranked contestants
                 </p>
               </div>
             ) : (
-              <div style={{ background: 'rgba(6,182,212,0.05)', borderRadius: 12, padding: 24, textAlign: 'center', marginBottom: 12 }}>
-                <p style={{ color: '#a0aec0', fontSize: 13, margin: 0 }}>Scores will appear once judging submissions are finalized.</p>
+              <div style={{ background: '#eff6ff', border: '1px solid #dbeafe', borderRadius: 12, padding: 24, textAlign: 'center', marginBottom: 12 }}>
+                <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>Scores will appear once judging submissions are finalized.</p>
               </div>
             )}
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button
                 onClick={() => navigate(`/events/${result.eventId}/leaderboard`)}
-                style={{ flex: 1, padding: '8px', borderRadius: 8, background: 'rgba(6,182,212,0.12)', border: '1px solid rgba(6,182,212,0.2)', color: '#06b6d4', fontWeight: 600, fontSize: 12, cursor: 'pointer' }}
+                style={{ flex: 1, padding: '8px', borderRadius: 8, background: '#dbeafe', border: '1px solid #bfdbfe', color: '#2563eb', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}
               >
                 Open Leaderboard
               </button>
@@ -92,7 +92,7 @@ export default function ParticipantScores() {
                     navigate('/participant/profile', { state: { certificateId: result.certificate.id } });
                   }
                 }}
-                style={{ flex: 1, padding: '8px', borderRadius: 8, background: result.certificate ? 'rgba(16,185,129,0.12)' : 'rgba(255,255,255,0.05)', border: `1px solid ${result.certificate ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.08)'}`, color: result.certificate ? '#10b981' : '#64748b', fontWeight: 600, fontSize: 12, cursor: result.certificate ? 'pointer' : 'not-allowed' }}
+                style={{ flex: 1, padding: '8px', borderRadius: 8, background: result.certificate ? '#dcfce7' : '#f1f5f9', border: `1px solid ${result.certificate ? '#bbf7d0' : '#e2e8f0'}`, color: result.certificate ? '#15803d' : '#94a3b8', fontWeight: 700, fontSize: 12, cursor: result.certificate ? 'pointer' : 'not-allowed' }}
               >
                 {result.certificate ? 'View Certificate' : 'Certificate Pending'}
               </button>

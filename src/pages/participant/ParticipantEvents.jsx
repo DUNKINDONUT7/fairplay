@@ -45,6 +45,12 @@ export default function ParticipantEvents() {
     }
   };
 
+  const statusStyle = (status) => {
+    if (status === 'open') return { background: '#dcfce7', color: '#15803d' };
+    if (status === 'full') return { background: '#fee2e2', color: '#dc2626' };
+    return { background: '#f1f5f9', color: '#64748b' };
+  };
+
   return (
     <DashboardLayout title="Event Registration" subtitle="Browse live events and submit registrations through the system data flow">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
@@ -54,16 +60,16 @@ export default function ParticipantEvents() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.05 }}
-            style={{ background: 'rgba(15,20,25,0.6)', border: '1px solid rgba(6,182,212,0.1)', borderRadius: 16, padding: 24 }}
+            style={{ background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 16, padding: 24, boxShadow: '0 10px 30px rgba(37,99,235,0.06)' }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 12 }}>
-              <h3 style={{ fontSize: 16, fontWeight: 700 }}>{event.title}</h3>
-              <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: event.status === 'open' ? 'rgba(16,185,129,0.15)' : event.status === 'full' ? 'rgba(239,68,68,0.15)' : 'rgba(107,114,128,0.15)', color: event.status === 'open' ? '#10b981' : event.status === 'full' ? '#ef4444' : '#6b7280' }}>
+              <h3 style={{ fontSize: 16, fontWeight: 700, color: '#0f172a' }}>{event.title}</h3>
+              <span style={{ padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWeight: 600, ...statusStyle(event.status) }}>
                 {event.status}
               </span>
             </div>
-            <p style={{ fontSize: 13, color: '#a0aec0', marginBottom: 8 }}>{event.type}</p>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#a0aec0', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 8, textTransform: 'capitalize' }}>{event.type}</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#64748b', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
               <span>Date: {event.date}</span>
               <span>Slots: {event.slots}</span>
               <span>Award: {event.prize}</span>
@@ -71,7 +77,13 @@ export default function ParticipantEvents() {
             <button
               onClick={() => handleRegister(event)}
               disabled={event.status !== 'open'}
-              style={{ width: '100%', padding: '10px', borderRadius: 8, background: event.status === 'open' ? 'linear-gradient(135deg, #06b6d4, #0084ff)' : 'rgba(255,255,255,0.04)', color: event.status === 'open' ? '#000' : '#666', border: 'none', fontWeight: 700, fontSize: 13, cursor: event.status === 'open' ? 'pointer' : 'not-allowed' }}
+              style={{
+                width: '100%', padding: '10px', borderRadius: 8,
+                background: event.status === 'open' ? 'linear-gradient(135deg, #2563eb, #0ea5e9)' : '#f1f5f9',
+                color: event.status === 'open' ? '#fff' : '#94a3b8',
+                border: 'none', fontWeight: 700, fontSize: 13,
+                cursor: event.status === 'open' ? 'pointer' : 'not-allowed',
+              }}
             >
               {event.status === 'open' ? `Register ${event.format === 'team' ? 'Team' : 'Individually'}` : event.status === 'full' ? 'Registration Full' : 'Registration Closed'}
             </button>
