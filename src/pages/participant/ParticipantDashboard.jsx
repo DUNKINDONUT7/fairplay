@@ -63,7 +63,12 @@ export default function ParticipantDashboard() {
     fetchRegistrations();
   }, [fetchEvents, fetchRegistrations]);
 
-  const openEvents = events.filter(e => e.status === 'active' || e.status === 'upcoming');
+  // Hide only unpublished/finished events (draft, completed, rejected,
+  // archived) instead of hardcoding an allow-list of "visible" statuses —
+  // an allow-list silently hid events left in states like 'approved' or
+  // 'ongoing' that other parts of the app already treat as published.
+  const HIDDEN_STATUSES = ['draft', 'completed', 'rejected', 'archived'];
+  const openEvents = events.filter((e) => !HIDDEN_STATUSES.includes(e.status));
 
   const filteredEvents = openEvents.filter(e =>
     e.title.toLowerCase().includes(search.toLowerCase())
