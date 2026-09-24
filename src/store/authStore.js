@@ -300,7 +300,7 @@ const useAuthStore = create(
           const [{ data: sessionData }, profiles] = await Promise.all([
             Promise.race([
               supabase.auth.getSession(),
-              new Promise((resolve) => setTimeout(() => resolve({ data: { session: null } }), 8000)),
+              new Promise((resolve) => setTimeout(() => resolve({ data: { session: null } }), 4000)),
             ]),
             fetchProfilesList().catch(() => []),
           ]);
