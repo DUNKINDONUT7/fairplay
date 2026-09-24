@@ -427,7 +427,14 @@ const useAuthStore = create(
             password,
             options: {
               data: { full_name: name, role },
-              emailRedirectTo: APP_URL || undefined,
+              // Lands on a proper in-app "email confirmed" page instead of
+              // Supabase's default behavior of redirecting to whatever the
+              // project's Site URL happens to be configured as (which has
+              // sent people to a dead localhost page) — this route must
+              // also be added to Supabase Dashboard > Authentication >
+              // URL Configuration > Redirect URLs, or Supabase will refuse
+              // it and fall back to the Site URL anyway.
+              emailRedirectTo: APP_URL ? `${APP_URL}/auth/confirmed` : undefined,
             },
           });
 

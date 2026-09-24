@@ -15,6 +15,7 @@ const PublicLeaderboard = lazy(() => import('./pages/public/PublicLeaderboard'))
 const AudienceScoring = lazy(() => import('./pages/public/AudienceScoring'));
 const QRInterceptor = lazy(() => import('./pages/public/QRInterceptor'));
 const QRResolver = lazy(() => import('./components/qr/QRResolver'));
+const EmailConfirmed = lazy(() => import('./pages/auth/EmailConfirmed'));
 
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminAnalytics = lazy(() => import('./pages/admin/AdminAnalytics'));
@@ -439,6 +440,7 @@ export default function App() {
           <Route path="/audience/:eventId" element={<AudienceScoring />} />
           <Route path="/qr/:token" element={<QRInterceptor />} />
           <Route path="/scan/:token" element={<QRResolver />} />
+          <Route path="/auth/confirmed" element={<EmailConfirmed />} />
 
           {/* Admin Routes */}
           <Route path="/admin" element={<MobileRestrictedRoute><ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute></MobileRestrictedRoute>} />
