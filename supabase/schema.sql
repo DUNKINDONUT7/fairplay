@@ -1634,3 +1634,35 @@ begin
   end loop;
 end;
 $$;
+
+-- ============================================================================
+-- SECTION: Organizer approval needs a confirmed email
+-- An admin cannot approve (activate) an organizer until that organizer has
+-- clicked the link in their confirmation email. Safe to re-run.
+-- ============================================================================
+
+create or replace function public.require_confirmed_email_for_organizer_approval()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+begin
+  if new.role = 'organizer'
+     and new.status = 'active'
+     and old.status is distinct from 'active'
+     and exists (
+       select 1 from auth.users u
+       where u.id::text = new.id
+         and u.email_confirmed_at is null
+     ) then
+    raise exception 'This organizer has not confirmed their email yet. Ask them to click the link in the confirmation email, then approve again.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists require_confirmed_email_before_approval on public.profiles;
+create trigger require_confirmed_email_before_approval
+before update on public.profiles
+for each row execute function public.require_confirmed_email_for_organizer_approval();

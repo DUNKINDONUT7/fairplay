@@ -24,30 +24,40 @@ serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  // Same key lookup as create-organizer: this project stores the working
+  // service_role key as PROJECT_SERVICE_ROLE_KEY (see the note there).
+  const serviceRoleKey = Deno.env.get('PROJECT_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
 
-  if (!supabaseUrl || !serviceRoleKey) {
+  if (!supabaseUrl || !anonKey || !serviceRoleKey) {
     return jsonResponse({ error: 'Admin service is not configured.' }, 500);
   }
 
+  // Caller-identity client only: the caller's own token, used to confirm who
+  // is asking. The privileged client below must keep the service_role key as
+  // its Authorization header — overriding it with the caller's token (as this
+  // function used to) makes the Admin API reject deleteUser.
   const authHeader = req.headers.get('Authorization') || '';
-  const supabase = createClient(supabaseUrl, serviceRoleKey, {
+  const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
   });
+  const serviceClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 
-  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const { data: authData, error: authError } = await callerClient.auth.getUser();
   if (authError || !authData?.user) {
-    return jsonResponse({ error: 'Unauthorized.' }, 401);
+    return jsonResponse({ error: 'Please sign in again.' }, 401);
   }
 
-  const { data: callerProfile, error: profileError } = await supabase
+  const { data: callerProfile, error: profileError } = await serviceClient
     .from('profiles')
     .select('role')
     .eq('id', authData.user.id)
     .maybeSingle();
 
   if (profileError || !callerProfile) {
-    return jsonResponse({ error: 'Caller profile could not be loaded.' }, 403);
+    return jsonResponse({ error: 'Your profile could not be loaded.' }, 403);
   }
 
   if (callerProfile.role !== 'admin' && callerProfile.role !== 'organizer') {
@@ -64,7 +74,7 @@ serve(async (req) => {
     return jsonResponse({ error: 'You cannot delete your own account.' }, 400);
   }
 
-  const { data: targetProfile, error: targetProfileError } = await supabase
+  const { data: targetProfile, error: targetProfileError } = await serviceClient
     .from('profiles')
     .select('id, role, email')
     .eq('id', userId)
@@ -82,16 +92,17 @@ serve(async (req) => {
     return jsonResponse({ error: 'Organizers can only remove judge accounts.' }, 403);
   }
 
-  const { error: profileDeleteError } = await supabase.from('profiles').delete().eq('id', userId);
-  if (profileDeleteError) {
-    return jsonResponse({ error: profileDeleteError.message }, 500);
+  // Remove the sign-in account first: if that fails, nothing has changed and
+  // the admin can retry, instead of leaving a profile-less account that can
+  // still log in.
+  const { error: authDeleteError } = await serviceClient.auth.admin.deleteUser(userId);
+  if (authDeleteError && authDeleteError.status !== 404) {
+    return jsonResponse({ error: `The account could not be deleted: ${authDeleteError.message}` }, 500);
   }
 
-  // Actually remove the Supabase Auth account — deleting only the profiles
-  // row (the old behavior) left the account able to log in with no profile.
-  const { error: authDeleteError } = await supabase.auth.admin.deleteUser(userId);
-  if (authDeleteError && authDeleteError.status !== 404) {
-    return jsonResponse({ error: `Profile removed, but the auth account could not be deleted: ${authDeleteError.message}` }, 500);
+  const { error: profileDeleteError } = await serviceClient.from('profiles').delete().eq('id', userId);
+  if (profileDeleteError) {
+    return jsonResponse({ error: `The sign-in account was removed, but the profile could not be: ${profileDeleteError.message}` }, 500);
   }
 
   return jsonResponse({ deleted: true });
