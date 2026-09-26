@@ -20,7 +20,7 @@ export default function OrganizerScoring() {
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
   const { events, fetchEvents, updateEvent } = useEventStore();
-  const { success } = useNotificationStore();
+  const { success, error } = useNotificationStore();
   const { fetchScores, getLiveFeed, calculateLeaderboard, scores } = useScoreStore();
   const { fetchAudienceScores, getAudienceSummary, subscribeToAudienceScores, submissions } = useAudienceScoreStore();
   const { fetchJudges, getJudgesByEvent } = useJudgeStore();
@@ -106,12 +106,19 @@ export default function OrganizerScoring() {
     success('Restored all contestants — no one is marked eliminated.');
   };
 
+  const isFinalized = selected?.status === 'completed';
+
   const handleFinalize = async () => {
-    if (!selected) return;
+    if (!selected || isFinalized) return;
     setFinalizing(true);
     try {
       const result = await finalizeEventWorkflow(selected);
-      success(`Locked ${result.lockedCount} score submission${result.lockedCount === 1 ? '' : 's'} for ${selected.title}.`);
+      // Flips the event itself into the same "closed" state the judge-facing
+      // screens (JudgeScoring, JudgeLiveScoring, JudgePublicScoring) already
+      // gate on, and doubles as the one-time flag that hides this button
+      // once finalized — see isFinalized above.
+      await updateEvent(selected.id, { scoringActive: false, status: 'completed' });
+      success(`Locked ${result.lockedCount} score submission${result.lockedCount === 1 ? '' : 's'} for ${selected.title}. Judges can no longer submit or edit scores.`);
     } finally {
       setFinalizing(false);
       setConfirmingFinalize(false);
@@ -351,9 +358,16 @@ export default function OrganizerScoring() {
                     <p style={{ fontSize: 24, fontWeight: 800, color: '#2563eb' }}>{leaderboard.length}</p>
                   </div>
                 </div>
-                <button onClick={() => setConfirmingFinalize(true)} style={primaryButtonStyle}>
-                  Finalize and Lock Scores
-                </button>
+                {isFinalized ? (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '12px 24px', borderRadius: 12, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d', fontWeight: 800 }}>
+                    <i className="bi bi-lock-fill" />
+                    Scores Finalized and Locked
+                  </div>
+                ) : (
+                  <button onClick={() => setConfirmingFinalize(true)} style={primaryButtonStyle}>
+                    Finalize and Lock Scores
+                  </button>
+                )}
               </div>
             )}
           </motion.div>

@@ -31,6 +31,10 @@ export default function JudgeScoring() {
     ? resolvedEvent.contestants.filter((c) => !eliminatedIds.has(String(c.id)))
     : [];
   const criteria = resolvedEvent?.criteria || [];
+  // Once the organizer finalizes an event (OrganizerScoring.jsx's "Finalize
+  // and Lock Scores"), it flips scoringActive to false and status to
+  // 'completed' — the same signal JudgeLiveScoring.jsx already gates on.
+  const isFinalized = Boolean(resolvedEvent) && resolvedEvent.scoringActive === false && resolvedEvent.status === 'completed';
   const selectedContestant = contestants.find((c) => String(c.id) === String(selectedContestantId)) || null;
 
   useEffect(() => {
@@ -73,6 +77,11 @@ export default function JudgeScoring() {
       return;
     }
 
+    if (isFinalized) {
+      error('This event has been finalized — scores are locked and can no longer be submitted or changed.');
+      return;
+    }
+
     const existingScore = getScoreByKey(resolvedEvent.id, judgeId, selectedContestant.id);
     const payload = {
       contestantName: selectedContestant.name,
@@ -82,7 +91,11 @@ export default function JudgeScoring() {
     };
 
     if (existingScore) {
-      await updateScore(resolvedEvent.id, judgeId, selectedContestant.id, scores, payload);
+      const updated = await updateScore(resolvedEvent.id, judgeId, selectedContestant.id, scores, payload);
+      if (updated === false) {
+        error('This score is already locked and can no longer be changed.');
+        return;
+      }
       success('Score updated successfully.');
     } else {
       await submitScore(resolvedEvent.id, judgeId, selectedContestant.id, scores, payload);
@@ -180,7 +193,15 @@ export default function JudgeScoring() {
           </div>
         )}
 
-        {resolvedEvent && selectedContestant && (
+        {resolvedEvent && isFinalized && (
+          <div style={{ background: '#ffffff', border: '1px solid #fde68a', borderRadius: '20px', padding: '40px', textAlign: 'center', color: '#0f172a' }}>
+            <i className="bi bi-lock-fill" style={{ fontSize: '40px', color: '#b45309', display: 'block', marginBottom: '16px' }} />
+            <p style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>Scoring Finalized</p>
+            <p style={{ fontSize: '13px', color: '#64748b' }}>The organizer has finalized and locked scores for this event. No further submissions or edits are allowed.</p>
+          </div>
+        )}
+
+        {resolvedEvent && !isFinalized && selectedContestant && (
           criteria.length === 0 ? (
             <div style={{ background: '#ffffff', border: '1px solid #fecaca', borderRadius: '20px', padding: '24px', color: '#0f172a' }}>
               This event has no scoring criteria yet. Ask the organizer to add criteria to this event.

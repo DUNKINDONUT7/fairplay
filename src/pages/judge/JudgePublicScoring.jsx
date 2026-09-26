@@ -101,7 +101,12 @@ export default function JudgePublicScoring() {
       };
       const existing = getScoreByKey(event.id, judgeId, selectedContestant.id);
       if (existing) {
-        await updateScore(event.id, judgeId, selectedContestant.id, scores, payload);
+        const updated = await updateScore(event.id, judgeId, selectedContestant.id, scores, payload);
+        if (updated === false) {
+          setError('This score is already locked and can no longer be changed.');
+          setSubmitting(false);
+          return;
+        }
       } else {
         await submitScore(event.id, judgeId, selectedContestant.id, scores, payload);
       }
@@ -162,6 +167,30 @@ export default function JudgePublicScoring() {
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         <i className="bi bi-arrow-repeat" style={{ fontSize: 40, color: '#2563eb', animation: 'spin 1s linear infinite' }} />
         <p style={{ color: '#64748b', marginTop: 16 }}>Loading event...</p>
+      </div>
+    );
+  }
+
+  // Once the organizer finalizes the event (OrganizerScoring.jsx's "Finalize
+  // and Lock Scores"), this open link must stop accepting scores entirely —
+  // it has no login gate of its own, so this is the only checkpoint.
+  const isFinalized = event.scoringActive === false && event.status === 'completed';
+  if (isFinalized) {
+    return (
+      <div style={S.fullPage}>
+        <div style={{ ...S.gateCard, textAlign: 'center' }}>
+          <i className="bi bi-lock-fill" style={{ fontSize: 48, color: '#b45309', marginBottom: 16 }} />
+          <div style={{ fontWeight: 800, fontSize: 20, color: '#0f172a', marginBottom: 8 }}>
+            Scoring Finalized
+          </div>
+          <p style={{ color: '#64748b', marginBottom: 20, lineHeight: 1.7 }}>
+            The organizer has finalized and locked scores for "{event.title}". This link no longer accepts scores.
+          </p>
+          <Link to="/" style={S.secondaryLink}>
+            <i className="bi bi-house" />
+            Back to FairPlay
+          </Link>
+        </div>
       </div>
     );
   }
