@@ -1,6 +1,27 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import useEventStore from './eventStore';
+
+// A participant scanned in at the door clearly showed up — clear any
+// earlier "No Show" mark (OrganizerEventDetail.jsx's eliminatedContestantIds
+// toggle) left over from before they arrived, so judges see them again
+// (JudgeScoring.jsx/JudgeLiveScoring.jsx both filter contestants out of
+// scoring by that same field) without the organizer having to remember to
+// go flip it back manually.
+async function clearNoShowIfPresent(eventId, attendeeId) {
+  if (!eventId || !attendeeId) return;
+  const eventStore = useEventStore.getState();
+  const event = eventStore.events.find((entry) => String(entry.id) === String(eventId));
+  if (!event) return;
+
+  const eliminatedIds = (event.eliminatedContestantIds || []).map(String);
+  if (!eliminatedIds.includes(String(attendeeId))) return;
+
+  await eventStore.updateEvent(eventId, {
+    eliminatedContestantIds: eliminatedIds.filter((id) => id !== String(attendeeId)),
+  });
+}
 
 function createAttendanceId() {
   // Wide random range — QR check-in is bursty by nature (a whole class
@@ -175,6 +196,7 @@ const useAttendanceStore = create(
           }
         }
 
+        await clearNoShowIfPresent(record.eventId, record.attendeeId);
         return record;
       },
 
