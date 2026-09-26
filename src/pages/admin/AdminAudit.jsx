@@ -24,9 +24,18 @@ export default function AdminAudit() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [searchInput, setSearchInput] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
   const [aiDetections, setAiDetections] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Debounce the search so filtering (over logs already loaded in memory)
+  // doesn't re-run on every keystroke while the admin is still typing.
+  useEffect(() => {
+    const handle = setTimeout(() => setSearchTerm(searchInput.trim().toLowerCase()), 300);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
 
   useEffect(() => {
     let active = true;
@@ -64,9 +73,16 @@ export default function AdminAudit() {
   }), [aiDetections, aiLogs, attendance, events, registrations, scores, users]);
 
   const sources = useMemo(() => ['all', ...Array.from(new Set(logs.map((log) => log.source).filter(Boolean))).sort()], [logs]);
-  const filteredLogs = useMemo(() => (
-    sourceFilter === 'all' ? logs : logs.filter((log) => log.source === sourceFilter)
-  ), [logs, sourceFilter]);
+  const filteredLogs = useMemo(() => {
+    const bySource = sourceFilter === 'all' ? logs : logs.filter((log) => log.source === sourceFilter);
+    if (!searchTerm) return bySource;
+    return bySource.filter((log) => (
+      String(log.user || '').toLowerCase().includes(searchTerm) ||
+      String(log.action || '').toLowerCase().includes(searchTerm) ||
+      String(log.target || '').toLowerCase().includes(searchTerm) ||
+      String(log.source || '').toLowerCase().includes(searchTerm)
+    ));
+  }, [logs, sourceFilter, searchTerm]);
   const totalPages = Math.max(1, Math.ceil(filteredLogs.length / limit));
   const paginatedLogs = useMemo(() => {
     const safePage = Math.min(page, totalPages);
@@ -76,7 +92,7 @@ export default function AdminAudit() {
 
   useEffect(() => {
     setPage(1);
-  }, [limit, sourceFilter]);
+  }, [limit, sourceFilter, searchTerm]);
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
@@ -93,9 +109,20 @@ export default function AdminAudit() {
           <p style={eyebrowStyle}>Activity</p>
           <h2 style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', margin: 0 }}>Latest system actions</h2>
         </div>
-        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} style={selectStyle}>
-          {sources.map((source) => <option key={source} value={source}>{source === 'all' ? 'All sources' : source}</option>)}
-        </select>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative' }}>
+            <i className="bi bi-search" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 13 }} />
+            <input
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
+              placeholder="Search by user, action, or target..."
+              style={{ ...selectStyle, width: 260, paddingLeft: 34 }}
+            />
+          </div>
+          <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} style={selectStyle}>
+            {sources.map((source) => <option key={source} value={source}>{source === 'all' ? 'All sources' : source}</option>)}
+          </select>
+        </div>
       </div>
       <div style={cardStyle}>
         {error ? <div style={errorStyle}>{error}</div> : null}
@@ -112,7 +139,7 @@ export default function AdminAudit() {
                 </thead>
                 <tbody>
                   {paginatedLogs.length === 0 ? (
-                    <tr><td colSpan="5" style={emptyCellStyle}>No database activity found yet.</td></tr>
+                    <tr><td colSpan="5" style={emptyCellStyle}>{searchTerm || sourceFilter !== 'all' ? 'No activity matches your search.' : 'No database activity found yet.'}</td></tr>
                   ) : paginatedLogs.map((log, index) => (
                     <tr key={`${log.source}-${log.timestamp}-${index}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       <td style={{ padding: '12px 16px', fontWeight: 700, fontSize: 14, color: '#0f172a' }}>{log.user}</td>

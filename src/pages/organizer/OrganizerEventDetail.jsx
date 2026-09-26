@@ -348,6 +348,26 @@ export default function OrganizerEventDetail() {
     notifySuccess(`Imported ${imported.length} participant${imported.length === 1 ? '' : 's'} from CSV.`);
   }
 
+  // No-shows are marked, not deleted, so the roster and any scores already
+  // submitted for them stay intact — this reuses the same
+  // eliminatedContestantIds field the leaderboard's "cut to top N" already
+  // writes to (see OrganizerScoring.jsx), which is exactly what
+  // JudgeScoring.jsx and JudgeLiveScoring.jsx already filter their
+  // contestant list against, so marking someone here removes them from
+  // judges' scoring sheets immediately with no separate judge-side change.
+  async function handleToggleNoShow(contestantId) {
+    const current = new Set((event.eliminatedContestantIds || []).map(String));
+    const key = String(contestantId);
+    const wasNoShow = current.has(key);
+    if (wasNoShow) {
+      current.delete(key);
+    } else {
+      current.add(key);
+    }
+    await updateEvent(id, { eliminatedContestantIds: Array.from(current) });
+    notifySuccess(wasNoShow ? 'Participant restored.' : 'Participant marked as a no-show.');
+  }
+
   async function handleAddScorer({ name, subEventId, subEventName }) {
     const token = `scorer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const assignment = {
@@ -648,17 +668,55 @@ export default function OrganizerEventDetail() {
             <p style={{ color: '#94a3b8', fontSize: 14 }}>No participants yet. They register via the Participant QR, or add them manually above.</p>
           ) : (
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {event.contestants.map((c) => (
-                <div key={c.id} style={{ padding: '8px 14px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 14, fontWeight: 600, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <i className={c.type === 'team' ? 'bi bi-people' : 'bi bi-person'} style={{ color: '#2563eb', fontSize: 12 }} />
-                  {c.name}
-                  {c.type === 'team' && Array.isArray(c.members) && c.members.length > 0 && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: '#2563eb', background: '#eff6ff', borderRadius: 999, padding: '2px 8px' }}>
-                      {c.members.length} member{c.members.length === 1 ? '' : 's'}
-                    </span>
-                  )}
-                </div>
-              ))}
+              {event.contestants.map((c) => {
+                const isNoShow = (event.eliminatedContestantIds || []).map(String).includes(String(c.id));
+                return (
+                  <div
+                    key={c.id}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 10,
+                      background: isNoShow ? '#fef2f2' : '#f8fafc',
+                      border: `1px solid ${isNoShow ? '#fecaca' : '#e2e8f0'}`,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: isNoShow ? '#94a3b8' : '#0f172a',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      textDecoration: isNoShow ? 'line-through' : 'none',
+                    }}
+                  >
+                    <i className={c.type === 'team' ? 'bi bi-people' : 'bi bi-person'} style={{ color: isNoShow ? '#94a3b8' : '#2563eb', fontSize: 12 }} />
+                    {c.name}
+                    {c.type === 'team' && Array.isArray(c.members) && c.members.length > 0 && (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#2563eb', background: '#eff6ff', borderRadius: 999, padding: '2px 8px' }}>
+                        {c.members.length} member{c.members.length === 1 ? '' : 's'}
+                      </span>
+                    )}
+                    {isNoShow && (
+                      <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.04em', color: '#dc2626', background: '#fee2e2', borderRadius: 999, padding: '2px 8px', textDecoration: 'none' }}>
+                        NO-SHOW
+                      </span>
+                    )}
+                    <button
+                      onClick={() => handleToggleNoShow(c.id)}
+                      title={isNoShow ? 'Restore this participant' : 'Mark as no-show'}
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        color: isNoShow ? '#16a34a' : '#dc2626',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        padding: '2px 4px',
+                        textDecoration: 'none',
+                      }}
+                    >
+                      <i className={isNoShow ? 'bi bi-arrow-counterclockwise' : 'bi bi-person-dash'} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
