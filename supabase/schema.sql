@@ -1266,3 +1266,54 @@ begin
       add constraint attendance_event_attendee_status_key unique (event_id, attendee_id, check_in_status);
   end if;
 end $$;
+
+-- ============================================================================
+-- SECTION: Automatic event closing
+-- An organizer who never manually closes a finished event leaves it stuck in
+-- an "open" status (active/ongoing/upcoming/etc.) forever, which keeps it
+-- registrable/scoreable in every screen that checks for those statuses. This
+-- job moves any event that isn't already draft/completed/archived/rejected
+-- to 'completed' once 5 full days have passed since its end_date, matching
+-- the terminal status the rest of the app already uses (see
+-- OrganizerEventDetail.jsx and ParticipantDashboard.jsx's HIDDEN_STATUSES).
+-- There is no separate 'Open'/'Closed' status in this schema, so this reuses
+-- the existing status vocabulary rather than inventing a parallel one.
+-- ============================================================================
+
+create index if not exists idx_events_status_end_date on public.events (status, end_date);
+
+create or replace function public.auto_close_expired_events()
+returns setof public.events
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return query
+  update public.events
+  set status = 'completed',
+      updated_at = timezone('utc', now())
+  where status not in ('draft', 'completed', 'archived', 'rejected')
+    and end_date is not null
+    and end_date + interval '5 days' <= timezone('utc', now())
+  returning *;
+end;
+$$;
+
+grant execute on function public.auto_close_expired_events() to service_role;
+
+-- pg_cron is a Supabase-managed extension: on most plans this needs to be
+-- turned on once via Dashboard > Database > Extensions before the create
+-- extension statement below is allowed to succeed.
+create extension if not exists pg_cron with schema extensions;
+
+do $$
+begin
+  perform cron.unschedule(jobid) from cron.job where jobname = 'auto-close-expired-events';
+end $$;
+
+select cron.schedule(
+  'auto-close-expired-events',
+  '0 0 * * *', -- once a day at 00:00 UTC
+  $$select public.auto_close_expired_events();$$
+);

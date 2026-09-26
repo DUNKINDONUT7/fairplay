@@ -1,4 +1,7 @@
 {
+  "crons": [
+    { "path": "/api/cron/auto-close-events", "schedule": "0 0 * * *" }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",
