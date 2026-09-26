@@ -70,11 +70,10 @@ export default function OrganizerContestants() {
   }), [teams, organizerEventIds, individualRegistrations.length, registrations]);
 
   const cardStyle = {
-    background: '#ffffff',
-    border: '1px solid #bfdbfe',
+    background: '#f8fafc',
+    border: '1px solid #e2e8f0',
     borderRadius: 16,
     padding: 20,
-    boxShadow: '0 14px 32px rgba(59,130,246,0.08)',
   };
 
   const tabStyle = (tab) => ({
@@ -95,27 +94,26 @@ export default function OrganizerContestants() {
     minWidth: 220,
     padding: '12px 14px',
     borderRadius: 14,
-    border: '1px solid #bfdbfe',
+    border: '1px solid #cbd5e1',
     background: '#ffffff',
-    color: '#1d4ed8',
+    color: '#0f172a',
     outline: 'none',
-    boxShadow: '0 8px 18px rgba(59,130,246,0.06)',
   };
 
   return (
     <DashboardLayout title="Participant Management" subtitle="Review registration status, teams, and individual entries">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, marginBottom: 24 }}>
         <div style={cardStyle}>
-          <p style={{ margin: 0, fontSize: 12, color: '#60a5fa', fontWeight: 600 }}>Team registrations</p>
-          <h2 style={{ margin: '10px 0 0', color: '#2563eb' }}>{summary.totalTeams}</h2>
+          <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Team registrations</p>
+          <h2 style={{ margin: '10px 0 0', color: '#0f172a' }}>{summary.totalTeams}</h2>
         </div>
         <div style={cardStyle}>
-          <p style={{ margin: 0, fontSize: 12, color: '#60a5fa', fontWeight: 600 }}>Individual registrations</p>
-          <h2 style={{ margin: '10px 0 0', color: '#2563eb' }}>{summary.totalIndividuals}</h2>
+          <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Individual registrations</p>
+          <h2 style={{ margin: '10px 0 0', color: '#0f172a' }}>{summary.totalIndividuals}</h2>
         </div>
         <div style={cardStyle}>
-          <p style={{ margin: 0, fontSize: 12, color: '#60a5fa', fontWeight: 600 }}>Events with registrations</p>
-          <h2 style={{ margin: '10px 0 0', color: '#2563eb' }}>{summary.totalEvents}</h2>
+          <p style={{ margin: 0, fontSize: 12, color: '#64748b' }}>Events with registrations</p>
+          <h2 style={{ margin: '10px 0 0', color: '#0f172a' }}>{summary.totalEvents}</h2>
         </div>
       </div>
 
@@ -151,17 +149,16 @@ export default function OrganizerContestants() {
         style={{
           overflowX: 'auto',
           background: '#ffffff',
-          border: '1px solid #bfdbfe',
+          border: '1px solid #e2e8f0',
           borderRadius: 16,
-          boxShadow: '0 18px 36px rgba(59,130,246,0.08)',
         }}
       >
         {activeTab === 'teams' ? (
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
             <thead>
-              <tr style={{ textAlign: 'left', color: '#60a5fa', fontSize: 12, background: '#eff6ff' }}>
+              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 {['Team', 'Event', 'Roster size', 'Requirements', 'Status', 'Actions'].map((column) => (
-                  <th key={column} style={{ padding: '16px 18px', borderBottom: '1px solid #dbeafe' }}>{column}</th>
+                  <th key={column} style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', fontWeight: 700 }}>{column}</th>
                 ))}
               </tr>
             </thead>
@@ -174,10 +171,10 @@ export default function OrganizerContestants() {
                   const max = Number(team.maxParticipants || event?.maxTeamMembers || event?.maxParticipants || 0);
                   const complete = (!min || rosterSize >= min) && (!max || rosterSize <= max);
                   return (
-                    <tr key={team.id} style={{ borderBottom: '1px solid #dbeafe' }}>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{team.name}</td>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{event?.title || 'Unknown event'}</td>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{rosterSize}{max ? ` / ${max}` : ''}</td>
+                    <tr key={team.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '16px 18px', color: '#0f172a', fontWeight: 700 }}>{team.name}</td>
+                      <td style={{ padding: '16px 18px', color: '#64748b' }}>{event?.title || 'Unknown event'}</td>
+                      <td style={{ padding: '16px 18px', color: '#64748b' }}>{rosterSize}{max ? ` / ${max}` : ''}</td>
                       <td style={{ padding: '16px 18px' }}>
                         <span style={{ padding: '6px 10px', borderRadius: 999, background: complete ? '#dcfce7' : '#fef3c7', color: complete ? '#15803d' : '#92400e', fontSize: 12, fontWeight: 800 }}>
                           {complete ? 'Complete' : 'Incomplete'}
@@ -200,7 +197,7 @@ export default function OrganizerContestants() {
                 })
               ) : (
                 <tr>
-                  <td colSpan="5" style={{ padding: '20px 18px', color: '#60a5fa' }}>No team entries match the current filter.</td>
+                  <td colSpan="6" style={{ padding: '40px 18px', color: '#94a3b8', textAlign: 'center' }}>No team entries match the current filter.</td>
                 </tr>
               )}
             </tbody>
@@ -208,9 +205,9 @@ export default function OrganizerContestants() {
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820 }}>
             <thead>
-              <tr style={{ textAlign: 'left', color: '#60a5fa', fontSize: 12, background: '#eff6ff' }}>
+              <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 {['Participant', 'Event', 'Email', 'Status', 'Registered'].map((column) => (
-                  <th key={column} style={{ padding: '16px 18px', borderBottom: '1px solid #dbeafe' }}>{column}</th>
+                  <th key={column} style={{ padding: '14px 18px', borderBottom: '1px solid #e2e8f0', fontWeight: 700 }}>{column}</th>
                 ))}
               </tr>
             </thead>
@@ -219,16 +216,16 @@ export default function OrganizerContestants() {
                 filteredIndividuals.map((registration) => {
                   const event = events.find((item) => String(item.id) === String(registration.eventId));
                   return (
-                    <tr key={registration.id} style={{ borderBottom: '1px solid #dbeafe' }}>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{registration.individualDetails.name}</td>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{event?.title || 'Unknown event'}</td>
-                      <td style={{ padding: '16px 18px', color: '#1d4ed8' }}>{registration.individualDetails.email || '-'}</td>
+                    <tr key={registration.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '16px 18px', color: '#0f172a', fontWeight: 700 }}>{registration.individualDetails.name}</td>
+                      <td style={{ padding: '16px 18px', color: '#64748b' }}>{event?.title || 'Unknown event'}</td>
+                      <td style={{ padding: '16px 18px', color: '#64748b' }}>{registration.individualDetails.email || '-'}</td>
                       <td style={{ padding: '16px 18px' }}>
                         <span style={{ padding: '6px 10px', borderRadius: 999, background: '#dbeafe', color: '#2563eb', fontSize: 12, fontWeight: 700 }}>
                           {registration.status || 'submitted'}
                         </span>
                       </td>
-                      <td style={{ padding: '16px 18px', color: '#60a5fa' }}>
+                      <td style={{ padding: '16px 18px', color: '#64748b' }}>
                         {registration.createdAt ? new Date(registration.createdAt).toLocaleDateString() : '-'}
                       </td>
                     </tr>
@@ -236,7 +233,7 @@ export default function OrganizerContestants() {
                 })
               ) : (
                 <tr>
-                  <td colSpan="5" style={{ padding: '20px 18px', color: '#60a5fa' }}>No individual entries match the current filter.</td>
+                  <td colSpan="5" style={{ padding: '40px 18px', color: '#94a3b8', textAlign: 'center' }}>No individual entries match the current filter.</td>
                 </tr>
               )}
             </tbody>
@@ -285,9 +282,9 @@ export default function OrganizerContestants() {
 
 function Info({ label, value }) {
   return (
-    <div style={{ padding: 12, borderRadius: 12, background: '#eff6ff', border: '1px solid #bfdbfe' }}>
-      <div style={{ color: '#60a5fa', fontSize: 11, fontWeight: 800, textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ color: '#1d4ed8', fontWeight: 800, marginTop: 4 }}>{value}</div>
+    <div style={{ padding: 12, borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+      <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ color: '#0f172a', fontWeight: 700, marginTop: 4 }}>{value}</div>
     </div>
   );
 }

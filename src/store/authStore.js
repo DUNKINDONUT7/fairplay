@@ -349,26 +349,32 @@ const useAuthStore = create(
 
         if (!authListenerBound) {
           authListenerBound = true;
-          supabase.auth.onAuthStateChange(async (_event, session) => {
+          supabase.auth.onAuthStateChange((_event, session) => {
             const version = ++authCallbackVersion;
-            const nextUser = session?.user ? await buildSessionUser(session.user) : null;
-            const users = session?.user ? await fetchProfilesList().catch(() => get().users) : get().users;
+            // Supabase runs this callback while holding its auth lock; awaiting
+            // another Supabase call here deadlocks every later request (data
+            // loads and sign-out hang until a reload). Defer the work so the
+            // lock is released first.
+            setTimeout(async () => {
+              const nextUser = session?.user ? await buildSessionUser(session.user) : null;
+              const users = session?.user ? await fetchProfilesList().catch(() => get().users) : get().users;
 
-            // A newer auth event (e.g. this one was a stale token-refresh
-            // that started before a sign-out, and only resolved after it)
-            // has since started and already set the authoritative state —
-            // applying this result now would revive a session that's
-            // actually already gone.
-            if (version !== authCallbackVersion) return;
+              // A newer auth event (e.g. this one was a stale token-refresh
+              // that started before a sign-out, and only resolved after it)
+              // has since started and already set the authoritative state —
+              // applying this result now would revive a session that's
+              // actually already gone.
+              if (version !== authCallbackVersion) return;
 
-            set({
-              user: nextUser,
-              token: session?.access_token || null,
-              users,
-              organizerApplications: buildOrganizerApplicationsFromUsers(users),
-              loading: false,
-              initialized: true,
-            });
+              set({
+                user: nextUser,
+                token: session?.access_token || null,
+                users,
+                organizerApplications: buildOrganizerApplicationsFromUsers(users),
+                loading: false,
+                initialized: true,
+              });
+            }, 0);
           });
         }
       },
@@ -796,7 +802,12 @@ const useAuthStore = create(
         authCallbackVersion += 1;
 
         if (SUPABASE_AUTH_ENABLED && supabase) {
-          await supabase.auth.signOut();
+          // Never let a slow or stuck signOut keep the user on screen as
+          // signed in; the local session is cleared below either way.
+          await Promise.race([
+            supabase.auth.signOut().catch(() => supabase.auth.signOut({ scope: 'local' }).catch(() => {})),
+            new Promise((resolve) => setTimeout(resolve, 3000)),
+          ]);
         }
 
         set({
