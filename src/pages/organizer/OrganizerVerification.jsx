@@ -134,7 +134,7 @@ export default function OrganizerVerification() {
       setCheckedIn(true);
       success(`${participant.name} checked in successfully.`);
     } catch (checkInError) {
-      error('Unable to save this check-in.');
+      error(checkInError?.message ? `Unable to save this check-in: ${checkInError.message}` : 'Unable to save this check-in.');
     }
   };
 

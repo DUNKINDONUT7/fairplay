@@ -375,6 +375,21 @@ set
   check_in_status = coalesce(check_in_status, 'checked-in')
 where attendee_name is null or attendee_id is null;
 
+-- The old columns above are superseded by attendee_id/attendee_name/etc.
+-- (nothing in the app reads or writes participant_id, participant_name,
+-- qr_code, or status anymore — see normalizeAttendance in
+-- attendanceStore.js) and should have been dropped once the backfill above
+-- ran. Instead `participant_name text not null` was left behind, so every
+-- check-in insert since has failed with a 23502 not-null-constraint error —
+-- checkInAttendee() only recognizes error code 23505 (a duplicate) as a
+-- non-fatal case, so this one always re-threw and got surfaced to the
+-- organizer as a generic "Unable to save this check-in," with nothing ever
+-- actually reaching the attendance table.
+alter table public.attendance drop column if exists participant_id;
+alter table public.attendance drop column if exists participant_name;
+alter table public.attendance drop column if exists qr_code;
+alter table public.attendance drop column if exists status;
+
 alter table public.certificates alter column id type text using id::text;
 alter table public.certificates add column if not exists event_title text;
 alter table public.certificates add column if not exists recipient_id text;
