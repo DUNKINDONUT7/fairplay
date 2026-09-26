@@ -328,6 +328,29 @@ const useNotificationStore = create(
         });
       },
 
+      notifyResultsFinalized: async (event, { judgeEmails = [] } = {}) => {
+        if (!event?.id) return null;
+        const title = event.title || event.name || 'An event';
+        return get().createSystemNotification({
+          title: 'Results are final',
+          message: `Scores for ${title} have been finalized and locked. Check the live rankings.`,
+          type: 'success',
+          category: 'results-finalized',
+          // Broadcast to every participant like notifyNewEventAvailable does —
+          // registrations aren't scoped to user accounts everywhere in this
+          // app, so there's no reliable per-registrant list to target instead.
+          targetRoles: ['participant'],
+          targetEmails: [event.organizerEmail, ...judgeEmails].filter(Boolean),
+          sourceKey: `results-finalized:${event.id}`,
+          entityType: 'event',
+          entityId: event.id,
+          actionUrl: `/events/${event.id}/leaderboard`,
+          metadata: {
+            eventTitle: title,
+          },
+        });
+      },
+
       notifyCertificateReady: async (certificate) => {
         if (!certificate?.id) return null;
         const eventId = certificate.eventId;

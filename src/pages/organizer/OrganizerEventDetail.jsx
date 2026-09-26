@@ -306,6 +306,7 @@ export default function OrganizerEventDetail() {
   const event = getEventById(id);
 
   async function handleAddContestant(name, type, members = []) {
+    if (isFinalized) return;
     const existing = event.contestants || [];
     const newContestant = {
       id: `${type}-manual-${Date.now()}`,
@@ -318,7 +319,7 @@ export default function OrganizerEventDetail() {
   }
 
   async function handleBulkImportCsv(file) {
-    if (!file) return;
+    if (!file || isFinalized) return;
     const text = await file.text();
     const rows = text
       .split(/\r?\n/)
@@ -357,6 +358,7 @@ export default function OrganizerEventDetail() {
   // contestant list against, so marking someone here removes them from
   // judges' scoring sheets immediately with no separate judge-side change.
   async function handleToggleNoShow(contestantId) {
+    if (isFinalized) return;
     const current = new Set((event.eliminatedContestantIds || []).map(String));
     const key = String(contestantId);
     const wasNoShow = current.has(key);
@@ -375,6 +377,7 @@ export default function OrganizerEventDetail() {
   // which is intentional: a stable subset of pre-assigned numbers next to
   // one freshly numbered contestant would leak which entrant is the newest.
   async function handleAssignContestantNumbers() {
+    if (isFinalized) return;
     const existing = event.contestants || [];
     if (existing.length === 0) {
       notifyError('Add participants before assigning contestant numbers.');
@@ -387,6 +390,7 @@ export default function OrganizerEventDetail() {
   }
 
   async function handleToggleAnonymousJudging() {
+    if (isFinalized) return;
     await updateEvent(id, { anonymousJudging: !event.anonymousJudging });
     notifySuccess(event.anonymousJudging ? 'Anonymous judging turned off.' : 'Anonymous judging turned on — judges will see contestant numbers only.');
   }
@@ -434,6 +438,13 @@ export default function OrganizerEventDetail() {
       </DashboardLayout>
     );
   }
+
+  // Once OrganizerScoring.jsx's "Finalize and Lock Scores" sets the event to
+  // 'completed', the roster and anonymous-judging settings freeze too — a
+  // late add/remove or a fresh shuffle of contestant numbers after judges
+  // already scored the old roster would silently invalidate the locked
+  // scores' meaning.
+  const isFinalized = event.status === 'completed';
 
   const judgeQRValue = buildAppUrl(`/judge/open/${event.id}`);
   const participantQRValue = buildAppUrl(`/participant/register?eventId=${event.id}`);
@@ -665,28 +676,36 @@ export default function OrganizerEventDetail() {
               <div style={eyebrow}>Registered</div>
               <h2 style={{ ...panelTitle, marginBottom: 0 }}>Participants ({(event.contestants || []).length})</h2>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
-                <i className="bi bi-plus-lg" /> Add Participant
-              </button>
-              <label style={{ ...secondaryBtn, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <i className="bi bi-upload" /> Import CSV
-                <input
-                  type="file"
-                  accept=".csv,text/csv"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    handleBulkImportCsv(file);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-            </div>
+            {!isFinalized && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
+                  <i className="bi bi-plus-lg" /> Add Participant
+                </button>
+                <label style={{ ...secondaryBtn, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <i className="bi bi-upload" /> Import CSV
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      handleBulkImportCsv(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </div>
+            )}
           </div>
-          <p style={{ fontSize: 12, color: '#94a3b8', margin: '-8px 0 16px' }}>
-            CSV format: one participant per line — <span className="mono">Full Name</span> or <span className="mono">Full Name,team</span> to mark a team entry.
-          </p>
+          {isFinalized ? (
+            <p style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '8px 12px', margin: '-8px 0 16px' }}>
+              <i className="bi bi-lock-fill" /> This event is finalized — the roster is locked and can no longer be changed.
+            </p>
+          ) : (
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '-8px 0 16px' }}>
+              CSV format: one participant per line — <span className="mono">Full Name</span> or <span className="mono">Full Name,team</span> to mark a team entry.
+            </p>
+          )}
           {(!event.contestants || event.contestants.length === 0) ? (
             <p style={{ color: '#94a3b8', fontSize: 14 }}>No participants yet. They register via the Participant QR, or add them manually above.</p>
           ) : (
@@ -727,21 +746,23 @@ export default function OrganizerEventDetail() {
                         NO-SHOW
                       </span>
                     )}
-                    <button
-                      onClick={() => handleToggleNoShow(c.id)}
-                      title={isNoShow ? 'Restore this participant' : 'Mark as no-show'}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: isNoShow ? '#16a34a' : '#dc2626',
-                        cursor: 'pointer',
-                        fontSize: 12,
-                        padding: '2px 4px',
-                        textDecoration: 'none',
-                      }}
-                    >
-                      <i className={isNoShow ? 'bi bi-arrow-counterclockwise' : 'bi bi-person-dash'} />
-                    </button>
+                    {!isFinalized && (
+                      <button
+                        onClick={() => handleToggleNoShow(c.id)}
+                        title={isNoShow ? 'Restore this participant' : 'Mark as no-show'}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: isNoShow ? '#16a34a' : '#dc2626',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          padding: '2px 4px',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        <i className={isNoShow ? 'bi bi-arrow-counterclockwise' : 'bi bi-person-dash'} />
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -759,18 +780,20 @@ export default function OrganizerEventDetail() {
                 Turn this on for pageants, singing, and dance contests so judges only see a random contestant number — never the real name — while scoring.
               </p>
             </div>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
-              <input type="checkbox" checked={Boolean(event.anonymousJudging)} onChange={handleToggleAnonymousJudging} />
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: isFinalized ? 'not-allowed' : 'pointer', flexShrink: 0, opacity: isFinalized ? 0.6 : 1 }}>
+              <input type="checkbox" checked={Boolean(event.anonymousJudging)} onChange={handleToggleAnonymousJudging} disabled={isFinalized} />
               <span style={{ fontWeight: 700, fontSize: 13, color: event.anonymousJudging ? '#16a34a' : '#64748b' }}>
                 {event.anonymousJudging ? 'On' : 'Off'}
               </span>
             </label>
           </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-            <button onClick={handleAssignContestantNumbers} style={secondaryBtn}>
-              <i className="bi bi-shuffle" /> Shuffle &amp; Assign Numbers
-            </button>
-          </div>
+          {!isFinalized && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+              <button onClick={handleAssignContestantNumbers} style={secondaryBtn}>
+                <i className="bi bi-shuffle" /> Shuffle &amp; Assign Numbers
+              </button>
+            </div>
+          )}
           {(!event.contestants || event.contestants.length === 0) ? (
             <p style={{ color: '#94a3b8', fontSize: 14 }}>Add participants first, then assign numbers.</p>
           ) : (

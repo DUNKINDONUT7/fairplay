@@ -20,7 +20,7 @@ export default function OrganizerScoring() {
   const [searchParams] = useSearchParams();
   const { user } = useAuthStore();
   const { events, fetchEvents, updateEvent } = useEventStore();
-  const { success, error } = useNotificationStore();
+  const { success, error, notifyResultsFinalized } = useNotificationStore();
   const { fetchScores, getLiveFeed, calculateLeaderboard, scores } = useScoreStore();
   const { fetchAudienceScores, getAudienceSummary, subscribeToAudienceScores, submissions } = useAudienceScoreStore();
   const { fetchJudges, getJudgesByEvent } = useJudgeStore();
@@ -89,6 +89,35 @@ export default function OrganizerScoring() {
 
   const eliminatedIds = new Set((selected?.eliminatedContestantIds || []).map(String));
 
+  // A double-check pass before locking anything in: group every judge's raw
+  // total for each contestant, and flag any single judge whose number is far
+  // from the rest of the panel's for that same contestant — the same
+  // deviation-from-group-average signal AdminAIMonitor already uses to spot
+  // bias or a mistyped score, just scoped to this one event so the organizer
+  // can catch it before finalizing instead of after the fact in an audit.
+  const scoreReview = useMemo(() => {
+    const byContestant = new Map();
+    liveFeed.forEach((item) => {
+      const key = String(item.contestantId);
+      if (!byContestant.has(key)) {
+        byContestant.set(key, { contestantId: item.contestantId, contestantName: item.contestantName, entries: [] });
+      }
+      byContestant.get(key).entries.push(item);
+    });
+
+    return Array.from(byContestant.values()).map((row) => {
+      const scores = row.entries.map((entry) => Number(entry.totalScore) || 0);
+      const average = scores.reduce((sum, value) => sum + value, 0) / (scores.length || 1);
+      const entries = row.entries.map((entry) => {
+        const deviation = average > 0 ? Math.abs((Number(entry.totalScore) || 0) - average) / average : 0;
+        return { ...entry, deviation, flagged: row.entries.length >= 2 && deviation >= 0.3 };
+      });
+      return { ...row, entries, average, hasFlag: entries.some((entry) => entry.flagged) };
+    });
+  }, [liveFeed]);
+
+  const flaggedCount = scoreReview.filter((row) => row.hasFlag).length;
+
   const handleCutToTop = async () => {
     const n = Number(cutCount);
     if (!selected || !Number.isFinite(n) || n <= 0) {
@@ -118,7 +147,12 @@ export default function OrganizerScoring() {
       // gate on, and doubles as the one-time flag that hides this button
       // once finalized — see isFinalized above.
       await updateEvent(selected.id, { scoringActive: false, status: 'completed' });
-      success(`Locked ${result.lockedCount} score submission${result.lockedCount === 1 ? '' : 's'} for ${selected.title}. Judges can no longer submit or edit scores.`);
+      const judgeEmails = getJudgesByEvent(selected.id)
+        .filter((assignment) => assignment.judge)
+        .map((assignment) => assignment.judge.email)
+        .filter(Boolean);
+      await notifyResultsFinalized(selected, { judgeEmails });
+      success(`Locked ${result.lockedCount} score submission${result.lockedCount === 1 ? '' : 's'} for ${selected.title}. Judges can no longer submit or edit scores, and participants were notified.`);
     } finally {
       setFinalizing(false);
       setConfirmingFinalize(false);
@@ -357,7 +391,50 @@ export default function OrganizerScoring() {
                     <p style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>Ranked Contestants</p>
                     <p style={{ fontSize: 24, fontWeight: 800, color: '#2563eb' }}>{leaderboard.length}</p>
                   </div>
+                  <div style={{ ...summaryCardStyle, background: flaggedCount > 0 ? '#fef2f2' : summaryCardStyle.background, border: flaggedCount > 0 ? '1px solid #fecaca' : summaryCardStyle.border }}>
+                    <p style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>Flagged for Review</p>
+                    <p style={{ fontSize: 24, fontWeight: 800, color: flaggedCount > 0 ? '#dc2626' : '#2563eb' }}>{flaggedCount}</p>
+                  </div>
                 </div>
+
+                {scoreReview.length > 0 && (
+                  <div style={{ textAlign: 'left', marginBottom: 24 }}>
+                    <h4 style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>Double-Check Judge Scores</h4>
+                    <p style={{ fontSize: 12, color: '#64748b', marginBottom: 12 }}>
+                      Review every raw score before locking. A judge's score highlighted below is 30% or more off from the other judges' average for that same contestant — worth a second look before finalizing, since nothing can be corrected afterward.
+                    </p>
+                    <div style={{ display: 'grid', gap: 10 }}>
+                      {scoreReview.map((row) => (
+                        <div key={row.contestantId} style={{ padding: '12px 14px', borderRadius: 12, background: row.hasFlag ? '#fef2f2' : '#f8fafc', border: `1px solid ${row.hasFlag ? '#fecaca' : '#e2e8f0'}` }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{row.contestantName}</span>
+                            <span style={{ fontSize: 12, color: '#64748b' }}>Average: <strong style={{ color: '#2563eb' }}>{row.average.toFixed(1)}</strong></span>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {row.entries.map((entry) => (
+                              <span
+                                key={`${entry.judgeId}-${entry.contestantId}`}
+                                title={entry.flagged ? `${Math.round(entry.deviation * 100)}% off from the average` : ''}
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  padding: '4px 10px',
+                                  borderRadius: 999,
+                                  background: entry.flagged ? '#fee2e2' : '#eff6ff',
+                                  color: entry.flagged ? '#dc2626' : '#2563eb',
+                                }}
+                              >
+                                {entry.flagged && <i className="bi bi-exclamation-triangle-fill" style={{ marginRight: 4 }} />}
+                                {entry.judgeName}: {entry.totalScore}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {isFinalized ? (
                   <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, padding: '12px 24px', borderRadius: 12, background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d', fontWeight: 800 }}>
                     <i className="bi bi-lock-fill" />
