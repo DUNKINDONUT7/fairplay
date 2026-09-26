@@ -68,6 +68,7 @@ const NAV_GROUPS = {
         items: [
           { label: 'Contestants', path: '/organizer/contestants', icon: 'bi bi-people' },
           { label: 'Judges', path: '/organizer/judges', icon: 'bi bi-person-workspace' },
+          { label: 'Attendance', path: '/organizer/attendance', icon: 'bi bi-clipboard-check' },
         ],
       },
       {

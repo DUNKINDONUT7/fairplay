@@ -32,6 +32,7 @@ const OrganizerDashboard = lazy(() => import('./pages/organizer/OrganizerDashboa
 const CreateEvent = lazy(() => import('./pages/organizer/CreateEvent'));
 const OrganizerEvents = lazy(() => import('./pages/organizer/OrganizerEvents'));
 const OrganizerContestants = lazy(() => import('./pages/organizer/OrganizerContestants'));
+const OrganizerAttendance = lazy(() => import('./pages/organizer/OrganizerAttendance'));
 const OrganizerJudges = lazy(() => import('./pages/organizer/OrganizerJudges'));
 const OrganizerSchedule = lazy(() => import('./pages/organizer/OrganizerSchedule'));
 const OrganizerVenues = lazy(() => import('./pages/organizer/OrganizerVenues'));
@@ -467,6 +468,7 @@ export default function App() {
           <Route path="/organizer/create-event" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><CreateEvent /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/events" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerEvents /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/contestants" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerContestants /></ProtectedRoute></MobileRestrictedRoute>} />
+          <Route path="/organizer/attendance" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerAttendance /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/judges" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerJudges /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/schedule" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerSchedule /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/venues" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerVenues /></ProtectedRoute></MobileRestrictedRoute>} />
