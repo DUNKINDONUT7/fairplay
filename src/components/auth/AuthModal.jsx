@@ -26,6 +26,9 @@ export default function AuthModal({ onClose }) {
 
   const [loginData, setLoginData] = useState({ email: '', password: '' });
   const [regData, setRegData] = useState({ name: '', email: '', password: '', confirmPassword: '', role: 'organizer' });
+  const [resetEmail, setResetEmail] = useState('');
+  const [sendingReset, setSendingReset] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   useEffect(() => {
     const onKey = (event) => {
@@ -73,6 +76,22 @@ export default function AuthModal({ onClose }) {
     }
 
     showError(result.error || 'Login failed. Please try again.');
+  };
+
+  const handleRequestReset = async (event) => {
+    event.preventDefault();
+    const email = String(resetEmail || '').trim();
+    if (!email) return showError('Enter your email address.');
+
+    setSendingReset(true);
+    try {
+      await store.requestPasswordReset(email);
+      setResetSent(true);
+    } catch (err) {
+      showError(err.message || 'Unable to send the reset email right now.');
+    } finally {
+      setSendingReset(false);
+    }
   };
 
   const passwordStrength = (() => {
@@ -185,44 +204,57 @@ export default function AuthModal({ onClose }) {
             {authModeLabel}
           </div>
           <h2 style={{ fontSize: 24, fontWeight: 800, marginBottom: 6, color: '#f8fafc' }}>
-            {mode === 'login' ? 'Welcome Back' : 'Create Participant Account'}
+            {mode === 'login' ? 'Welcome Back' : mode === 'register' ? 'Create Participant Account' : 'Reset Your Password'}
           </h2>
           <p style={{ color: '#94a3b8', fontSize: 14, marginBottom: 14 }}>
-            {mode === 'login' ? 'Access your FairPlay workspace and continue your workflow.' : 'Register as a participant and go straight to your dashboard.'}
+            {mode === 'login'
+              ? 'Access your FairPlay workspace and continue your workflow.'
+              : mode === 'register'
+                ? 'Register as a participant and go straight to your dashboard.'
+                : "We'll email you a link to set a new password."}
           </p>
 
-          <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 4, marginBottom: 14 }}>
+          {mode === 'forgot' ? (
             <button
-              onClick={() => { setMode('login'); setNotice(''); }}
-              style={{
-                flex: 1,
-                padding: '12px',
-                borderRadius: 10,
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: 700,
-                background: mode === 'login' ? 'rgba(0,242,254,0.12)' : 'transparent',
-                color: mode === 'login' ? '#b5f3ff' : '#a0aec0',
-              }}
+              onClick={() => { setMode('login'); setNotice(''); setResetSent(false); }}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent', border: 'none', color: '#67e8f9', fontSize: 13, fontWeight: 700, cursor: 'pointer', marginBottom: 14 }}
             >
-              Sign In
+              <i className="bi bi-arrow-left" /> Back to Sign In
             </button>
-            <button
-              onClick={() => { setMode('register'); setNotice(''); }}
-              style={{
-                flex: 1,
-                padding: '12px',
-                borderRadius: 10,
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: 700,
-                background: mode === 'register' ? 'rgba(79,172,254,0.14)' : 'transparent',
-                color: mode === 'register' ? '#dbeafe' : '#a0aec0',
-              }}
-            >
-              Register
-            </button>
-          </div>
+          ) : (
+            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 14, padding: 4, marginBottom: 14 }}>
+              <button
+                onClick={() => { setMode('login'); setNotice(''); }}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 10,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  background: mode === 'login' ? 'rgba(0,242,254,0.12)' : 'transparent',
+                  color: mode === 'login' ? '#b5f3ff' : '#a0aec0',
+                }}
+              >
+                Sign In
+              </button>
+              <button
+                onClick={() => { setMode('register'); setNotice(''); }}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 10,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  background: mode === 'register' ? 'rgba(79,172,254,0.14)' : 'transparent',
+                  color: mode === 'register' ? '#dbeafe' : '#a0aec0',
+                }}
+              >
+                Register
+              </button>
+            </div>
+          )}
         </div>
 
         <div style={{ padding: '0 32px 20px' }}>
@@ -251,6 +283,13 @@ export default function AuthModal({ onClose }) {
                   <input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} style={{ width: 16, height: 16, accentColor: '#06b6d4' }} />
                   Remember me
                 </label>
+                <button
+                  type="button"
+                  onClick={() => { setMode('forgot'); setNotice(''); setResetSent(false); setResetEmail(loginData.email); }}
+                  style={{ background: 'transparent', border: 'none', color: '#67e8f9', fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                >
+                  Forgot Password?
+                </button>
               </div>
 
               <button type="submit" disabled={store.loading} style={primaryButtonStyle}>
@@ -318,6 +357,32 @@ export default function AuthModal({ onClose }) {
                 </span>
               </button>
             </form>
+          )}
+
+          {mode === 'forgot' && (
+            resetSent ? (
+              <div style={{ textAlign: 'center', padding: '12px 0' }}>
+                <i className="bi bi-envelope-check-fill" style={{ fontSize: 40, color: '#34d399', display: 'block', marginBottom: 14 }} />
+                <p style={{ color: '#e2e8f0', fontSize: 14, lineHeight: 1.7, marginBottom: 20 }}>
+                  If an account exists for <strong style={{ color: '#fff' }}>{resetEmail}</strong>, a password reset link is on its way. Check your inbox (and spam folder).
+                </p>
+                <button type="button" onClick={() => { setMode('login'); setResetSent(false); }} style={primaryButtonStyle}>
+                  Back to Sign In
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={handleRequestReset}>
+                <Field label="Email">
+                  <input type="email" value={resetEmail} onChange={(event) => setResetEmail(event.target.value)} autoFocus style={inputStyle} />
+                </Field>
+                <button type="submit" disabled={sendingReset} style={primaryButtonStyle}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
+                    <i className={sendingReset ? 'bi bi-arrow-repeat' : 'bi bi-send'} style={sendingReset ? rotatingIconStyle : undefined} />
+                    {sendingReset ? 'Sending...' : 'Send Reset Link'}
+                  </span>
+                </button>
+              </form>
+            )
           )}
         </div>
       </div>

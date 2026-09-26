@@ -679,6 +679,24 @@ const useAuthStore = create(
         return updatedUser;
       },
 
+      // Sends a password-recovery email. Supabase always responds with
+      // success here regardless of whether the address has an account
+      // (prevents leaking which emails are registered), so the UI can only
+      // ever show one generic "check your inbox" message — never confirm or
+      // deny that an account exists for what was typed.
+      requestPasswordReset: async (email) => {
+        if (!SUPABASE_AUTH_ENABLED || !supabase) {
+          throw new Error(NOT_CONNECTED_MESSAGE);
+        }
+
+        const { error } = await supabase.auth.resetPasswordForEmail(String(email || '').trim(), {
+          redirectTo: APP_URL ? `${APP_URL}/auth/reset-password` : undefined,
+        });
+        if (error) {
+          throw new Error(describeAuthError(error, { action: 'sending your password reset email' }));
+        }
+      },
+
       // Real Supabase Auth login credentials — distinct from updateUser
       // above, which only ever writes to the profiles table's own `email`
       // column (a display copy). Changing the actual sign-in email/password
