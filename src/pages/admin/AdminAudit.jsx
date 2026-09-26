@@ -14,6 +14,38 @@ function formatTimestamp(value) {
   return Number.isNaN(date.getTime()) ? String(value || 'Unknown') : date.toLocaleString();
 }
 
+// Quotes every field and escapes embedded quotes/commas/newlines per RFC
+// 4180 — a log's `action` or `reason` text is free-form and can contain any
+// of those, so a naive join(',') would silently produce a corrupt CSV.
+function toCsvField(value) {
+  const text = String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadLogsCsv(logs) {
+  const headers = ['User', 'Action', 'Target', 'Timestamp', 'Source'];
+  const rows = logs.map((log) => [
+    log.user,
+    log.action,
+    log.target,
+    formatTimestamp(log.timestamp),
+    log.source,
+  ]);
+  // Leading BOM so Excel opens it as UTF-8 instead of guessing the wrong
+  // codepage and mangling any accented characters.
+  const csv = '﻿' + [headers, ...rows].map((row) => row.map(toCsvField).join(',')).join('\r\n');
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `activity-log-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
 export default function AdminAudit() {
   const { users, refreshProfiles } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
@@ -122,6 +154,13 @@ export default function AdminAudit() {
           <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} style={selectStyle}>
             {sources.map((source) => <option key={source} value={source}>{source === 'all' ? 'All sources' : source}</option>)}
           </select>
+          <button
+            onClick={() => downloadLogsCsv(filteredLogs)}
+            disabled={filteredLogs.length === 0}
+            style={{ ...downloadButtonStyle, opacity: filteredLogs.length === 0 ? 0.5 : 1, cursor: filteredLogs.length === 0 ? 'not-allowed' : 'pointer' }}
+          >
+            <i className="bi bi-download" /> Download CSV
+          </button>
         </div>
       </div>
       <div style={cardStyle}>
@@ -167,3 +206,4 @@ const pillStyle = { padding: '3px 10px', borderRadius: 999, fontSize: 11, fontWe
 const emptyCellStyle = { padding: 32, textAlign: 'center', color: '#94a3b8' };
 const errorStyle = { marginBottom: 14, padding: 12, borderRadius: 12, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#dc2626', fontWeight: 700, fontSize: 13 };
 const selectStyle = { padding: '10px 14px', borderRadius: 12, border: '1px solid #dbeafe', background: '#ffffff', color: '#0f172a', fontSize: 13, outline: 'none' };
+const downloadButtonStyle = { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 16px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', color: '#ffffff', fontSize: 13, fontWeight: 700 };
