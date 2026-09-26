@@ -4,7 +4,15 @@ const AI_DETECTIONS_KEY = 'fairplay_ai_detections';
 
 export function buildAuditLogs({ users = [], events = [], registrations = [], scores = [], attendance = [], aiLogs = [], aiDetections = [] }) {
   const scoreRows = Array.isArray(scores) ? scores : Object.values(scores || {});
+  const eventsById = new Map(events.map((event) => [String(event.id), event]));
   const logs = [
+    ...users.map((user) => ({
+      user: user.email || user.name || 'New user',
+      action: `Created a ${user.role || 'participant'} account`,
+      target: 'Account',
+      timestamp: user.createdAt || user.joined,
+      source: 'accounts',
+    })),
     ...events.map((event) => ({
       user: event.organizerEmail || users.find((user) => String(user.id) === String(event.organizer_id))?.email || 'Organizer',
       action: `Created or updated event: ${event.title}`,
@@ -12,13 +20,16 @@ export function buildAuditLogs({ users = [], events = [], registrations = [], sc
       timestamp: event.createdAt || event.created_at || event.startDate,
       source: 'events',
     })),
-    ...registrations.map((registration) => ({
-      user: registration.email || registration.participantName || 'Participant',
-      action: `Registered for event ${registration.eventId}`,
-      target: 'Registration',
-      timestamp: registration.createdAt,
-      source: 'registrations',
-    })),
+    ...registrations.map((registration) => {
+      const event = eventsById.get(String(registration.eventId));
+      return {
+        user: registration.email || registration.participantName || registration.teamName || 'Participant',
+        action: `Registered for event: ${event?.title || registration.eventId}`,
+        target: 'Registration',
+        timestamp: registration.createdAt,
+        source: 'registrations',
+      };
+    }),
     ...scoreRows.map((score) => ({
       user: score.judgeName || score.judgeId || 'Judge',
       action: `Submitted score for ${score.contestantName}`,

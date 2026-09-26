@@ -149,6 +149,7 @@ function mapProfileRow(profile) {
     avatarUrl: profile.avatar_url || '',
     status: profile.status || 'active',
     joined: profile.created_at ? String(profile.created_at).slice(0, 10) : new Date().toISOString().slice(0, 10),
+    createdAt: profile.created_at || null,
     metadata: profile.metadata || {},
   };
 }
