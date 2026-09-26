@@ -6,6 +6,7 @@ import useJudgeStore from '../../store/judgeStore';
 import useNotificationStore from '../../store/notificationStore';
 import useScoreStore from '../../store/scoreStore';
 import { getBusinessActorId } from '../../utils/identity';
+import { getContestantDisplayName } from '../../utils/helpers';
 
 export default function JudgeScoring() {
   const { sessionId, token } = useParams();
@@ -151,7 +152,7 @@ export default function JudgeScoring() {
                     >
                       <option value="">— Select contestant —</option>
                       {contestants.map((c) => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
+                        <option key={c.id} value={c.id}>{getContestantDisplayName(c, resolvedEvent)}</option>
                       ))}
                     </select>
                   ) : (

@@ -26,6 +26,7 @@ function normalizeContestants(event) {
       subEventId: contestant.subEventId || contestant.sub_event_id || '',
       subEventName: contestant.subEventName || contestant.sub_event_name || '',
       members: Array.isArray(contestant.members) ? contestant.members : [],
+      number: contestant.number || null,
     }));
 }
 
@@ -155,6 +156,7 @@ function normalizeEvent(event, index = 0) {
       : createDefaultApprovalWorkflow(),
     audienceAttendance: Number(source.audienceAttendance || source.audience_attendance || 0),
     attendanceTracking: Boolean(source.attendanceTracking ?? source.attendance_tracking),
+    anonymousJudging: Boolean(source.anonymousJudging ?? source.anonymous_judging),
     tournamentFormat: source.tournamentFormat || source.tournament_format || source.bracketType || 'single',
     scorerAssignments: Array.isArray(source.scorerAssignments)
       ? source.scorerAssignments
@@ -378,6 +380,7 @@ const useEventStore = create(
             external_judge_invites: normalizedEvent.externalJudgeInvites,
             audience_attendance: normalizedEvent.audienceAttendance,
             attendance_tracking: normalizedEvent.attendanceTracking,
+            anonymous_judging: normalizedEvent.anonymousJudging,
             tournament_format: normalizedEvent.tournamentFormat,
             status: normalizedEvent.status,
             start_date: normalizedEvent.startDate,
@@ -445,6 +448,7 @@ const useEventStore = create(
               external_judge_invites: updatedEvent.externalJudgeInvites,
               audience_attendance: updatedEvent.audienceAttendance,
               attendance_tracking: updatedEvent.attendanceTracking,
+              anonymous_judging: updatedEvent.anonymousJudging,
               tournament_format: updatedEvent.tournamentFormat,
               status: updatedEvent.status,
               created_at: updatedEvent.created_at || updatedEvent.createdAt,

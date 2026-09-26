@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 import { isSupabaseConfigured, supabase } from '../../utils/supabaseClient';
+import { getContestantDisplayName } from '../../utils/helpers';
 
 const BUBBLE_STYLE = `
   @keyframes floatBubble {
@@ -560,7 +561,7 @@ export default function JudgeLiveScoring() {
                   }}
                 >
                   {done && <i className="bi bi-check-circle-fill" style={{ fontSize: 13 }} />}
-                  {c.name}
+                  {getContestantDisplayName(c, event)}
                 </button>
               );
             })}
@@ -587,7 +588,7 @@ export default function JudgeLiveScoring() {
                 <div style={{ fontSize: 12, color: '#2563eb', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>
                   Now Scoring
                 </div>
-                <div style={{ fontSize: 24, fontWeight: 800, color: '#0f172a' }}>{activeContestant.name}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: '#0f172a' }}>{getContestantDisplayName(activeContestant, event)}</div>
               </div>
               {isComplete(activeContestant.id) && !submitted[activeContestant.id] && (
                 <div style={{ textAlign: 'right' }}>

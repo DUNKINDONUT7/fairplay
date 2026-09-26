@@ -1317,3 +1317,18 @@ select cron.schedule(
   '0 0 * * *', -- once a day at 00:00 UTC
   $$select public.auto_close_expired_events();$$
 );
+
+-- ============================================================================
+-- SECTION: Anonymous judging
+-- Lets an organizer hide contestant names from judges for bias-prone events
+-- (pageants, singing, dance) and show a randomly assigned "Contestant #N"
+-- instead. There is no separate `participants` table in this schema —
+-- contestants for an event live in the `events.contestants` jsonb array
+-- (see normalizeContestants in eventStore.js), so the per-contestant number
+-- lives as a `number` field inside that same array rather than as its own
+-- column; uniqueness is enforced client-side when numbers are assigned
+-- (OrganizerEventDetail.jsx shuffles 1..N with no repeats) since it only
+-- ever needs to be unique within one event's own contestant list.
+-- ============================================================================
+
+alter table public.events add column if not exists anonymous_judging boolean default false;

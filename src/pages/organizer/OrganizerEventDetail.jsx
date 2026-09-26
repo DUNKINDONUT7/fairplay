@@ -10,6 +10,7 @@ import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
 import { buildAppUrl } from '../../utils/appUrl';
 import { inferTeamLimitConfig, getParticipantLimitMessage, TEAM_EVENT_CATEGORIES } from '../../utils/teamEventRules';
+import { shuffleArray } from '../../utils/helpers';
 
 const TOURNAMENT_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -368,6 +369,28 @@ export default function OrganizerEventDetail() {
     notifySuccess(wasNoShow ? 'Participant restored.' : 'Participant marked as a no-show.');
   }
 
+  // Random numbers are reshuffled across the whole roster every time this
+  // runs (not assigned incrementally) so there is one clear "before judging"
+  // moment — re-running it after adding a late entrant reassigns everyone,
+  // which is intentional: a stable subset of pre-assigned numbers next to
+  // one freshly numbered contestant would leak which entrant is the newest.
+  async function handleAssignContestantNumbers() {
+    const existing = event.contestants || [];
+    if (existing.length === 0) {
+      notifyError('Add participants before assigning contestant numbers.');
+      return;
+    }
+    const shuffledNumbers = shuffleArray(Array.from({ length: existing.length }, (_, i) => i + 1));
+    const numbered = existing.map((c, index) => ({ ...c, number: shuffledNumbers[index] }));
+    await updateEvent(id, { contestants: numbered });
+    notifySuccess(`Assigned random contestant numbers to ${numbered.length} participant${numbered.length === 1 ? '' : 's'}.`);
+  }
+
+  async function handleToggleAnonymousJudging() {
+    await updateEvent(id, { anonymousJudging: !event.anonymousJudging });
+    notifySuccess(event.anonymousJudging ? 'Anonymous judging turned off.' : 'Anonymous judging turned on — judges will see contestant numbers only.');
+  }
+
   async function handleAddScorer({ name, subEventId, subEventName }) {
     const token = `scorer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const assignment = {
@@ -688,6 +711,11 @@ export default function OrganizerEventDetail() {
                     }}
                   >
                     <i className={c.type === 'team' ? 'bi bi-people' : 'bi bi-person'} style={{ color: isNoShow ? '#94a3b8' : '#2563eb', fontSize: 12 }} />
+                    {c.number && (
+                      <span style={{ fontSize: 11, fontWeight: 800, color: '#7c3aed', background: '#f5f3ff', borderRadius: 999, padding: '2px 8px' }}>
+                        #{c.number}
+                      </span>
+                    )}
                     {c.name}
                     {c.type === 'team' && Array.isArray(c.members) && c.members.length > 0 && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: '#2563eb', background: '#eff6ff', borderRadius: 999, padding: '2px 8px' }}>
@@ -717,6 +745,59 @@ export default function OrganizerEventDetail() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        {/* Anonymous judging */}
+        <div style={card}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+            <div>
+              <div style={eyebrow}>Bias prevention</div>
+              <h2 style={{ ...panelTitle, marginBottom: 0 }}>Anonymous Judging</h2>
+              <p style={{ fontSize: 13, color: '#64748b', margin: '6px 0 0', maxWidth: 520 }}>
+                Turn this on for pageants, singing, and dance contests so judges only see a random contestant number — never the real name — while scoring.
+              </p>
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
+              <input type="checkbox" checked={Boolean(event.anonymousJudging)} onChange={handleToggleAnonymousJudging} />
+              <span style={{ fontWeight: 700, fontSize: 13, color: event.anonymousJudging ? '#16a34a' : '#64748b' }}>
+                {event.anonymousJudging ? 'On' : 'Off'}
+              </span>
+            </label>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+            <button onClick={handleAssignContestantNumbers} style={secondaryBtn}>
+              <i className="bi bi-shuffle" /> Shuffle &amp; Assign Numbers
+            </button>
+          </div>
+          {(!event.contestants || event.contestants.length === 0) ? (
+            <p style={{ color: '#94a3b8', fontSize: 14 }}>Add participants first, then assign numbers.</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #e2e8f0', color: '#64748b', textAlign: 'left' }}>
+                    <th style={{ padding: '8px 12px' }}>Number</th>
+                    <th style={{ padding: '8px 12px' }}>Real Name</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...event.contestants]
+                    .sort((a, b) => (a.number || Infinity) - (b.number || Infinity))
+                    .map((c) => (
+                      <tr key={c.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: '8px 12px', fontWeight: 800, color: c.number ? '#7c3aed' : '#cbd5e1' }}>
+                          {c.number ? `#${c.number}` : 'Not assigned'}
+                        </td>
+                        <td style={{ padding: '8px 12px', color: '#0f172a' }}>{c.name}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p style={{ fontSize: 12, color: '#94a3b8', margin: '10px 0 0' }}>
+                This mapping is only ever shown here on the organizer's event page — for the final tally and winner announcement.
+              </p>
             </div>
           )}
         </div>

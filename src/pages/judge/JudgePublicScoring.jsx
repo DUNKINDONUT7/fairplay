@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useScoreStore from '../../store/scoreStore';
+import { getContestantDisplayName } from '../../utils/helpers';
 
 export default function JudgePublicScoring() {
   const { eventId } = useParams();
@@ -314,7 +315,7 @@ export default function JudgePublicScoring() {
                   const alreadyScored = !!getScoreByKey(event.id, judgeId, c.id);
                   return (
                     <option key={c.id} value={c.id}>
-                      {alreadyScored ? '✓ ' : ''}{c.name}
+                      {alreadyScored ? '✓ ' : ''}{getContestantDisplayName(c, event)}
                     </option>
                   );
                 })}

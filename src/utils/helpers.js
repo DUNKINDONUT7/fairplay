@@ -155,3 +155,15 @@ export const shuffleArray = (array) => {
   }
   return result;
 };
+
+// What a judge-facing scoring screen should show for a contestant: the real
+// name normally, or "Contestant #N" when the organizer has turned on
+// anonymous judging for that event (and this contestant has been assigned a
+// number) — used for pageant/singing/dance-style events to keep judges from
+// scoring on name recognition instead of the performance.
+export const getContestantDisplayName = (contestant, event) => {
+  if (event?.anonymousJudging && contestant?.number) {
+    return `Contestant #${contestant.number}`;
+  }
+  return contestant?.name || 'Contestant';
+};
