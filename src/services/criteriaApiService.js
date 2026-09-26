@@ -1,4 +1,5 @@
 import { supabase } from '../utils/supabaseClient';
+import usePlatformSettingsStore from '../store/platformSettingsStore';
 
 // AI requests go through the `ai-proxy` Supabase Edge Function — the Groq/
 // OpenRouter API key lives server-side only (Edge Function secrets), never
@@ -11,6 +12,9 @@ export function getApiConfig(modelOverride) {
 export async function callAiProxy({ messages, model, temperature, responseFormat }) {
   if (!supabase) {
     throw new Error('AI features require FairPlay to be connected to Supabase.');
+  }
+  if (usePlatformSettingsStore.getState().aiEnabled === false) {
+    throw new Error('AI features are currently turned off by the administrator.');
   }
 
   // functions.invoke() attaches the current session's access token

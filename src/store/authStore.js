@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { getAppBaseUrl } from '../utils/appUrl';
 import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
+import { claimDataCache, resetDataCaches } from '../utils/dataCache';
 
 const SUPABASE_AUTH_ENABLED = isSupabaseConfigured;
 const APP_URL = getAppBaseUrl();
@@ -329,6 +330,7 @@ const useAuthStore = create(
           // fallback below only guards against a transient fetch failure
           // blanking a list that was loaded fine a moment ago.
           const nextUsers = profiles.length > 0 ? profiles : get().users;
+          if (sessionUser) claimDataCache(sessionUser.id);
 
           set({
             user: sessionUser,
@@ -365,6 +367,7 @@ const useAuthStore = create(
               // applying this result now would revive a session that's
               // actually already gone.
               if (version !== authCallbackVersion) return;
+              if (nextUser) claimDataCache(nextUser.id);
 
               set({
                 user: nextUser,
@@ -408,6 +411,7 @@ const useAuthStore = create(
           }
 
           const users = await fetchProfilesList().catch(() => get().users);
+          claimDataCache(sessionUser?.id);
 
           set({
             user: sessionUser,
@@ -499,6 +503,7 @@ const useAuthStore = create(
 
           const sessionUser = await buildSessionUser(data.user);
           const users = await fetchProfilesList().catch(() => get().users);
+          claimDataCache(sessionUser?.id);
 
           set({
             user: sessionUser,
@@ -809,6 +814,9 @@ const useAuthStore = create(
             new Promise((resolve) => setTimeout(resolve, 3000)),
           ]);
         }
+
+        // Signed-out browsers should not keep the last user's records.
+        resetDataCaches();
 
         set({
           user: null,

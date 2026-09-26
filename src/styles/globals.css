@@ -316,25 +316,6 @@ a:hover {
   width: 100%;
 }
 
-.fairplay-admin-shell,
-.fairplay-admin-shell * {
-  color: #000000 !important;
-  -webkit-text-fill-color: #000000 !important;
-}
-
-.fairplay-admin-shell input::placeholder,
-.fairplay-admin-shell textarea::placeholder {
-  color: #4b5563 !important;
-  -webkit-text-fill-color: #4b5563 !important;
-  opacity: 1;
-}
-
-.fairplay-admin-shell svg,
-.fairplay-admin-shell i {
-  color: currentColor !important;
-  -webkit-text-fill-color: currentColor !important;
-}
-
 @media (max-width: 1023px) {
   .fairplay-dashboard-main {
     width: 100% !important;

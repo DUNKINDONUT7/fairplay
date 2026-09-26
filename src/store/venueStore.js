@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
 
 let venuesRealtimeBound = false;
@@ -100,7 +101,7 @@ const useVenueStore = create(
 
       fetchVenues: async (actor, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().venues.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -236,7 +237,8 @@ const useVenueStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            venues: currentState.venues,
+            loading: false,
+            error: null,
           };
         }
 
@@ -248,5 +250,7 @@ const useVenueStore = create(
     }
   )
 );
+
+bindDataCacheReset(useVenueStore, ['venues']);
 
 export default useVenueStore;

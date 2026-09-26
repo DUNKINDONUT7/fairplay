@@ -2,9 +2,24 @@ import { isSupabaseConfigured, supabase } from '../utils/supabaseClient';
 
 const AI_DETECTIONS_KEY = 'fairplay_ai_detections';
 
+// Newest first. Each timestamp is parsed once instead of on every comparison,
+// which matters with tens of thousands of rows; the comparator itself (and so
+// the resulting order, including rows with missing dates) is unchanged.
+function sortNewestFirst(rows, getTimestamp) {
+  return rows
+    .map((row) => ({ row, time: new Date(getTimestamp(row)).getTime() }))
+    .sort((left, right) => right.time - left.time)
+    .map((entry) => entry.row);
+}
+
 export function buildAuditLogs({ users = [], events = [], registrations = [], scores = [], attendance = [], aiLogs = [], aiDetections = [] }) {
   const scoreRows = Array.isArray(scores) ? scores : Object.values(scores || {});
   const eventsById = new Map(events.map((event) => [String(event.id), event]));
+  const usersById = new Map();
+  users.forEach((user) => {
+    const key = String(user.id);
+    if (!usersById.has(key)) usersById.set(key, user);
+  });
   const logs = [
     ...users.map((user) => ({
       user: user.email || user.name || 'New user',
@@ -14,7 +29,7 @@ export function buildAuditLogs({ users = [], events = [], registrations = [], sc
       source: 'accounts',
     })),
     ...events.map((event) => ({
-      user: event.organizerEmail || users.find((user) => String(user.id) === String(event.organizer_id))?.email || 'Organizer',
+      user: event.organizerEmail || usersById.get(String(event.organizer_id))?.email || 'Organizer',
       action: `Created or updated event: ${event.title}`,
       target: 'Event',
       timestamp: event.createdAt || event.created_at || event.startDate,
@@ -60,15 +75,20 @@ export function buildAuditLogs({ users = [], events = [], registrations = [], sc
     })),
   ];
 
-  return logs.sort((left, right) => new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime());
+  return sortNewestFirst(logs, (log) => log.timestamp);
 }
 
 export function deriveAiDetections({ users = [], events = [], registrations = [], scores = [], attendance = [] }) {
   const scoreRows = Array.isArray(scores) ? scores : Object.values(scores || {});
   const detections = [];
+  const registrationCountByEvent = new Map();
+  registrations.forEach((registration) => {
+    const key = String(registration.eventId);
+    registrationCountByEvent.set(key, (registrationCountByEvent.get(key) || 0) + 1);
+  });
 
   events.forEach((event) => {
-    const eventRegistrations = registrations.filter((registration) => String(registration.eventId) === String(event.id));
+    const eventRegistrationCount = registrationCountByEvent.get(String(event.id)) || 0;
     const max = Number(event.maxParticipants || 0);
     const participants = Number(event.participants || event.contestants?.length || 0);
 
@@ -88,7 +108,7 @@ export function deriveAiDetections({ users = [], events = [], registrations = []
       });
     }
 
-    if (event.status === 'active' && eventRegistrations.length === 0) {
+    if (event.status === 'active' && eventRegistrationCount === 0) {
       detections.push({
         id: `active-no-registration-${event.id}`,
         targetType: 'event',
@@ -202,7 +222,7 @@ export function deriveAiDetections({ users = [], events = [], registrations = []
     }
   });
 
-  return detections.sort((left, right) => new Date(right.detectedAt).getTime() - new Date(left.detectedAt).getTime());
+  return sortNewestFirst(detections, (detection) => detection.detectedAt);
 }
 
 function normalizeDetection(row) {
@@ -261,6 +281,20 @@ export async function fetchAiDetections(systemData) {
     seen.add(item.id);
     return true;
   });
+}
+
+// Only the rows saved in the ai_detections table (review decisions and
+// flags that were persisted earlier); null when the table can't be read.
+export async function fetchStoredAiDetections() {
+  if (!isSupabaseConfigured) {
+    return JSON.parse(localStorage.getItem(AI_DETECTIONS_KEY) || '[]').map(normalizeDetection);
+  }
+  const { data, error } = await supabase
+    .from('ai_detections')
+    .select('*')
+    .order('detected_at', { ascending: false });
+  if (error) return null;
+  return (data || []).map(normalizeDetection);
 }
 
 export async function upsertAiDetections(detections) {

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { mockEvents } from '../data/events';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import {
@@ -284,7 +285,7 @@ const useEventStore = create(
 
       fetchEvents: async (organizerId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().events.length === 0) {
           set({ loading: true, error: null });
         }
         const organizerBusinessId = getBusinessActorId(organizerId);
@@ -331,7 +332,7 @@ const useEventStore = create(
         } catch (error) {
           console.error('Error fetching events:', error.message);
           if (!silent) {
-            set({ loading: false, error: error.message, events: [] });
+            set({ loading: false, error: error.message });
           }
           return [];
         }
@@ -547,10 +548,12 @@ const useEventStore = create(
       partialize: (state) => ({ events: state.events }),
       merge: (persistedState, currentState) => {
         if (isSupabaseConfigured) {
+          // Show the last-loaded events instantly; fetchEvents refreshes them.
           return {
             ...currentState,
             ...(persistedState || {}),
-            events: currentState.events,
+            loading: false,
+            error: null,
           };
         }
 
@@ -562,5 +565,7 @@ const useEventStore = create(
     }
   )
 );
+
+bindDataCacheReset(useEventStore, ['events']);
 
 export default useEventStore;

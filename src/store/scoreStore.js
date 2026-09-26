@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import useEventStore from './eventStore';
 import useNotificationStore from './notificationStore';
 import useAudienceScoreStore from './audienceScoreStore';
@@ -79,7 +80,7 @@ const useScoreStore = create(
 
       fetchScores: async (eventId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && Object.keys(get().scores).length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -422,8 +423,8 @@ const useScoreStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            scores: currentState.scores,
-            leaderboard: currentState.leaderboard,
+            loading: false,
+            error: null,
           };
         }
 
@@ -435,5 +436,7 @@ const useScoreStore = create(
     }
   )
 );
+
+bindDataCacheReset(useScoreStore, ['scores', 'leaderboard']);
 
 export default useScoreStore;

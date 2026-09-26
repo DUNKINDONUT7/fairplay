@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import { getBusinessActorId, getActorIdentityKeys, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
 import useEventStore from './eventStore';
@@ -90,7 +91,7 @@ const useJudgeStore = create(
 
       fetchJudges: async (options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().judges.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -116,7 +117,7 @@ const useJudgeStore = create(
         } catch (error) {
           console.error('Error fetching judges:', error.message);
           if (!silent) {
-            set({ loading: false, error: error.message, judges: [], assignments: [] });
+            set({ loading: false, error: error.message });
           }
           return [];
         }
@@ -502,12 +503,15 @@ const useJudgeStore = create(
           // needs the exact same protection, or a page load briefly (and on
           // a slow connection, not-so-briefly) shows whatever invite list
           // was cached from a previous visit until fetchInvites() catches up.
+          // Judges and assignments show instantly from the last visit and are
+          // refreshed by fetchJudges; invites are per event, so they always
+          // start fresh.
           return {
             ...currentState,
             ...(persistedState || {}),
-            judges: currentState.judges,
-            assignments: currentState.assignments,
             invites: currentState.invites,
+            loading: false,
+            error: null,
           };
         }
 
@@ -519,5 +523,7 @@ const useJudgeStore = create(
     }
   )
 );
+
+bindDataCacheReset(useJudgeStore, ['judges', 'assignments', 'invites']);
 
 export default useJudgeStore;

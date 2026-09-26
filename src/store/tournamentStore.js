@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import {
   buildRounds,
   calculateChampion,
@@ -136,7 +137,7 @@ const useTournamentStore = create(
 
       fetchTournaments: async (eventId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().tournaments.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -534,7 +535,8 @@ const useTournamentStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            tournaments: currentState.tournaments,
+            loading: false,
+            error: null,
           };
         }
 
@@ -546,5 +548,7 @@ const useTournamentStore = create(
     }
   )
 );
+
+bindDataCacheReset(useTournamentStore, ['tournaments']);
 
 export default useTournamentStore;

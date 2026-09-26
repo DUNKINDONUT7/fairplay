@@ -15,7 +15,7 @@ const ROLE_COLORS = {
 };
 
 const ROLE_LABELS = {
-  admin: 'Super Admin',
+  admin: 'Admin',
   organizer: 'Organizer',
   judge: 'Judge',
   participant: 'Participant',

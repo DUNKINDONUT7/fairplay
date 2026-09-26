@@ -8,7 +8,7 @@ const RAIL_WIDTH = 76;
 
 const NAV_GROUPS = {
   admin: {
-    label: 'Super Admin',
+    label: 'Admin',
     icon: 'bi bi-shield-lock',
     groups: [
       {
@@ -29,7 +29,7 @@ const NAV_GROUPS = {
         icon: 'bi bi-sliders',
         items: [
           { label: 'System Analytics', path: '/admin/analytics', icon: 'bi bi-graph-up' },
-          { label: 'Activity Log', path: '/admin/audit', icon: 'bi bi-journal-text' },
+          { label: 'Audit Log', path: '/admin/audit', icon: 'bi bi-journal-text' },
           { label: 'Platform Settings', path: '/admin/settings', icon: 'bi bi-gear' },
           { label: 'Backup and Restore', path: '/admin/backup', icon: 'bi bi-database' },
         ],

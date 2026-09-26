@@ -4,6 +4,29 @@ import useAuthStore from './store/authStore';
 import ToastContainer from './components/ui/Toast';
 import GlobalAuthModal from './components/auth/GlobalAuthModal';
 import AIChatbot from './components/AIChatbot';
+import MaintenanceScreen from './components/common/MaintenanceScreen';
+import usePlatformSettingsStore from './store/platformSettingsStore';
+import { startLiveSync } from './utils/supabaseClient';
+
+// Page code for each role, downloaded in the background after sign-in so
+// moving between that role's pages never waits on a network fetch.
+const ROLE_PAGE_MODULES = {
+  admin: import.meta.glob('./pages/admin/*.jsx'),
+  organizer: import.meta.glob('./pages/organizer/*.jsx'),
+  judge: import.meta.glob('./pages/judge/*.jsx'),
+  participant: import.meta.glob('./pages/participant/*.jsx'),
+  'institute-coordinator': import.meta.glob('./pages/admin/AdminRoles.jsx'),
+  'sports-head': import.meta.glob('./pages/admin/AdminRoles.jsx'),
+  osds: import.meta.glob('./pages/admin/AdminRoles.jsx'),
+};
+
+function prefetchRolePages(role) {
+  const loaders = Object.values(ROLE_PAGE_MODULES[role] || {});
+  if (loaders.length === 0) return;
+  const run = () => loaders.reduce((chain, load) => chain.then(() => load().catch(() => {})), Promise.resolve());
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 3000 });
+  else setTimeout(run, 1500);
+}
 import { APPROVAL_ROLES, buildAuthModalPath, buildReturnToPath, roleHomePath } from './utils/navigation';
 
 const Landing = lazy(() => import('./pages/public/Landing'));
@@ -309,8 +332,69 @@ function AppNotFound() {
   );
 }
 
+function MaintenanceGate({ children }) {
+  const { maintenanceEnabled, maintenanceMessage, maintenanceUntil } = usePlatformSettingsStore();
+  const { user, initialized } = useAuthStore();
+
+  if (!maintenanceEnabled) return children;
+  if (!initialized) return <LoadingFallback />;
+  if (user?.role !== 'admin') {
+    return <MaintenanceScreen message={maintenanceMessage} until={maintenanceUntil} />;
+  }
+
+  return (
+    <>
+      {children}
+      <Link
+        to="/admin/settings"
+        style={{
+          position: 'fixed',
+          left: '50%',
+          bottom: 20,
+          transform: 'translateX(-50%)',
+          zIndex: 1300,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '10px 16px',
+          borderRadius: 999,
+          background: '#92400e',
+          color: '#ffffff',
+          fontSize: 13,
+          fontWeight: 700,
+          textDecoration: 'none',
+          boxShadow: '0 12px 30px rgba(146,64,14,0.3)',
+        }}
+      >
+        <i className="bi bi-tools" />
+        Maintenance mode is on — only admins can use FairPlay
+      </Link>
+    </>
+  );
+}
+
+function ChatbotGate() {
+  const { aiEnabled, maintenanceEnabled } = usePlatformSettingsStore();
+  const role = useAuthStore((state) => state.user?.role);
+  if (!aiEnabled) return null;
+  if (maintenanceEnabled && role !== 'admin') return null;
+  return <AIChatbot />;
+}
+
 export default function App() {
   const initAuth = useAuthStore((state) => state.initAuth);
+  const startSettingsSync = usePlatformSettingsStore((state) => state.startSync);
+
+  const signedInRole = useAuthStore((state) => state.user?.role);
+
+  useEffect(() => {
+    startSettingsSync();
+    startLiveSync();
+  }, [startSettingsSync]);
+
+  useEffect(() => {
+    if (signedInRole) prefetchRolePages(signedInRole);
+  }, [signedInRole]);
 
   useEffect(() => {
     // Initialize AI logging system
@@ -327,6 +411,7 @@ export default function App() {
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <GlobalAuthModal />
       <AppErrorBoundary>
+        <MaintenanceGate>
         <Suspense fallback={<LoadingFallback />}>
           <Routes>
           <Route path="/" element={<Landing />} />
@@ -415,8 +500,9 @@ export default function App() {
           <Route path="*" element={<AppNotFound />} />
           </Routes>
         </Suspense>
+        </MaintenanceGate>
       </AppErrorBoundary>
-      <AIChatbot />
+      <ChatbotGate />
       <ToastContainer />
     </Router>
   );

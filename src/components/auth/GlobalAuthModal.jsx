@@ -1,13 +1,31 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
+import { getPostAuthPath } from '../../utils/navigation';
 import AuthModal from './AuthModal';
 
 export default function GlobalAuthModal() {
-  const { user, token, loading, initialized } = useAuthStore();
+  const { user, token, loading, initialized, logout } = useAuthStore();
   const location = useLocation();
   const navigate = useNavigate();
   const searchParams = new URLSearchParams(location.search);
+  const hasModal = searchParams.has('modal');
+  const signedIn = Boolean(user && token);
+  const blockedOrganizer = signedIn && user.role === 'organizer' && user.status !== 'active';
+
+  // A signed-in user sent to ?modal=login would otherwise see the landing page
+  // with no modal (it hides while signed in) and look stuck: send an active
+  // user to their dashboard, and sign a blocked organizer out so the login
+  // modal can actually show.
+  useEffect(() => {
+    if (!initialized || loading || !hasModal || !signedIn) return;
+    if (blockedOrganizer) {
+      logout();
+      return;
+    }
+    navigate(getPostAuthPath(user, searchParams.get('returnTo') || ''), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialized, loading, hasModal, signedIn, blockedOrganizer]);
 
   if (loading || !initialized) {
     // initAuth() is bounded (worst case a handful of seconds, if a stale
@@ -16,7 +34,7 @@ export default function GlobalAuthModal() {
     // on ?modal=login just saw a static page with no sign the click did
     // anything, which reads as "the login button is broken" even though
     // it was actually just about to work.
-    if (searchParams.has('modal')) {
+    if (hasModal) {
       return (
         <div
           style={{
@@ -47,11 +65,11 @@ export default function GlobalAuthModal() {
     return null;
   }
 
-  if (user && token) {
+  if (signedIn) {
     return null;
   }
 
-  if (searchParams.has('modal')) {
+  if (hasModal) {
     const handleClose = () => {
       searchParams.delete('modal');
       searchParams.delete('returnTo');
@@ -59,6 +77,6 @@ export default function GlobalAuthModal() {
     };
     return <AuthModal onClose={handleClose} />;
   }
-  
+
   return null;
 }

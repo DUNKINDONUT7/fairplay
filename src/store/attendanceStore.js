@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import useEventStore from './eventStore';
 
 // A participant scanned in at the door clearly showed up — clear any
@@ -80,7 +81,7 @@ const useAttendanceStore = create(
 
       fetchAttendance: async (eventId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().attendance.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -111,7 +112,7 @@ const useAttendanceStore = create(
         } catch (error) {
           console.error('Error fetching attendance:', error.message);
           if (!silent) {
-            set({ loading: false, error: error.message, attendance: [] });
+            set({ loading: false, error: error.message });
           }
           return [];
         }
@@ -245,7 +246,8 @@ const useAttendanceStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            attendance: currentState.attendance,
+            loading: false,
+            error: null,
           };
         }
 
@@ -257,5 +259,7 @@ const useAttendanceStore = create(
     }
   )
 );
+
+bindDataCacheReset(useAttendanceStore, ['attendance']);
 
 export default useAttendanceStore;

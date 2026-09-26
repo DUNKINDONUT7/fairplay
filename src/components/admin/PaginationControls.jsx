@@ -1,4 +1,4 @@
-export default function PaginationControls({ page, totalPages, limit, totalItems, onPageChange, onLimitChange }) {
+export default function PaginationControls({ page, totalPages, limit, totalItems, onPageChange, onLimitChange, pageSizes = [10, 25, 50, 100] }) {
   const safeTotalPages = Math.max(totalPages, 1);
   const start = totalItems === 0 ? 0 : (page - 1) * limit + 1;
   const end = Math.min(page * limit, totalItems);
@@ -10,7 +10,7 @@ export default function PaginationControls({ page, totalPages, limit, totalItems
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <select value={limit} onChange={(event) => onLimitChange(Number(event.target.value))} style={selectStyle}>
-          {[10, 25, 50, 100].map((value) => (
+          {pageSizes.map((value) => (
             <option key={value} value={value}>{value} / page</option>
           ))}
         </select>

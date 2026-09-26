@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 
 function createNumericId() {
   // Wide random range — team registration is bursty near deadlines, and a
@@ -80,7 +81,7 @@ const useTeamStore = create(
 
       fetchTeams: async (eventId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().teams.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -242,7 +243,8 @@ const useTeamStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            teams: currentState.teams,
+            loading: false,
+            error: null,
           };
         }
 
@@ -254,5 +256,7 @@ const useTeamStore = create(
     }
   )
 );
+
+bindDataCacheReset(useTeamStore, ['teams']);
 
 export default useTeamStore;

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import { validateRegistrationConflict } from '../services/eventWorkflowService';
 import useEventStore from './eventStore';
 import useTeamStore from './teamStore';
@@ -212,7 +213,8 @@ const useRegistrationStore = create(
           return registrations;
         } catch (error) {
           console.error('Error fetching registrations:', error.message);
-          set({ error: error.message, registrations: eventId ? get().registrations.filter((registration) => String(registration.eventId) !== String(eventId)) : [] });
+          // Keep what is already shown; a failed refresh should not blank the list.
+          set({ error: error.message });
           return [];
         }
       },
@@ -516,7 +518,7 @@ const useRegistrationStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            registrations: currentState.registrations,
+            error: null,
           };
         }
 
@@ -528,5 +530,7 @@ const useRegistrationStore = create(
     }
   )
 );
+
+bindDataCacheReset(useRegistrationStore, ['registrations']);
 
 export default useRegistrationStore;

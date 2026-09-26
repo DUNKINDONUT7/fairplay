@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { buildAppUrl } from '../utils/appUrl';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
+import { bindDataCacheReset } from '../utils/dataCache';
 import useNotificationStore from './notificationStore';
 
 let certificatesRealtimeBound = false;
@@ -212,7 +213,7 @@ const useCertificateStore = create(
 
       fetchCertificates: async (eventId, options = {}) => {
         const { silent = false } = options;
-        if (!silent) {
+        if (!silent && get().certificates.length === 0) {
           set({ loading: true, error: null });
         }
 
@@ -239,7 +240,7 @@ const useCertificateStore = create(
           return certificates;
         } catch (error) {
           console.error('Error fetching certificates:', error.message);
-          set({ loading: false, error: error.message, certificates: [] });
+          set({ loading: false, error: error.message });
           return [];
         }
       },
@@ -366,7 +367,8 @@ const useCertificateStore = create(
           return {
             ...currentState,
             ...(persistedState || {}),
-            certificates: currentState.certificates,
+            loading: false,
+            error: null,
           };
         }
 
@@ -378,5 +380,7 @@ const useCertificateStore = create(
     }
   )
 );
+
+bindDataCacheReset(useCertificateStore, ['certificates']);
 
 export default useCertificateStore;

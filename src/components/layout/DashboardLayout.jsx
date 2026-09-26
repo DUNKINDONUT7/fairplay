@@ -16,9 +16,6 @@ export default function DashboardLayout({ children, title, subtitle }) {
   const [sidebarOpen, setSidebarOpen] = useState(getInitialSidebarState);
   const [isMobile, setIsMobile] = useState(false);
   const sidebarWidth = isMobile ? 0 : sidebarOpen ? 250 : 76;
-  const isHighContrastDashboard =
-    location.pathname.startsWith('/admin') ||
-    location.pathname === '/approvals';
 
   useEffect(() => {
     const handleResize = () => {
@@ -52,7 +49,7 @@ export default function DashboardLayout({ children, title, subtitle }) {
     const lightBg = 'linear-gradient(180deg, #f8fbff 0%, #e0f2fe 100%)';
     document.body.style.background = lightBg;
     document.body.style.backgroundColor = '#f8fbff';
-    document.body.style.color = isHighContrastDashboard ? '#000000' : '#1d4ed8';
+    document.body.style.color = '#1d4ed8';
     document.documentElement.style.background = lightBg;
     document.documentElement.style.backgroundColor = '#f8fbff';
 
@@ -63,11 +60,10 @@ export default function DashboardLayout({ children, title, subtitle }) {
       document.documentElement.style.background = prevHtmlBackground;
       document.documentElement.style.backgroundColor = prevHtmlBackgroundColor;
     };
-  }, [isHighContrastDashboard]);
+  }, []);
 
   return (
     <div
-      className={isHighContrastDashboard ? 'fairplay-admin-shell' : undefined}
       style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f8fbff 0%, #e0f2fe 100%)' }}
     >
       <Navbar isMobile={isMobile} onMenuToggle={() => setSidebarOpen((current) => !current)} />

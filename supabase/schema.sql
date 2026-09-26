@@ -1388,3 +1388,249 @@ create policy "Users can delete their own avatar"
 on storage.objects for delete
 to authenticated
 using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ============================================================================
+-- SECTION: Audit log
+-- Every insert, update and delete on the tracked tables below is recorded by
+-- a trigger, with who did it. Admins can read it; nobody (not even admins)
+-- can edit or delete entries through the app. Safe to re-run.
+-- ============================================================================
+
+create table if not exists public.audit_log (
+  id bigint generated always as identity primary key,
+  occurred_at timestamptz not null default timezone('utc', now()),
+  actor_id text,
+  actor_email text,
+  actor_role text,
+  action text not null check (action in ('insert', 'update', 'delete')),
+  table_name text not null,
+  record_id text,
+  summary text,
+  changed_fields text[],
+  old_data jsonb,
+  new_data jsonb
+);
+
+create index if not exists audit_log_occurred_at_idx on public.audit_log (occurred_at desc);
+create index if not exists audit_log_table_record_idx on public.audit_log (table_name, record_id);
+create index if not exists audit_log_actor_idx on public.audit_log (actor_id);
+
+alter table public.audit_log enable row level security;
+
+-- The grants at the top of this file hand every table to anon/authenticated;
+-- take write access back so entries can only come from the trigger below.
+revoke all on public.audit_log from anon;
+revoke insert, update, delete, truncate on public.audit_log from authenticated, service_role;
+grant select on public.audit_log to authenticated, service_role;
+
+drop policy if exists "Admins can read the audit log" on public.audit_log;
+create policy "Admins can read the audit log"
+on public.audit_log for select
+to authenticated
+using (public.is_admin_user());
+
+create or replace function public.write_audit_log()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old jsonb := case when tg_op in ('UPDATE', 'DELETE') then to_jsonb(old) end;
+  v_new jsonb := case when tg_op in ('INSERT', 'UPDATE') then to_jsonb(new) end;
+  v_row jsonb := coalesce(to_jsonb(new), to_jsonb(old));
+  v_changed text[];
+  v_old_diff jsonb;
+  v_new_diff jsonb;
+  v_actor text := auth.uid()::text;
+  v_email text;
+  v_role text;
+begin
+  if tg_op = 'UPDATE' then
+    select array_agg(n.key order by n.key),
+           jsonb_object_agg(n.key, v_old -> n.key),
+           jsonb_object_agg(n.key, n.value)
+      into v_changed, v_old_diff, v_new_diff
+      from jsonb_each(v_new) as n
+     where n.key <> 'updated_at'
+       and (v_old -> n.key) is distinct from n.value;
+
+    -- Nothing but updated_at changed: not worth an entry.
+    if v_changed is null then
+      return new;
+    end if;
+    v_old := v_old_diff;
+    v_new := v_new_diff;
+  end if;
+
+  if v_actor is not null then
+    select p.email, p.role into v_email, v_role from public.profiles p where p.id = v_actor;
+    v_email := coalesce(v_email, auth.jwt() ->> 'email');
+  end if;
+
+  insert into public.audit_log (
+    actor_id, actor_email, actor_role, action, table_name, record_id,
+    summary, changed_fields, old_data, new_data
+  ) values (
+    v_actor, v_email, v_role, lower(tg_op), tg_table_name, v_row ->> 'id',
+    coalesce(v_row ->> 'title', v_row ->> 'full_name', v_row ->> 'name',
+             v_row ->> 'participant_name', v_row ->> 'judge_name', v_row ->> 'email'),
+    v_changed, v_old, v_new
+  );
+
+  return coalesce(new, old);
+exception when others then
+  -- Logging must never block the real change.
+  return coalesce(new, old);
+end;
+$$;
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'profiles', 'events', 'teams', 'registrations', 'scores', 'judges',
+    'judge_assignments', 'attendance', 'certificates', 'tournaments',
+    'brackets', 'matches', 'rubric_templates'
+  ]
+  loop
+    if to_regclass('public.' || t) is not null then
+      execute format('drop trigger if exists audit_%1$s on public.%1$I', t);
+      execute format(
+        'create trigger audit_%1$s after insert or update or delete on public.%1$I
+         for each row execute function public.write_audit_log()',
+        t
+      );
+    end if;
+  end loop;
+end;
+$$;
+
+-- ============================================================================
+-- SECTION: Platform settings
+-- One row of platform-wide switches the admin controls from Platform
+-- Settings: maintenance mode (with a message and an expected return time)
+-- and turning AI features on or off. Everyone can read it (the app must know
+-- about maintenance even before sign-in); only admins can change it.
+-- Run after the Audit log section. Safe to re-run.
+-- ============================================================================
+
+create table if not exists public.platform_settings (
+  id integer primary key default 1 check (id = 1),
+  maintenance_enabled boolean not null default false,
+  maintenance_message text not null default '',
+  maintenance_until timestamptz,
+  ai_enabled boolean not null default true,
+  updated_at timestamptz not null default timezone('utc', now()),
+  updated_by text
+);
+
+insert into public.platform_settings (id) values (1) on conflict (id) do nothing;
+
+alter table public.platform_settings enable row level security;
+
+drop policy if exists "Anyone can read platform settings" on public.platform_settings;
+create policy "Anyone can read platform settings"
+on public.platform_settings for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "Admins can update platform settings" on public.platform_settings;
+create policy "Admins can update platform settings"
+on public.platform_settings for update
+to authenticated
+using (public.is_admin_user())
+with check (public.is_admin_user());
+
+drop trigger if exists set_platform_settings_updated_at on public.platform_settings;
+create trigger set_platform_settings_updated_at
+before update on public.platform_settings
+for each row execute function public.set_updated_at();
+
+drop trigger if exists audit_platform_settings on public.platform_settings;
+create trigger audit_platform_settings
+after insert or update or delete on public.platform_settings
+for each row execute function public.write_audit_log();
+
+-- Lets open browsers pick up maintenance mode the moment it is switched on.
+do $$
+begin
+  alter publication supabase_realtime add table public.platform_settings;
+exception when others then
+  null;
+end;
+$$;
+
+-- ============================================================================
+-- SECTION: Backups
+-- History of full-database backups. The backup files live in the private
+-- "backups" storage bucket; this table lists them. Only the admin-backup
+-- Edge Function (service role) writes here; admins can read. Safe to re-run.
+-- ============================================================================
+
+create table if not exists public.backups (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default timezone('utc', now()),
+  kind text not null default 'manual' check (kind in ('manual', 'automatic', 'pre-restore', 'uploaded')),
+  note text,
+  storage_path text not null,
+  size_bytes bigint not null default 0,
+  table_counts jsonb not null default '{}'::jsonb,
+  total_records integer not null default 0,
+  created_by text,
+  created_by_email text,
+  source_created_at timestamptz
+);
+
+create index if not exists backups_created_at_idx on public.backups (created_at desc);
+
+alter table public.backups enable row level security;
+
+revoke all on public.backups from anon;
+revoke insert, update, delete, truncate on public.backups from authenticated;
+grant select on public.backups to authenticated;
+grant all on public.backups to service_role;
+
+drop policy if exists "Admins can read backups" on public.backups;
+create policy "Admins can read backups"
+on public.backups for select
+to authenticated
+using (public.is_admin_user());
+
+-- Private bucket: no storage policies, so only the service role (the
+-- admin-backup Edge Function) can read or write backup files.
+insert into storage.buckets (id, name, public)
+values ('backups', 'backups', false)
+on conflict (id) do update set public = false;
+
+notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- SECTION: Realtime
+-- Lets open browsers receive row changes the moment they happen, so pages
+-- update without a reload. Tables already in the publication are skipped.
+-- Safe to re-run.
+-- ============================================================================
+
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'profiles', 'events', 'teams', 'registrations', 'scores', 'audience_scores',
+    'judges', 'judge_assignments', 'judge_invites', 'attendance', 'certificates',
+    'notifications', 'tournaments', 'brackets', 'matches', 'match_participants',
+    'rubric_templates', 'ai_detections', 'platform_settings'
+  ]
+  loop
+    if to_regclass('public.' || t) is not null
+       and not exists (
+         select 1 from pg_publication_tables
+         where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+       ) then
+      execute format('alter publication supabase_realtime add table public.%I', t);
+    end if;
+  end loop;
+end;
+$$;
