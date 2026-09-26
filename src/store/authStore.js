@@ -22,6 +22,19 @@ const ALLOWED_ROLES = new Set([
 ]);
 
 let authListenerBound = false;
+// Bumped on every onAuthStateChange invocation and at the start of logout().
+// Supabase can fire this callback for overlapping events (a periodic token
+// refresh, then moments later a sign-out) and each invocation does its own
+// async round-trip (buildSessionUser/fetchProfilesList) before calling
+// set() — nothing guarantees they resolve in the order they fired. Without
+// this guard, an earlier, slow-resolving invocation can finish *after* the
+// sign-out's own invocation and silently overwrite the just-cleared session
+// with stale (but locally valid-looking) user data — the "Sign Out doesn't
+// work until I reload and click it again" bug: Supabase had already ended
+// the real session, but the store's local state got revived by the stale
+// callback, so the UI kept showing a signed-in user until a reload called
+// getSession() fresh and got the real (signed-out) answer.
+let authCallbackVersion = 0;
 
 function normalizeRole(role) {
   return ALLOWED_ROLES.has(role) ? role : 'participant';
@@ -337,8 +350,16 @@ const useAuthStore = create(
         if (!authListenerBound) {
           authListenerBound = true;
           supabase.auth.onAuthStateChange(async (_event, session) => {
+            const version = ++authCallbackVersion;
             const nextUser = session?.user ? await buildSessionUser(session.user) : null;
             const users = session?.user ? await fetchProfilesList().catch(() => get().users) : get().users;
+
+            // A newer auth event (e.g. this one was a stale token-refresh
+            // that started before a sign-out, and only resolved after it)
+            // has since started and already set the authoritative state —
+            // applying this result now would revive a session that's
+            // actually already gone.
+            if (version !== authCallbackVersion) return;
 
             set({
               user: nextUser,
@@ -750,6 +771,12 @@ const useAuthStore = create(
       },
 
       logout: async () => {
+        // Invalidate any onAuthStateChange invocation already in flight
+        // (e.g. a periodic token refresh) before signOut() even starts, so
+        // it can never resolve later and revive the session we're about
+        // to clear — see the comment on authCallbackVersion above.
+        authCallbackVersion += 1;
+
         if (SUPABASE_AUTH_ENABLED && supabase) {
           await supabase.auth.signOut();
         }
