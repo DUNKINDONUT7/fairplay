@@ -477,7 +477,11 @@ export default function App() {
           <Route path="/organizer/brackets" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerBracket /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/scoring" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerScoring /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/events/:id" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerEventDetail /></ProtectedRoute></MobileRestrictedRoute>} />
-          <Route path="/organizer/verify/:token" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute></MobileRestrictedRoute>} />
+          {/* Not behind MobileRestrictedRoute on purpose: scanning a
+              participant's QR at check-in is inherently a phone-in-hand
+              workflow, unlike the rest of the organizer tools this
+              restriction exists for. */}
+          <Route path="/organizer/verify/:token" element={<ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute>} />
           <Route path="/organizer/certificates" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerCertificates /></ProtectedRoute></MobileRestrictedRoute>} />
           <Route path="/organizer/profile" element={<MobileRestrictedRoute><ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute></MobileRestrictedRoute>} />
 
