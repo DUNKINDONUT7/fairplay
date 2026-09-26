@@ -1,16 +1,116 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import useAuthStore from '../../store/authStore';
 import useCertificateStore from '../../store/certificateStore';
+import useNotificationStore from '../../store/notificationStore';
+
+const MAX_AVATAR_BYTES = 3 * 1024 * 1024;
 
 export default function ParticipantProfile() {
   const location = useLocation();
-  const { user } = useAuthStore();
+  const { user, updateUser, updateCredentials, uploadAvatar } = useAuthStore();
+  const { success, error } = useNotificationStore();
   const { certificates, fetchCertificates, getCertificateById, getCertificatesByRecipient } = useCertificateStore();
   const certificateId = location.state?.certificateId || new URLSearchParams(location.search).get('certificateId');
   const [selectedCertificate, setSelectedCertificate] = useState(null);
+
+  const fileInputRef = useRef(null);
+  const [avatarPreview, setAvatarPreview] = useState('');
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  const [details, setDetails] = useState({ bio: user?.bio || '', phone: user?.phone || '' });
+  const [savingDetails, setSavingDetails] = useState(false);
+
+  const [newEmail, setNewEmail] = useState(user?.email || '');
+  const [updatingEmail, setUpdatingEmail] = useState(false);
+
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [updatingPassword, setUpdatingPassword] = useState(false);
+
+  useEffect(() => {
+    setDetails({ bio: user?.bio || '', phone: user?.phone || '' });
+    setNewEmail(user?.email || '');
+  }, [user?.bio, user?.phone, user?.email]);
+
+  async function handleAvatarSelect(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !user?.id) return;
+
+    if (!file.type.startsWith('image/')) {
+      error('Please choose an image file.');
+      return;
+    }
+    if (file.size > MAX_AVATAR_BYTES) {
+      error('Image is too large — please choose one under 3MB.');
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setAvatarPreview(previewUrl);
+    setUploadingAvatar(true);
+    try {
+      await uploadAvatar(user.id, file);
+      success('Profile picture updated.');
+    } catch (err) {
+      error(err.message || 'Unable to upload the image.');
+      setAvatarPreview('');
+    } finally {
+      setUploadingAvatar(false);
+      URL.revokeObjectURL(previewUrl);
+    }
+  }
+
+  async function handleSaveDetails() {
+    if (!user?.id) return;
+    setSavingDetails(true);
+    try {
+      await updateUser(user.id, { bio: details.bio, phone: details.phone });
+      success('Profile details saved.');
+    } catch (err) {
+      error(err.message || 'Unable to save your profile details.');
+    } finally {
+      setSavingDetails(false);
+    }
+  }
+
+  async function handleUpdateEmail() {
+    if (!newEmail.trim() || newEmail.trim() === user?.email) return;
+    setUpdatingEmail(true);
+    try {
+      await updateCredentials({ email: newEmail.trim() });
+      success('Check your new email inbox for a confirmation link — the change takes effect once you click it.');
+    } catch (err) {
+      error(err.message || 'Unable to update your email.');
+    } finally {
+      setUpdatingEmail(false);
+    }
+  }
+
+  async function handleUpdatePassword() {
+    if (newPassword.length < 8) {
+      error('Password must be at least 8 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      error('Passwords do not match.');
+      return;
+    }
+    setUpdatingPassword(true);
+    try {
+      await updateCredentials({ password: newPassword });
+      success('Password updated.');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      error(err.message || 'Unable to update your password.');
+    } finally {
+      setUpdatingPassword(false);
+    }
+  }
 
   useEffect(() => {
     fetchCertificates();
@@ -103,9 +203,33 @@ export default function ParticipantProfile() {
       <div style={{ display: 'grid', gap: 24 }}>
         <div style={{ background: '#ffffff', border: '1px solid #dbeafe', boxShadow: '0 10px 30px rgba(37,99,235,0.06)', borderRadius: 16, padding: 28, maxWidth: 720 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-            <span style={{ width: 64, height: 64, borderRadius: 16, background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 30, fontWeight: 700, color: '#fff', boxShadow: '0 8px 20px rgba(37,99,235,0.25)' }}>
-              {user?.name?.charAt(0) || 'P'}
-            </span>
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <span style={{
+                width: 72, height: 72, borderRadius: 16, overflow: 'hidden',
+                background: (avatarPreview || user?.avatarUrl) ? '#f1f5f9' : 'linear-gradient(135deg, #2563eb, #0ea5e9)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 30, fontWeight: 700, color: '#fff', boxShadow: '0 8px 20px rgba(37,99,235,0.25)',
+              }}>
+                {avatarPreview || user?.avatarUrl ? (
+                  <img src={avatarPreview || user.avatarUrl} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: uploadingAvatar ? 0.5 : 1 }} />
+                ) : (
+                  user?.name?.charAt(0) || 'P'
+                )}
+              </span>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadingAvatar}
+                title="Change profile picture"
+                style={{
+                  position: 'absolute', bottom: -6, right: -6, width: 28, height: 28, borderRadius: '50%',
+                  background: '#2563eb', color: '#fff', border: '2px solid #fff', cursor: uploadingAvatar ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12,
+                }}
+              >
+                <i className={uploadingAvatar ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-camera-fill'} />
+              </button>
+              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleAvatarSelect} style={{ display: 'none' }} />
+            </div>
             <div>
               <h2 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', margin: 0 }}>{user?.name || 'Participant User'}</h2>
               <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -113,15 +237,63 @@ export default function ParticipantProfile() {
               </p>
             </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div style={{ padding: 18, borderRadius: 16, background: '#eff6ff', border: '1px solid #dbeafe' }}>
-              <p style={{ margin: 0, color: '#60a5fa', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Name</p>
-              <p style={{ margin: '8px 0 0', color: '#0f172a', fontWeight: 700 }}>{user?.name || 'Not signed in'}</p>
+
+          <div style={{ display: 'grid', gap: 14, paddingTop: 20, borderTop: '1px solid #e5efff' }}>
+            <div>
+              <label style={labelStyle}>About Me</label>
+              <textarea
+                value={details.bio}
+                onChange={(event) => setDetails((prev) => ({ ...prev, bio: event.target.value }))}
+                placeholder="Tell organizers and teammates a bit about yourself..."
+                rows={3}
+                style={{ ...fieldStyle, resize: 'vertical' }}
+              />
             </div>
-            <div style={{ padding: 18, borderRadius: 16, background: '#eff6ff', border: '1px solid #dbeafe' }}>
-              <p style={{ margin: 0, color: '#60a5fa', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>Email</p>
-              <p style={{ margin: '8px 0 0', color: '#0f172a', fontWeight: 700 }}>{user?.email || 'Not available'}</p>
+            <div>
+              <label style={labelStyle}>Phone Number</label>
+              <input
+                value={details.phone}
+                onChange={(event) => setDetails((prev) => ({ ...prev, phone: event.target.value }))}
+                placeholder="e.g. 0917 123 4567"
+                style={fieldStyle}
+              />
             </div>
+            <button onClick={handleSaveDetails} disabled={savingDetails} style={{ ...saveButtonStyle, justifySelf: 'start' }}>
+              {savingDetails ? 'Saving...' : 'Save Profile Details'}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ background: '#ffffff', border: '1px solid #dbeafe', boxShadow: '0 10px 30px rgba(37,99,235,0.06)', borderRadius: 16, padding: 28, maxWidth: 720, display: 'grid', gap: 20 }}>
+          <div>
+            <h3 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: 18, fontWeight: 800, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <i className="bi bi-shield-lock-fill" style={{ color: '#2563eb' }} /> Account Credentials
+            </h3>
+            <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>Changing your email requires confirming a link sent to the new address before it takes effect.</p>
+          </div>
+
+          <div>
+            <label style={labelStyle}>Email Address</label>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+              <input value={newEmail} onChange={(event) => setNewEmail(event.target.value)} style={{ ...fieldStyle, flex: 1, minWidth: 220 }} />
+              <button onClick={handleUpdateEmail} disabled={updatingEmail || !newEmail.trim() || newEmail.trim() === user?.email} style={saveButtonStyle}>
+                {updatingEmail ? 'Sending...' : 'Update Email'}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ paddingTop: 16, borderTop: '1px solid #e5efff', display: 'grid', gap: 12 }}>
+            <div>
+              <label style={labelStyle}>New Password</label>
+              <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="At least 8 characters" style={fieldStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Confirm New Password</label>
+              <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} style={fieldStyle} />
+            </div>
+            <button onClick={handleUpdatePassword} disabled={updatingPassword || !newPassword} style={{ ...saveButtonStyle, justifySelf: 'start' }}>
+              {updatingPassword ? 'Updating...' : 'Update Password'}
+            </button>
           </div>
         </div>
 
@@ -156,3 +328,27 @@ export default function ParticipantProfile() {
     </DashboardLayout>
   );
 }
+
+const labelStyle = { display: 'block', fontSize: 13, fontWeight: 600, color: '#64748b', marginBottom: 6 };
+const fieldStyle = {
+  width: '100%',
+  padding: '10px 14px',
+  borderRadius: 12,
+  background: '#ffffff',
+  border: '1px solid #bfdbfe',
+  color: '#0f172a',
+  fontSize: 14,
+  outline: 'none',
+  boxShadow: 'inset 0 1px 2px rgba(148,163,184,0.08)',
+};
+const saveButtonStyle = {
+  padding: '10px 20px',
+  borderRadius: 12,
+  background: 'linear-gradient(135deg, #2563eb, #0ea5e9)',
+  color: '#ffffff',
+  border: 'none',
+  fontWeight: 700,
+  fontSize: 14,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};

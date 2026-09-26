@@ -1332,3 +1332,44 @@ select cron.schedule(
 -- ============================================================================
 
 alter table public.events add column if not exists anonymous_judging boolean default false;
+
+-- ============================================================================
+-- SECTION: Participant profile management
+-- Adds the "About Me" / phone fields the Manage Profile page writes to, and
+-- an `avatars` storage bucket for profile picture uploads. Every signed-in
+-- user (any role, not just participants — mapProfileRow/updateUser in
+-- authStore.js are shared) can read any avatar (they're public-facing
+-- images shown across the app) but can only write inside a folder path
+-- prefixed with their own auth uid, so one account can never overwrite
+-- another's picture.
+-- ============================================================================
+
+alter table public.profiles add column if not exists bio text default '';
+alter table public.profiles add column if not exists phone text default '';
+
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+drop policy if exists "Avatar images are publicly accessible" on storage.objects;
+create policy "Avatar images are publicly accessible"
+on storage.objects for select
+using (bucket_id = 'avatars');
+
+drop policy if exists "Users can upload their own avatar" on storage.objects;
+create policy "Users can upload their own avatar"
+on storage.objects for insert
+to authenticated
+with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "Users can update their own avatar" on storage.objects;
+create policy "Users can update their own avatar"
+on storage.objects for update
+to authenticated
+using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "Users can delete their own avatar" on storage.objects;
+create policy "Users can delete their own avatar"
+on storage.objects for delete
+to authenticated
+using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);

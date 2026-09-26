@@ -148,6 +148,8 @@ function mapProfileRow(profile) {
     avatar: buildAvatar(profile.full_name, profile.email),
     avatarUrl: profile.avatar_url || '',
     status: profile.status || 'active',
+    bio: profile.bio || '',
+    phone: profile.phone || '',
     joined: profile.created_at ? String(profile.created_at).slice(0, 10) : new Date().toISOString().slice(0, 10),
     createdAt: profile.created_at || null,
     metadata: profile.metadata || {},
@@ -620,6 +622,8 @@ const useAuthStore = create(
             ...(updates?.role ? { role: normalizeRole(updates.role) } : {}),
             ...(updates?.avatarUrl !== undefined ? { avatar_url: updates.avatarUrl } : {}),
             ...(updates?.status ? { status: updates.status } : {}),
+            ...(updates?.bio !== undefined ? { bio: updates.bio } : {}),
+            ...(updates?.phone !== undefined ? { phone: updates.phone } : {}),
             updated_at: new Date().toISOString(),
           };
 
@@ -652,6 +656,61 @@ const useAuthStore = create(
         });
 
         return updatedUser;
+      },
+
+      // Real Supabase Auth login credentials — distinct from updateUser
+      // above, which only ever writes to the profiles table's own `email`
+      // column (a display copy). Changing the actual sign-in email/password
+      // has to go through auth.updateUser; Supabase emails a confirmation
+      // link to the new address and the change only takes effect once the
+      // user clicks it, so the profiles row is intentionally left alone here
+      // — updating it immediately would show an email the user can't yet
+      // sign in with.
+      updateCredentials: async ({ email, password } = {}) => {
+        if (!SUPABASE_AUTH_ENABLED || !supabase) {
+          throw new Error(NOT_CONNECTED_MESSAGE);
+        }
+
+        const payload = {};
+        if (email) payload.email = email;
+        if (password) payload.password = password;
+        if (Object.keys(payload).length === 0) return null;
+
+        const { data, error } = await supabase.auth.updateUser(payload);
+        if (error) {
+          throw new Error(describeAuthError(error, { action: 'updating your email or password' }));
+        }
+        return data;
+      },
+
+      // Stores at avatars/<userId>/... so the storage RLS policy (schema.sql)
+      // can scope each signed-in user to writing only their own folder.
+      uploadAvatar: async (userId, file) => {
+        if (!SUPABASE_AUTH_ENABLED || !supabase) {
+          throw new Error(NOT_CONNECTED_MESSAGE);
+        }
+        if (!userId || !file) {
+          throw new Error('Missing user or file to upload.');
+        }
+
+        const extension = (file.name.split('.').pop() || 'jpg').toLowerCase();
+        const path = `${userId}/avatar-${Date.now()}.${extension}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(path, file, { upsert: true, cacheControl: '3600' });
+        if (uploadError) {
+          throw new Error(uploadError.message || 'Unable to upload the image.');
+        }
+
+        const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+        const publicUrl = data?.publicUrl;
+        if (!publicUrl) {
+          throw new Error('Unable to generate a public URL for the uploaded image.');
+        }
+
+        await get().updateUser(userId, { avatarUrl: publicUrl });
+        return publicUrl;
       },
 
       deleteUser: async (userId) => {
