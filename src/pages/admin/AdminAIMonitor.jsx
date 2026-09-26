@@ -56,7 +56,7 @@ export default function AdminAIMonitor() {
       const derived = deriveAiDetections(systemData);
       const saved = await upsertAiDetections(derived);
       setDetections(saved);
-      setMessage(`AI scan completed. ${saved.length} flagged record(s) found.`);
+      setMessage(`Saved ${saved.length} flagged record(s) to the database.`);
     } catch {
       setError('Unable to save AI detection records.');
     } finally {
@@ -91,7 +91,7 @@ export default function AdminAIMonitor() {
           <h2 style={{ fontSize: 18, fontWeight: 800, color: '#0f172a', margin: 0 }}>Risk and flagged activity status</h2>
         </div>
         <button onClick={handleRunScan} disabled={saving || loading} style={primaryButtonStyle}>
-          {saving ? 'Scanning...' : 'Run Rule-Based Scan'}
+          {saving ? 'Saving...' : 'Save Scan to Database'}
         </button>
       </div>
 
@@ -111,7 +111,7 @@ export default function AdminAIMonitor() {
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
           <div>
             <h3 style={{ fontSize: 18, fontWeight: 800, marginBottom: 4, color: '#0f172a' }}>Recent AI Detections</h3>
-            <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>Records are loaded from `ai_detections` when Supabase is configured, otherwise derived from current system data.</p>
+            <p style={{ margin: 0, color: '#64748b', fontSize: 13 }}>Flags are detected automatically from live system data. Use "Save Scan to Database" to persist the current results and any resolved status.</p>
           </div>
         </div>
 

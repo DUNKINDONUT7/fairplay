@@ -210,7 +210,17 @@ function normalizeDetection(row) {
   };
 }
 
+// Detections are computed live from data the page already loaded (events,
+// registrations, scores, attendance) rather than only read back from the
+// `ai_detections` table — so the page shows current flags the moment it
+// loads instead of staying empty until someone clicks "Run Rule-Based Scan".
+// Persisted rows are still honored: if a detection was already saved (e.g.
+// an admin marked it resolved), that saved status wins over a freshly
+// re-derived "open" one, and historical rows that no longer re-derive (the
+// underlying issue was fixed) are still included so they don't vanish.
 export async function fetchAiDetections(systemData) {
+  const derived = deriveAiDetections(systemData);
+
   if (isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -218,14 +228,22 @@ export async function fetchAiDetections(systemData) {
         .select('*')
         .order('detected_at', { ascending: false });
       if (error) throw error;
-      return (data || []).map(normalizeDetection);
+
+      const stored = (data || []).map(normalizeDetection);
+      const storedById = new Map(stored.map((item) => [item.id, item]));
+      const derivedIds = new Set(derived.map((item) => item.id));
+      const merged = derived.map((item) => storedById.get(item.id) || item);
+      const historicalOnly = stored.filter((item) => !derivedIds.has(item.id));
+
+      return [...merged, ...historicalOnly].sort(
+        (left, right) => new Date(right.detectedAt).getTime() - new Date(left.detectedAt).getTime()
+      );
     } catch (error) {
-      // Fall through to derived monitoring records when the database table is unavailable.
+      // Fall through to purely derived monitoring records when the database table is unavailable.
     }
   }
 
   const local = JSON.parse(localStorage.getItem(AI_DETECTIONS_KEY) || '[]').map(normalizeDetection);
-  const derived = deriveAiDetections(systemData);
   const seen = new Set();
   return [...local, ...derived].filter((item) => {
     if (seen.has(item.id)) return false;
