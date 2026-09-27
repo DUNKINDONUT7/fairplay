@@ -65,6 +65,29 @@ async function fetchMetadataAudienceScores(eventId) {
 async function saveMetadataAudienceScore(eventId, submission) {
   if (!eventId || !supabase) return submission;
 
+  const row = {
+    id: submission.id,
+    eventId: submission.eventId,
+    contestantId: submission.contestantId,
+    contestantName: submission.contestantName,
+    voterKey: submission.voterKey,
+    score: submission.score,
+    createdAt: submission.createdAt,
+  };
+
+  // Audience members don't own the event, so their vote goes through the
+  // add_event_audience_score database function (which also rejects repeat
+  // votes) rather than an UPDATE of the event row. The direct write below is
+  // only the fallback for a database without that function yet.
+  const { error: rpcError } = await supabase.rpc('add_event_audience_score', {
+    p_event_id: Number(eventId),
+    p_submission: row,
+  });
+  if (!rpcError) return submission;
+  if (rpcError.code !== 'PGRST202' && rpcError.code !== '42883') {
+    throw new Error(rpcError.message || 'Unable to save the audience score.');
+  }
+
   const { data, error: fetchError } = await supabase
     .from('events')
     .select('metadata')

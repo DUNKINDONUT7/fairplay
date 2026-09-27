@@ -220,6 +220,12 @@ function getMissingColumnName(error) {
   return null;
 }
 
+// A database function that hasn't been created yet (events-ownership-1 SQL
+// not run) — callers fall back to the old direct write.
+function isMissingFunctionError(error) {
+  return error?.code === 'PGRST202' || error?.code === '42883';
+}
+
 async function saveEventPayload(payload, { select = false, mode = 'upsert' } = {}) {
   let currentPayload = { ...payload };
 
@@ -468,6 +474,70 @@ const useEventStore = create(
         }
 
         return updatedEvent;
+      },
+
+      // Registration adds a contestant through the register_event_contestant
+      // database function instead of re-saving the whole event: only the
+      // event's owner may edit the event row itself, and participants aren't
+      // the owner. Falls back to updateEvent where that function isn't there.
+      addContestant: async (eventId, contestant) => {
+        const current = get().getEventById(eventId);
+        const localContestants = [...(current?.contestants || []), contestant];
+
+        if (isSupabaseConfigured) {
+          const { data, error } = await supabase.rpc('register_event_contestant', {
+            p_event_id: Number(eventId),
+            p_contestant: contestant,
+          });
+          if (!error) {
+            const contestants = Array.isArray(data) ? data : localContestants;
+            set((state) => ({
+              events: state.events.map((event) => (
+                String(event.id) === String(eventId)
+                  ? normalizeEvent({ ...event, contestants, participants: contestants.length }, 0)
+                  : event
+              )),
+            }));
+            return contestants;
+          }
+          if (!isMissingFunctionError(error)) throw error;
+        }
+
+        await get().updateEvent(eventId, { contestants: localContestants, participants: localContestants.length });
+        return localContestants;
+      },
+
+      // Stores a championship report on the event (see addContestant for why
+      // this goes through a database function).
+      addGeneratedReport: async (eventId, report) => {
+        if (isSupabaseConfigured) {
+          const { error } = await supabase.rpc('add_event_generated_report', {
+            p_event_id: Number(eventId),
+            p_report: report,
+          });
+          if (!error) {
+            set((state) => ({
+              events: state.events.map((event) => {
+                if (String(event.id) !== String(eventId)) return event;
+                const existing = Array.isArray(event.metadata?.generatedReports) ? event.metadata.generatedReports : [];
+                const generatedReports = [report, ...existing.filter((entry) => String(entry.id) !== String(report.id))];
+                return { ...event, metadata: { ...(event.metadata || {}), generatedReports } };
+              }),
+            }));
+            return;
+          }
+          if (!isMissingFunctionError(error)) throw error;
+        }
+
+        const current = get().getEventById(eventId);
+        if (!current) return;
+        const existing = Array.isArray(current.metadata?.generatedReports) ? current.metadata.generatedReports : [];
+        await get().updateEvent(eventId, {
+          metadata: {
+            ...(current.metadata || {}),
+            generatedReports: [report, ...existing.filter((entry) => String(entry.id) !== String(report.id))],
+          },
+        });
       },
 
       deleteEvent: async (eventId) => {

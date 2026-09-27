@@ -254,16 +254,12 @@ const useRegistrationStore = create(
           const event = eventStore.getEventById(eventId);
           const qrToken = createQrToken('team');
           if (event) {
-            const contestants = [...(event.contestants || []), {
+            await eventStore.addContestant(eventId, {
               id: team.id,
               name: team.name,
               type: 'team',
               teamName,
               qrToken,
-            }];
-            await eventStore.updateEvent(eventId, {
-              contestants,
-              participants: contestants.length,
             });
           }
 
@@ -428,11 +424,7 @@ const useRegistrationStore = create(
             };
           }
 
-          const contestants = [...(event.contestants || []), contestantRecord];
-          await eventStore.updateEvent(eventId, {
-            contestants,
-            participants: contestants.length,
-          });
+          await eventStore.addContestant(eventId, contestantRecord);
 
           const registration = normalizeRegistration({
             id: createRegistrationId(registrationType),

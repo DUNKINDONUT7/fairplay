@@ -415,20 +415,11 @@ const useTournamentStore = create(
             };
 
             const reportSnapshot = buildChampionshipReportSnapshot(updatedTournament, savedMatch, champion);
-            if (reportSnapshot && eventStore.updateEvent && event?.id) {
-              const existingReports = Array.isArray(event.metadata?.generatedReports)
-                ? event.metadata.generatedReports
-                : [];
-              const nextReports = [
-                reportSnapshot,
-                ...existingReports.filter((entry) => String(entry.id) !== String(reportSnapshot.id)),
-              ];
-
-              await eventStore.updateEvent(event.id, {
-                metadata: {
-                  ...(event.metadata || {}),
-                  generatedReports: nextReports,
-                },
+            if (reportSnapshot && event?.id) {
+              // Scorers aren't the event's owner, so this goes through a
+              // database function rather than re-saving the event.
+              await eventStore.addGeneratedReport(event.id, reportSnapshot).catch((reportError) => {
+                console.warn('Championship report was not saved:', reportError?.message || reportError);
               });
             }
 
