@@ -141,7 +141,7 @@ function formatRelative(value) {
 export default function OrganizerJudges() {
   const { user } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
-  const { judges, loading, fetchJudges } = useJudgeStore();
+  const { judges, assignments, loading, fetchJudges } = useJudgeStore();
   const { scores, fetchScores } = useScoreStore();
   const [searchTerm, setSearchTerm] = useState('');
   const [eventFilter, setEventFilter] = useState('');
@@ -164,10 +164,18 @@ export default function OrganizerJudges() {
     [scores, myEventIds],
   );
 
+  // The judges table is shared by every organizer — only list the ones
+  // assigned to one of this organizer's events (scorers are added below).
+  const myJudgeIds = useMemo(() => new Set(
+    (assignments || [])
+      .filter((assignment) => myEventIds.has(String(assignment.eventId)))
+      .map((assignment) => String(assignment.judgeId)),
+  ), [assignments, myEventIds]);
+
   const judgeMap = useMemo(() => {
     const map = {};
 
-    judges.forEach((j) => {
+    judges.filter((j) => myJudgeIds.has(String(j.id))).forEach((j) => {
       const id = j.email?.toLowerCase() || String(j.id);
       map[id] = { id, name: j.name || 'Judge', email: j.email || '', specialty: j.specialty || 'General', scoredEvents: {}, lastScoredAt: null };
     });
@@ -191,7 +199,7 @@ export default function OrganizerJudges() {
     });
 
     return map;
-  }, [judges, allScores, events]);
+  }, [judges, myJudgeIds, allScores, events]);
 
   const allJudges = useMemo(
     () => Object.values(judgeMap).sort((a, b) =>

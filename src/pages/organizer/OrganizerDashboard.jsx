@@ -6,21 +6,83 @@ import ConfirmDialog from '../../components/common/ConfirmDialog';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
+import useJudgeStore from '../../store/judgeStore';
+import OrganizerWelcomeTour from '../../components/onboarding/OrganizerWelcomeTour';
+import OrganizerGettingStarted from '../../components/onboarding/OrganizerGettingStarted';
+
+// Per-account onboarding flags. Browser storage is fine here: losing them only
+// means a new organizer sees the tour again, and the tour only ever starts for
+// an account that has no events yet.
+function readFlag(key) {
+  try {
+    return window.localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeFlag(key, on) {
+  try {
+    if (on) window.localStorage.setItem(key, '1');
+    else window.localStorage.removeItem(key);
+  } catch {
+    /* storage unavailable — onboarding just won't be remembered */
+  }
+}
 
 export default function OrganizerDashboard() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { events, deleteEvent, fetchEvents } = useEventStore();
+  const { assignments: judgeAssignments, fetchJudges } = useJudgeStore();
   const { success } = useNotificationStore();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [eventToDelete, setEventToDelete] = useState(null);
+  const [eventsLoaded, setEventsLoaded] = useState(false);
+  const [tourOpen, setTourOpen] = useState(false);
+  const [onboarding, setOnboarding] = useState(false);
+
+  const flagKey = (name) => `fairplay_org_${name}_${user?.id}`;
 
   useEffect(() => {
-    if (user?.id) {
-      fetchEvents(user.id);
+    if (!user?.id) return;
+    let cancelled = false;
+    setEventsLoaded(false);
+    // Only a load that actually succeeded counts — a failed one also leaves
+    // the list empty, which must not make an existing organizer look new.
+    Promise.resolve(fetchEvents(user.id)).then(() => {
+      if (!cancelled && !useEventStore.getState().error) setEventsLoaded(true);
+    });
+    fetchJudges({ silent: true });
+    return () => { cancelled = true; };
+  }, [fetchEvents, fetchJudges, user?.id]);
+
+  // A brand-new organizer (no events yet) gets the welcome tour once, and the
+  // getting-started checklist until they hide it. Organizers who already had
+  // events before this existed never see either.
+  useEffect(() => {
+    if (!eventsLoaded || !user?.id) return;
+    const started = readFlag(flagKey('onboarding'));
+    if (!started && events.length === 0) {
+      writeFlag(flagKey('onboarding'), true);
+      setOnboarding(true);
+      if (!readFlag(flagKey('tour_seen'))) setTourOpen(true);
+      return;
     }
-  }, [fetchEvents, user?.id]);
+    setOnboarding(started && !readFlag(flagKey('checklist_hidden')));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventsLoaded, user?.id]);
+
+  const closeTour = () => {
+    writeFlag(flagKey('tour_seen'), true);
+    setTourOpen(false);
+  };
+
+  const hideChecklist = () => {
+    writeFlag(flagKey('checklist_hidden'), true);
+    setOnboarding(false);
+  };
 
   const myEvents = events.filter((event) => {
     if (statusFilter !== 'all' && event.status !== statusFilter) return false;
@@ -104,6 +166,15 @@ export default function OrganizerDashboard() {
           setEventToDelete(null);
         }}
       />
+      <OrganizerWelcomeTour open={tourOpen} userName={user?.name} onClose={closeTour} />
+      {onboarding && (
+        <OrganizerGettingStarted
+          events={events}
+          judgeAssignments={judgeAssignments}
+          onReplayTour={() => setTourOpen(true)}
+          onDismiss={hideChecklist}
+        />
+      )}
       <motion.section
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
