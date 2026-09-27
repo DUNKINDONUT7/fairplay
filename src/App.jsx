@@ -54,6 +54,7 @@ const AdminBackup = lazy(() => import('./pages/admin/AdminBackup'));
 
 const OrganizerDashboard = lazy(() => import('./pages/organizer/OrganizerDashboard'));
 const CreateEvent = lazy(() => import('./pages/organizer/CreateEvent'));
+const EditEventDetails = lazy(() => import('./pages/organizer/EditEventDetails'));
 const OrganizerEvents = lazy(() => import('./pages/organizer/OrganizerEvents'));
 const OrganizerContestants = lazy(() => import('./pages/organizer/OrganizerContestants'));
 const OrganizerAttendance = lazy(() => import('./pages/organizer/OrganizerAttendance'));
@@ -461,6 +462,7 @@ export default function App() {
           <Route path="/organizer/brackets" element={<ProtectedRoute role="organizer"><OrganizerBracket /></ProtectedRoute>} />
           <Route path="/organizer/scoring" element={<ProtectedRoute role="organizer"><OrganizerScoring /></ProtectedRoute>} />
           <Route path="/organizer/events/:id" element={<ProtectedRoute role="organizer"><OrganizerEventDetail /></ProtectedRoute>} />
+          <Route path="/organizer/events/:id/edit" element={<ProtectedRoute role="organizer"><EditEventDetails /></ProtectedRoute>} />
           <Route path="/organizer/verify/:token" element={<ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute>} />
           <Route path="/organizer/certificates" element={<ProtectedRoute role="organizer"><OrganizerCertificates /></ProtectedRoute>} />
           <Route path="/organizer/profile" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />

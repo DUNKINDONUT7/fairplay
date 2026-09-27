@@ -897,7 +897,7 @@ export default function OrganizerEvents() {
                             }}
                           >
                             {[
-                              { label: 'Edit', icon: 'bi bi-pencil-square', action: () => navigate(`/organizer/events/${event.id}`) },
+                              { label: 'Edit Details', icon: 'bi bi-pencil-square', action: () => navigate(`/organizer/events/${event.id}/edit`) },
                               { label: 'Duplicate', icon: 'bi bi-copy', action: () => handleDuplicate(event) },
                               { label: event.statusKey === 'draft' ? 'Publish' : 'Unpublish', icon: 'bi bi-send-check', action: () => handleTogglePublish(event) },
                               { label: 'Archive', icon: 'bi bi-archive', action: () => handleArchive(event) },
