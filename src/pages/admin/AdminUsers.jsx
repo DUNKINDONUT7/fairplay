@@ -173,15 +173,17 @@ export default function AdminUsers() {
   }
 
   async function handleDelete(user) {
+    // The row is removed from the list immediately (see deleteUser), so the
+    // dialog closes right away instead of waiting on the server.
+    setUserToDelete(null);
     setBusy(`delete-${user.id}`);
     try {
       await deleteUser(user.id);
       success(`Deleted ${user.email}.`);
     } catch (err) {
-      error(err.message || 'Unable to delete this user.');
+      error(`Couldn't delete ${user.email}: ${err.message || 'please try again.'}`);
     } finally {
       setBusy('');
-      setUserToDelete(null);
     }
   }
 

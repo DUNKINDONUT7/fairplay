@@ -764,19 +764,42 @@ const useAuthStore = create(
       },
 
       deleteUser: async (userId) => {
+        // Optimistic: the row disappears right away while the Edge Function
+        // (several sequential Supabase calls) runs; if it fails, the row is
+        // put back and the error is re-thrown for the caller to show.
+        const removed = get().users.find((entry) => String(entry.id) === String(userId));
+        set((state) => {
+          const users = state.users.filter((entry) => String(entry.id) !== String(userId));
+          return { users, organizerApplications: buildOrganizerApplicationsFromUsers(users) };
+        });
+
         if (SUPABASE_AUTH_ENABLED && supabase) {
-          // Calls the delete-user Edge Function so the Supabase Auth
-          // account is actually removed, not just the profiles row — a
-          // profile-only delete left the account still able to log in.
-          const { data, error } = await supabase.functions.invoke('delete-user', {
-            body: { userId },
-          });
-          if (error) throw error;
-          if (data?.error) throw new Error(data.error);
+          try {
+            // Calls the delete-user Edge Function so the Supabase Auth
+            // account is actually removed, not just the profiles row — a
+            // profile-only delete left the account still able to log in.
+            const { data, error } = await supabase.functions.invoke('delete-user', {
+              body: { userId },
+            });
+            if (error) {
+              const bodyFromResponse = await error.context?.json?.().catch(() => null);
+              throw new Error(bodyFromResponse?.error || error.message || 'Unable to delete this user.');
+            }
+            if (data?.error) throw new Error(data.error);
+          } catch (deleteError) {
+            if (removed) {
+              set((state) => {
+                const users = state.users.some((entry) => String(entry.id) === String(userId))
+                  ? state.users
+                  : [removed, ...state.users];
+                return { users, organizerApplications: buildOrganizerApplicationsFromUsers(users) };
+              });
+            }
+            throw deleteError;
+          }
         }
 
         set((state) => ({
-          users: state.users.filter((entry) => String(entry.id) !== String(userId)),
           user: state.user && String(state.user.id) === String(userId) ? null : state.user,
           token: state.user && String(state.user.id) === String(userId) ? null : state.token,
         }));
