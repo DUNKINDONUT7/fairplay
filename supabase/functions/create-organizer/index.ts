@@ -176,69 +176,79 @@ serve(async (req) => {
   }
 
   const confirmUrl = linkData.properties?.action_link || '';
-  let confirmationSent = false;
-  let sentVia = '';
 
-  const gmailUser = Deno.env.get('GMAIL_USER') || '';
-  const gmailAppPassword = Deno.env.get('GMAIL_APP_PASSWORD') || '';
-  const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || (gmailUser ? `FairPlay <${gmailUser}>` : '');
+  // Sending the email (Gmail SMTP handshake + send, or the Supabase fallback)
+  // takes several seconds, and the account already exists at this point, so
+  // it runs in the background instead of holding up the admin's "Creating..."
+  // button. EdgeRuntime.waitUntil keeps the function alive until it finishes.
+  const sendConfirmation = async () => {
+    let confirmationSent = false;
 
-  if (confirmUrl && gmailUser && gmailAppPassword) {
-    const safeName = escapeHtml(name);
-    const safeEmail = escapeHtml(email);
-    const safeUrl = escapeHtml(confirmUrl);
-    const html = `
-      <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
-        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
-          <h1 style="margin:0 0 12px;color:#2563eb;font-size:24px">Confirm your organizer account</h1>
-          <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
-          <p style="font-size:15px;line-height:1.6">A FairPlay administrator created an <strong>organizer account</strong> for <strong>${safeEmail}</strong>. Please confirm your email address to continue.</p>
-          <p style="margin:24px 0">
-            <a href="${safeUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Confirm my email</a>
-          </p>
-          <p style="font-size:13px;line-height:1.6;color:#64748b">After you confirm, an administrator will approve your account. Once approved, sign in with this email and the password your administrator gave you. If you did not expect this email, you can ignore it.</p>
-          <p style="font-size:12px;line-height:1.6;color:#94a3b8;word-break:break-all">If the button does not work, open this link: ${safeUrl}</p>
-        </div>
-      </div>`;
+    const gmailUser = Deno.env.get('GMAIL_USER') || '';
+    const gmailAppPassword = Deno.env.get('GMAIL_APP_PASSWORD') || '';
+    const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || (gmailUser ? `FairPlay <${gmailUser}>` : '');
 
-    try {
-      const client = new SMTPClient({
-        connection: {
-          hostname: 'smtp.gmail.com',
-          port: 465,
-          tls: true,
-          auth: { username: gmailUser, password: gmailAppPassword },
-        },
-      });
+    if (confirmUrl && gmailUser && gmailAppPassword) {
+      const safeName = escapeHtml(name);
+      const safeEmail = escapeHtml(email);
+      const safeUrl = escapeHtml(confirmUrl);
+      const html = `
+        <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
+          <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
+            <h1 style="margin:0 0 12px;color:#2563eb;font-size:24px">Confirm your organizer account</h1>
+            <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
+            <p style="font-size:15px;line-height:1.6">A FairPlay administrator created an <strong>organizer account</strong> for <strong>${safeEmail}</strong>. Please confirm your email address to continue.</p>
+            <p style="margin:24px 0">
+              <a href="${safeUrl}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 22px;border-radius:10px">Confirm my email</a>
+            </p>
+            <p style="font-size:13px;line-height:1.6;color:#64748b">After you confirm, an administrator will approve your account. Once approved, sign in with this email and the password your administrator gave you. If you did not expect this email, you can ignore it.</p>
+            <p style="font-size:12px;line-height:1.6;color:#94a3b8;word-break:break-all">If the button does not work, open this link: ${safeUrl}</p>
+          </div>
+        </div>`;
+
       try {
-        await client.send({ from: fromEmail, to: email, subject: 'Confirm your FairPlay organizer account', html });
-        confirmationSent = true;
-        sentVia = 'gmail';
-      } finally {
-        try { await client.close(); } catch { /* closing is best-effort */ }
+        const client = new SMTPClient({
+          connection: {
+            hostname: 'smtp.gmail.com',
+            port: 465,
+            tls: true,
+            auth: { username: gmailUser, password: gmailAppPassword },
+          },
+        });
+        try {
+          await client.send({ from: fromEmail, to: email, subject: 'Confirm your FairPlay organizer account', html });
+          confirmationSent = true;
+        } finally {
+          try { await client.close(); } catch { /* closing is best-effort */ }
+        }
+      } catch (err) {
+        console.warn('Organizer confirmation via Gmail failed:', err instanceof Error ? err.message : err);
       }
-    } catch (err) {
-      console.warn('Organizer confirmation via Gmail failed:', err instanceof Error ? err.message : err);
     }
-  }
 
-  // Fallback: ask Supabase to send its own confirmation email.
-  if (!confirmationSent) {
-    const publicClient = createClient(supabaseUrl, anonKey, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
-    const { error: resendError } = await publicClient.auth.resend({
-      type: 'signup',
-      email,
-      options: { emailRedirectTo: confirmRedirect },
-    });
-    if (resendError) {
-      console.warn('Organizer confirmation via Supabase failed:', resendError.message);
-    } else {
-      confirmationSent = true;
-      sentVia = 'supabase';
+    // Fallback: ask Supabase to send its own confirmation email.
+    if (!confirmationSent) {
+      const publicClient = createClient(supabaseUrl, anonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      });
+      const { error: resendError } = await publicClient.auth.resend({
+        type: 'signup',
+        email,
+        options: { emailRedirectTo: confirmRedirect },
+      });
+      if (resendError) {
+        console.warn('Organizer confirmation via Supabase failed:', resendError.message);
+      }
     }
-  }
+  };
 
-  return jsonResponse({ created: true, userId: linkData.user.id, email, name, confirmationSent, sentVia });
+  const pending = sendConfirmation().catch((err) => {
+    console.warn('Organizer confirmation email failed:', err instanceof Error ? err.message : err);
+  });
+  // deno-lint-ignore no-explicit-any
+  const edgeRuntime = (globalThis as any).EdgeRuntime;
+  if (edgeRuntime?.waitUntil) edgeRuntime.waitUntil(pending);
+  else await pending;
+
+  return jsonResponse({ created: true, userId: linkData.user.id, email, name, confirmationQueued: true });
 });

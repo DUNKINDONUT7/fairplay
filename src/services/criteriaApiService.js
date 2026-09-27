@@ -5,7 +5,7 @@ import usePlatformSettingsStore from '../store/platformSettingsStore';
 // OpenRouter API key lives server-side only (Edge Function secrets), never
 // in a VITE_* client var, so it can't be extracted from the browser bundle.
 export function getApiConfig(modelOverride) {
-  const model = modelOverride || import.meta.env.VITE_AI_CRITERIA_MODEL || 'openai/gpt-4o-mini';
+  const model = modelOverride || import.meta.env.VITE_AI_CRITERIA_MODEL || 'openai/gpt-oss-120b';
   return { model, enabled: true };
 }
 

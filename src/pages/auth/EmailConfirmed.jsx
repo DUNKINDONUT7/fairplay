@@ -13,11 +13,21 @@ import { roleHomePath } from '../../utils/navigation';
 // not just "confirmed."
 export default function EmailConfirmed() {
   const navigate = useNavigate();
-  const { user, loading, initialized } = useAuthStore();
+  const { user, loading, initialized, logout } = useAuthStore();
   const [redirecting, setRedirecting] = useState(false);
+  const [awaitingApproval, setAwaitingApproval] = useState(false);
 
   useEffect(() => {
     if (loading || !initialized || !user) return;
+
+    // A newly confirmed organizer still needs an admin to approve them, so
+    // they don't get a dashboard yet — and the session the confirmation link
+    // just created is ended rather than left open.
+    if (user.role === 'organizer' && user.status !== 'active') {
+      setAwaitingApproval(true);
+      logout();
+      return;
+    }
 
     setRedirecting(true);
     const timer = setTimeout(() => {
@@ -25,10 +35,10 @@ export default function EmailConfirmed() {
     }, 1600);
 
     return () => clearTimeout(timer);
-  }, [loading, initialized, user, navigate]);
+  }, [loading, initialized, user, navigate, logout]);
 
-  const stillWorking = loading || !initialized;
-  const failed = !stillWorking && !user;
+  const stillWorking = !awaitingApproval && (loading || !initialized);
+  const failed = !awaitingApproval && !stillWorking && !user;
 
   return (
     <div
@@ -80,6 +90,30 @@ export default function EmailConfirmed() {
               }}
             >
               Go to Sign In
+            </a>
+          </>
+        ) : awaitingApproval ? (
+          <>
+            <i className="bi bi-hourglass-split" style={{ fontSize: 46, color: '#2563eb', display: 'block', marginBottom: 16 }} />
+            <h1 style={{ margin: '0 0 10px', fontSize: 22, fontWeight: 900, color: '#0f172a' }}>Email confirmed — awaiting approval</h1>
+            <p style={{ margin: '0 0 22px', color: '#64748b', fontSize: 14, lineHeight: 1.7 }}>
+              Thanks for confirming your email. An administrator still needs to approve your organizer account. You'll get an email once it's approved, then you can sign in.
+            </p>
+            <a
+              href="/"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: '12px 20px',
+                borderRadius: 12,
+                background: 'linear-gradient(135deg,#1d4ed8,#0ea5e9)',
+                color: '#fff',
+                fontWeight: 800,
+                textDecoration: 'none',
+              }}
+            >
+              Back to Home
             </a>
           </>
         ) : (

@@ -543,7 +543,7 @@ export async function generateCriteriaWithAIFallback(params = {}) {
   let source = 'fallback';
   let error = null;
   let fallbackReason = null;
-  const modelUsed = import.meta.env.VITE_AI_CRITERIA_MODEL || 'openai/gpt-4o-mini';
+  const modelUsed = import.meta.env.VITE_AI_CRITERIA_MODEL || 'openai/gpt-oss-120b';
   const promptText = params.prompt || 'Create a professional judging rubric.';
   const promptEstimate = Math.ceil(promptText.length / 4);
 

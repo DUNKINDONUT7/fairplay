@@ -266,7 +266,7 @@ export default function OrganizerReports() {
 
     const leaderboard = calculateLeaderboard(selectedEvent.id, selectedEvent.criteria || []);
     try {
-      const model = import.meta.env.VITE_AI_CHATBOT_MODEL || 'openai/gpt-4o-mini';
+      const model = import.meta.env.VITE_AI_CHATBOT_MODEL || 'openai/gpt-oss-120b';
       const payload = {
         title: selectedEvent.title,
         type: selectedEvent.type,

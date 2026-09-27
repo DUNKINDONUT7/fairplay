@@ -165,7 +165,7 @@ export default function AdminUsers() {
         setAddOrganizerError(result.error || 'Unable to create this organizer account.');
         return;
       }
-      success(`Created organizer account for ${email}. Share the email and password with them directly.`);
+      success(`Created organizer account for ${email}. A confirmation email is on its way — approve them once they confirm.`);
       closeAddOrganizer();
     } finally {
       setAddingOrganizer(false);
@@ -264,7 +264,7 @@ export default function AdminUsers() {
               <div>
                 <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#0f172a' }}>Add Organizer</h2>
                 <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
-                  Organizer accounts are admin-only. Set their email and password directly — the account is active immediately.
+                  Organizer accounts are admin-only. They'll get a confirmation email, then you approve them from pending applications.
                 </p>
               </div>
               <button type="button" onClick={closeAddOrganizer} style={modalCloseButtonStyle} aria-label="Close">
