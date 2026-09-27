@@ -110,8 +110,12 @@ export default function AdminUsers() {
   async function handleApprove(application) {
     setBusy(`approve-${application.id}`);
     try {
-      await approveOrganizerApplication(application.id);
-      success(`Approved ${application.email} as an organizer.`);
+      const approved = await approveOrganizerApplication(application.id);
+      if (approved?.approvalEmail?.sent) {
+        success(`Approved ${application.email} as an organizer. They've been emailed that they can now sign in.`);
+      } else {
+        error(`Approved ${application.email}, but the approval email couldn't be sent${approved?.approvalEmail?.error ? ` (${approved.approvalEmail.error})` : ''}. Let them know they can sign in now.`);
+      }
     } catch (err) {
       error(err.message || 'Unable to approve this application.');
     } finally {
@@ -194,6 +198,7 @@ export default function AdminUsers() {
         title="Delete this user?"
         message={userToDelete ? `This permanently deletes ${userToDelete.email}'s account and profile from FairPlay. Their events, scores, and registrations stay in place. This cannot be undone.` : ''}
         confirmLabel="Delete User"
+        requireText={userToDelete?.email || ''}
         onCancel={() => setUserToDelete(null)}
         onConfirm={() => handleDelete(userToDelete)}
       />

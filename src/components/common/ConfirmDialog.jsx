@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 export default function ConfirmDialog({
   open,
@@ -7,9 +7,18 @@ export default function ConfirmDialog({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   danger = true,
+  // When set, the confirm button stays disabled until this exact text is
+  // typed — for actions that can't be undone, like deleting an account.
+  requireText = '',
   onConfirm,
   onCancel,
 }) {
+  const [typed, setTyped] = useState('');
+
+  useEffect(() => {
+    if (open) setTyped('');
+  }, [open, requireText]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') onCancel(); };
@@ -18,6 +27,9 @@ export default function ConfirmDialog({
   }, [open, onCancel]);
 
   if (!open) return null;
+
+  const confirmDisabled = Boolean(requireText) &&
+    typed.trim().toLowerCase() !== String(requireText).trim().toLowerCase();
 
   return (
     <div
@@ -38,7 +50,25 @@ export default function ConfirmDialog({
           </span>
           <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a' }}>{title}</h2>
         </div>
-        <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, margin: '0 0 24px' }}>{message}</p>
+        <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, margin: requireText ? '0 0 16px' : '0 0 24px' }}>{message}</p>
+        {requireText && (
+          <div style={{ marginBottom: 22 }}>
+            <label htmlFor="confirm-dialog-text" style={{ display: 'block', fontSize: 13, color: '#334155', marginBottom: 8, lineHeight: 1.5 }}>
+              To confirm, type <strong style={{ color: '#0f172a', wordBreak: 'break-all' }}>{requireText}</strong> below:
+            </label>
+            <input
+              id="confirm-dialog-text"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !confirmDisabled) onConfirm(); }}
+              autoComplete="off"
+              autoFocus
+              spellCheck={false}
+              placeholder={requireText}
+              style={{ width: '100%', boxSizing: 'border-box', padding: '11px 13px', borderRadius: 12, border: `1px solid ${confirmDisabled ? '#cbd5e1' : '#10b981'}`, fontSize: 14, outline: 'none' }}
+            />
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button
             type="button"
@@ -50,8 +80,11 @@ export default function ConfirmDialog({
           <button
             type="button"
             onClick={onConfirm}
+            disabled={confirmDisabled}
             style={{
-              padding: '10px 18px', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 13, cursor: 'pointer', color: '#fff',
+              padding: '10px 18px', borderRadius: 12, border: 'none', fontWeight: 800, fontSize: 13, color: '#fff',
+              cursor: confirmDisabled ? 'not-allowed' : 'pointer',
+              opacity: confirmDisabled ? 0.45 : 1,
               background: danger ? 'linear-gradient(135deg,#ef4444,#f97316)' : 'linear-gradient(135deg,#2563eb,#0ea5e9)',
             }}
           >

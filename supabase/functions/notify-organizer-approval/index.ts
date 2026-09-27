@@ -1,5 +1,6 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
+import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -37,11 +38,17 @@ serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
   const anonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
+  // Same Gmail sender as create-organizer's confirmation email; Resend is
+  // only a fallback (its default onboarding@resend.dev sender can only
+  // deliver to the Resend account owner, so it never reached organizers).
+  const gmailUser = Deno.env.get('GMAIL_USER') || '';
+  const gmailAppPassword = Deno.env.get('GMAIL_APP_PASSWORD') || '';
   const resendApiKey = Deno.env.get('RESEND_API_KEY') || '';
-  const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') || 'FairPlay <onboarding@resend.dev>';
+  const fromEmail = Deno.env.get('APPROVAL_EMAIL_FROM') ||
+    (gmailUser ? `FairPlay <${gmailUser}>` : 'FairPlay <onboarding@resend.dev>');
   const defaultLoginUrl = Deno.env.get('SITE_URL') || Deno.env.get('APP_URL') || '';
 
-  if (!supabaseUrl || !anonKey || !resendApiKey) {
+  if (!supabaseUrl || !anonKey || (!(gmailUser && gmailAppPassword) && !resendApiKey)) {
     return jsonResponse({ error: 'Email service is not configured.' }, 500);
   }
 
@@ -85,28 +92,53 @@ serve(async (req) => {
   const safeName = escapeHtml(name);
   const safeLoginUrl = escapeHtml(loginUrl || 'https://fairplay-kappa.vercel.app');
 
+  const subject = 'Your FairPlay organizer account has been approved';
+  const html = `
+        <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
+          <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
+            <h1 style="margin:0 0 12px;color:#2563eb;font-size:26px">Organizer account approved</h1>
+            <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
+            <p style="font-size:15px;line-height:1.6">Your FairPlay organizer account has been approved by the admin. You can now sign in with your email and password and start setting up your first event.</p>
+            <a href="${safeLoginUrl}" style="display:inline-block;margin-top:14px;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Sign in to FairPlay</a>
+            <p style="margin-top:22px;color:#64748b;font-size:13px">If the button does not work, open this link: ${safeLoginUrl}</p>
+          </div>
+        </div>
+      `;
+
+  let gmailError = '';
+  if (gmailUser && gmailAppPassword) {
+    try {
+      const client = new SMTPClient({
+        connection: {
+          hostname: 'smtp.gmail.com',
+          port: 465,
+          tls: true,
+          auth: { username: gmailUser, password: gmailAppPassword },
+        },
+      });
+      try {
+        await client.send({ from: fromEmail, to: email, subject, html });
+        return jsonResponse({ sent: true, via: 'gmail' });
+      } finally {
+        try { await client.close(); } catch { /* closing is best-effort */ }
+      }
+    } catch (err) {
+      gmailError = err instanceof Error ? err.message : String(err);
+      console.warn('Approval email via Gmail failed:', gmailError);
+    }
+  }
+
+  if (!resendApiKey) {
+    return jsonResponse({ error: `Unable to send approval email: ${gmailError || 'no email sender configured.'}` }, 502);
+  }
+
   const emailResponse = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${resendApiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [email],
-      subject: 'Your FairPlay organizer account has been approved',
-      html: `
-        <div style="font-family:Arial,sans-serif;background:#f8fafc;padding:28px;color:#0f172a">
-          <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #dbeafe;border-radius:18px;padding:28px">
-            <h1 style="margin:0 0 12px;color:#2563eb;font-size:26px">Organizer account approved</h1>
-            <p style="font-size:15px;line-height:1.6">Hi ${safeName},</p>
-            <p style="font-size:15px;line-height:1.6">Your FairPlay organizer registration has been approved by the admin. You can now sign in and access your organizer dashboard.</p>
-            <a href="${safeLoginUrl}" style="display:inline-block;margin-top:14px;background:#2563eb;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:700">Open FairPlay</a>
-            <p style="margin-top:22px;color:#64748b;font-size:13px">If the button does not work, open this link: ${safeLoginUrl}</p>
-          </div>
-        </div>
-      `,
-    }),
+    body: JSON.stringify({ from: fromEmail, to: [email], subject, html }),
   });
 
   const result = await emailResponse.json().catch(() => ({}));
@@ -114,5 +146,5 @@ serve(async (req) => {
     return jsonResponse({ error: result?.message || 'Unable to send approval email.' }, 502);
   }
 
-  return jsonResponse({ sent: true, id: result?.id || null });
+  return jsonResponse({ sent: true, via: 'resend', id: result?.id || null });
 });

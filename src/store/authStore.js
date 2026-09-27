@@ -142,7 +142,8 @@ async function notifyOrganizerApproval(organizer) {
     });
 
     if (error) {
-      throw error;
+      const bodyFromResponse = await error.context?.json?.().catch(() => null);
+      throw new Error(bodyFromResponse?.error || error.message);
     }
 
     return data || { sent: true };
@@ -611,9 +612,9 @@ const useAuthStore = create(
           organizerApplications: state.organizerApplications.filter((entry) => String(entry.id) !== String(application.id) && entry.email !== application.email),
         }));
 
-        await notifyOrganizerApproval(approvedUser);
+        const approvalEmail = await notifyOrganizerApproval(approvedUser);
 
-        return approvedUser;
+        return { ...approvedUser, approvalEmail };
       },
 
       declineOrganizerApplication: async (applicationId) => {
