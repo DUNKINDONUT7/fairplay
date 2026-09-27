@@ -34,7 +34,7 @@ export default function AdminAccount() {
   }
 
   return (
-    <DashboardLayout title="My Account" subtitle="Your admin profile, email and password">
+    <DashboardLayout title="My Profile" subtitle="Your admin profile, email and password">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 380px), 1fr))', gap: 20, alignItems: 'start', maxWidth: 1200 }}>
         <div style={cardStyle}>
           <AccountProfileHeader />

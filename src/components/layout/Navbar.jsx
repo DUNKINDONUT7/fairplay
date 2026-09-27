@@ -34,7 +34,7 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
 
   const dropdownLinks = userRole === 'admin'
     ? [
-        { label: 'My Account', path: '/admin/profile', icon: 'bi bi-person' },
+        { label: 'My Profile', path: '/admin/profile', icon: 'bi bi-person' },
         { label: 'Settings', path: '/admin/settings', icon: 'bi bi-gear' },
       ]
     : userRole === 'organizer'
