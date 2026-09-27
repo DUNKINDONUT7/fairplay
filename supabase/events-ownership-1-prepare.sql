@@ -50,15 +50,23 @@ where e.owner_id is null
   and public.fairplay_actor_hash(p.id) = e.organizer_id;
 
 -- New events are always owned by whoever creates them; only an admin may
--- create one on someone else's behalf.
+-- create one on someone else's behalf by setting owner_id explicitly.
+-- (Fires only on INSERT. A same-id upsert that resolves to an UPDATE via
+-- ON CONFLICT never includes owner_id in its SET list — the app never sends
+-- that column on update — so an existing event's owner_id is untouched by
+-- this trigger either way; ownership can only change here, at creation.)
 create or replace function public.set_event_owner()
 returns trigger
 language plpgsql
 as $$
 begin
-  if auth.uid() is not null and (new.owner_id is null or not public.is_admin_user()) then
-    new.owner_id := auth.uid()::text;
+  if auth.uid() is null then
+    return new; -- service-role write (cron, seed scripts) — leave as given
   end if;
+  if public.is_admin_user() and new.owner_id is not null then
+    return new; -- admin explicitly assigning ownership to someone else
+  end if;
+  new.owner_id := auth.uid()::text;
   return new;
 end;
 $$;
