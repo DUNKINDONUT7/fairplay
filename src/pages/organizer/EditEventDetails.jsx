@@ -1,15 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
+import { requestEventDescription } from '../../services/criteriaApiService';
 
 // Once an event leaves these statuses (i.e. it has been approved and is on
 // its way to happening or already has), its core setup can no longer be
 // changed here — see guard_event_content_lock in schema.sql for the same
 // rule enforced at the database level, so this isn't only a UI restriction.
 const EDITABLE_STATUSES = new Set(['draft', 'upcoming', 'pending', 'rejected']);
+
+// Same lead time CreateEvent.jsx requires for a brand-new event — kept
+// consistent here so an edit can't quietly move a date closer than a new
+// event would ever be allowed to start at.
+const MIN_EVENT_LEAD_DAYS = 2;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 function createTimeOptions() {
   const options = [];
@@ -38,8 +45,9 @@ function splitDateTime(value, fallbackTime) {
   };
 }
 
-function todayDateValue() {
+function dateValue(offsetDays = 0) {
   const date = new Date();
+  date.setDate(date.getDate() + offsetDays);
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
   return date.toISOString().slice(0, 10);
 }
@@ -48,13 +56,15 @@ export default function EditEventDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { events, fetchEvents, getEventById, updateEvent } = useEventStore();
+  const { fetchEvents, getEventById, updateEvent } = useEventStore();
   const { success, error } = useNotificationStore();
 
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [form, setForm] = useState(null);
   const [criteria, setCriteria] = useState([]);
+  const imageInputRef = useRef(null);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -62,7 +72,8 @@ export default function EditEventDetails() {
   }, [fetchEvents, user?.id]);
 
   const event = getEventById(id);
-  const todayDate = useMemo(() => todayDateValue(), []);
+  const todayDate = useMemo(() => dateValue(), []);
+  const earliestStartDate = useMemo(() => dateValue(MIN_EVENT_LEAD_DAYS), []);
 
   useEffect(() => {
     if (!event || form) return;
@@ -108,6 +119,47 @@ export default function EditEventDetails() {
     setForm((current) => ({ ...current, [name]: value }));
   }, []);
 
+  const handleImageSelect = useCallback((fileEvent) => {
+    const file = fileEvent.target.files?.[0];
+    fileEvent.target.value = '';
+    if (!file) return;
+
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      error('Please upload a PNG or JPEG image only.');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      error('Image is too large — please choose one under 2MB.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => updateField('imageUrl', String(reader.result || ''));
+    reader.onerror = () => error('Unable to read that image file.');
+    reader.readAsDataURL(file);
+  }, [error, updateField]);
+
+  const generateDescription = useCallback(async () => {
+    if (!form.title.trim()) {
+      error('Enter an event title first.');
+      return;
+    }
+    setIsGeneratingDescription(true);
+    try {
+      const description = await requestEventDescription({
+        title: form.title.trim(),
+        eventType: event?.eventType,
+        location: form.location,
+      });
+      updateField('description', description);
+      success('AI drafted the event description.');
+    } catch (descriptionError) {
+      error(String(descriptionError?.message || 'Unable to generate a description right now.'));
+    } finally {
+      setIsGeneratingDescription(false);
+    }
+  }, [error, event?.eventType, form?.location, form?.title, success, updateField]);
+
   const updateCriterion = useCallback((index, field, value) => {
     setCriteria((current) => current.map((criterion, criterionIndex) => (
       criterionIndex === index
@@ -139,6 +191,7 @@ export default function EditEventDetails() {
   function validate() {
     if (!form.title.trim()) return 'Event title is required.';
     if (!form.startDate || !form.endDate) return 'Start date and end date are required.';
+    if (form.startDate < earliestStartDate) return `Events must start at least ${MIN_EVENT_LEAD_DAYS} days from today. Earliest start date is ${earliestStartDate}.`;
     if (form.endDate < form.startDate) return 'End date must be on or after the start date.';
     if (form.startDate === form.endDate && form.endTime < form.startTime) return 'End time must be on or after start time.';
     if (!form.registrationDeadline) return 'Registration deadline is required.';
@@ -214,7 +267,7 @@ export default function EditEventDetails() {
   return (
     <DashboardLayout title="Edit Event Details" subtitle={event.title}>
       {isLocked ? (
-        <div style={{ ...cardStyle, borderColor: '#fde68a', background: '#fffbeb' }}>
+        <div style={{ ...cardStyle, maxWidth: 640, borderColor: '#fde68a', background: '#fffbeb' }}>
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
             <i className="bi bi-lock-fill" style={{ fontSize: 22, color: '#b45309' }} />
             <div>
@@ -230,9 +283,9 @@ export default function EditEventDetails() {
           </button>
         </div>
       ) : form && (
-        <div style={{ display: 'grid', gap: 20, maxWidth: 860 }}>
+        <div style={{ display: 'grid', gap: 16, maxWidth: 780 }}>
           {isAdmin && !EDITABLE_STATUSES.has(event.status) && (
-            <div style={{ ...cardStyle, borderColor: '#bfdbfe', background: '#eff6ff', padding: '14px 18px' }}>
+            <div style={{ ...cardStyle, borderColor: '#bfdbfe', background: '#eff6ff', padding: '12px 18px' }}>
               <p style={{ margin: 0, fontSize: 13, color: '#1e40af' }}>
                 <i className="bi bi-shield-check" /> This event is already approved — you're editing it as an admin. Organizers can no longer make these changes.
               </p>
@@ -241,19 +294,57 @@ export default function EditEventDetails() {
 
           <div style={cardStyle}>
             <h3 style={sectionTitleStyle}>Basics</h3>
-            <div style={{ display: 'grid', gap: 16 }}>
-              <Field label="Event title">
-                <input value={form.title} onChange={(e) => updateField('title', e.target.value)} style={fieldStyle} />
-              </Field>
-              <Field label="Description">
-                <textarea value={form.description} onChange={(e) => updateField('description', e.target.value)} rows={4} style={{ ...fieldStyle, resize: 'vertical' }} />
-              </Field>
-              <Field label="Poster / cover image URL">
-                <input value={form.imageUrl} onChange={(e) => updateField('imageUrl', e.target.value)} placeholder="Paste an image link" style={fieldStyle} />
-              </Field>
-              <Field label="Venue / location">
-                <input value={form.location} onChange={(e) => updateField('location', e.target.value)} style={fieldStyle} />
-              </Field>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div style={posterThumbStyle}>
+                  {form.imageUrl ? (
+                    <img src={form.imageUrl} alt="Event poster" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <i className="bi bi-image" style={{ fontSize: 26, color: '#94a3b8' }} />
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  title="Change poster"
+                  aria-label="Change poster"
+                  style={posterEditButtonStyle}
+                >
+                  <i className="bi bi-camera-fill" />
+                </button>
+                <input ref={imageInputRef} type="file" accept="image/png,image/jpeg" onChange={handleImageSelect} style={{ display: 'none' }} />
+              </div>
+
+              <div style={{ flex: '1 1 240px', display: 'grid', gap: 12, alignContent: 'start' }}>
+                <Field label="Event title">
+                  <input value={form.title} onChange={(e) => updateField('title', e.target.value)} style={fieldStyle} />
+                </Field>
+                <Field label="Venue / location">
+                  <input value={form.location} onChange={(e) => updateField('location', e.target.value)} style={fieldStyle} />
+                </Field>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#334155' }}>Description</span>
+              <button
+                type="button"
+                onClick={generateDescription}
+                disabled={isGeneratingDescription || !form.title.trim()}
+                style={{ ...aiButtonStyle, opacity: isGeneratingDescription || !form.title.trim() ? 0.6 : 1, cursor: isGeneratingDescription || !form.title.trim() ? 'not-allowed' : 'pointer' }}
+              >
+                <i className={isGeneratingDescription ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-magic'} />
+                {isGeneratingDescription ? 'Drafting...' : form.description.trim() ? 'Regenerate' : 'Generate'}
+              </button>
+            </div>
+            <div className={`ai-description-field${isGeneratingDescription ? ' is-drafting' : ''}`}>
+              <textarea
+                value={form.description}
+                onChange={(e) => updateField('description', e.target.value)}
+                rows={3}
+                placeholder={isGeneratingDescription ? 'AI is drafting...' : 'Describe the event scope, participants, and judging expectations.'}
+                style={{ ...fieldStyle, resize: 'vertical' }}
+              />
             </div>
           </div>
 
@@ -263,18 +354,19 @@ export default function EditEventDetails() {
               <div style={scheduleSlotStyle}>
                 <div style={scheduleSlotTitleStyle}><i className="bi bi-play-circle" style={{ color: '#2563eb' }} /> Event starts</div>
                 <div style={scheduleSlotInputsStyle}>
-                  <Field label="Date"><input type="date" value={form.startDate} onChange={(e) => updateField('startDate', e.target.value)} style={fieldStyle} /></Field>
+                  <Field label="Date"><input type="date" min={earliestStartDate} value={form.startDate} onChange={(e) => updateField('startDate', e.target.value)} style={fieldStyle} /></Field>
                   <Field label="Time">
                     <select value={form.startTime} onChange={(e) => updateField('startTime', e.target.value)} style={fieldStyle}>
                       {TIME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                     </select>
                   </Field>
                 </div>
+                <div style={helperTextStyle}>Must be at least {MIN_EVENT_LEAD_DAYS} days from today.</div>
               </div>
               <div style={scheduleSlotStyle}>
                 <div style={scheduleSlotTitleStyle}><i className="bi bi-stop-circle" style={{ color: '#2563eb' }} /> Event ends</div>
                 <div style={scheduleSlotInputsStyle}>
-                  <Field label="Date"><input type="date" min={form.startDate || undefined} value={form.endDate} onChange={(e) => updateField('endDate', e.target.value)} style={fieldStyle} /></Field>
+                  <Field label="Date"><input type="date" min={form.startDate || earliestStartDate} value={form.endDate} onChange={(e) => updateField('endDate', e.target.value)} style={fieldStyle} /></Field>
                   <Field label="Time">
                     <select value={form.endTime} onChange={(e) => updateField('endTime', e.target.value)} style={fieldStyle}>
                       {TIME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
@@ -283,7 +375,7 @@ export default function EditEventDetails() {
                 </div>
               </div>
             </div>
-            <div style={{ marginTop: 16, display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
+            <div style={{ marginTop: 14, display: 'grid', gap: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
               <Field label="Registration deadline">
                 <input type="date" min={todayDate} max={form.startDate || undefined} value={form.registrationDeadline} onChange={(e) => updateField('registrationDeadline', e.target.value)} style={fieldStyle} />
               </Field>
@@ -294,52 +386,52 @@ export default function EditEventDetails() {
           </div>
 
           <div style={cardStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
               <h3 style={{ ...sectionTitleStyle, marginBottom: 0 }}>Judging criteria</h3>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: totalWeight === 100 ? '#15803d' : '#b45309' }}>Total: {totalWeight}%</span>
                 <button type="button" onClick={balanceWeights} style={smallButtonStyle}>Balance to 100</button>
               </div>
             </div>
-            <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gap: 10 }}>
               {criteria.map((criterion, index) => (
                 <div key={criterion.id} style={criterionRowStyle}>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <input value={criterion.name} onChange={(e) => updateCriterion(index, 'name', e.target.value)} placeholder="Criterion name" style={{ ...fieldStyle, flex: '1 1 200px' }} />
-                    <input type="number" min="0" max="100" value={criterion.weight} onChange={(e) => updateCriterion(index, 'weight', e.target.value)} style={{ ...fieldStyle, width: 100, flex: '0 0 100px' }} />
-                    <button type="button" onClick={() => removeCriterion(index)} disabled={criteria.length <= 1} style={{ ...iconDangerButtonStyle, opacity: criteria.length <= 1 ? 0.4 : 1, flex: '0 0 42px' }}>
+                    <input type="number" min="0" max="100" value={criterion.weight} onChange={(e) => updateCriterion(index, 'weight', e.target.value)} style={{ ...fieldStyle, flex: '0 0 90px' }} />
+                    <button type="button" onClick={() => removeCriterion(index)} disabled={criteria.length <= 1} style={{ ...iconDangerButtonStyle, opacity: criteria.length <= 1 ? 0.4 : 1 }}>
                       <i className="bi bi-trash3" />
                     </button>
                   </div>
-                  <textarea value={criterion.description} onChange={(e) => updateCriterion(index, 'description', e.target.value)} placeholder="What should judges look for?" rows={2} style={{ ...fieldStyle, marginTop: 10, resize: 'vertical' }} />
+                  <textarea value={criterion.description} onChange={(e) => updateCriterion(index, 'description', e.target.value)} placeholder="What should judges look for?" rows={2} style={{ ...fieldStyle, marginTop: 8, resize: 'vertical' }} />
                 </div>
               ))}
             </div>
-            <button type="button" onClick={addCriterion} style={{ ...secondaryButtonStyle, marginTop: 14 }}>
+            <button type="button" onClick={addCriterion} style={{ ...secondaryButtonStyle, marginTop: 12 }}>
               <i className="bi bi-plus-lg" /> Add criterion
             </button>
           </div>
 
           <div style={cardStyle}>
             <h3 style={sectionTitleStyle}>Controls</h3>
-            <div style={{ display: 'grid', gap: 12 }}>
-              <ToggleRow label="Judge QR access" checked={form.enableQR} onChange={(v) => updateField('enableQR', v)} />
-              <ToggleRow label="Certificate automation" checked={form.enableCertificates} onChange={(v) => updateField('enableCertificates', v)} />
-              <ToggleRow label="Attendance tracking" checked={form.attendanceTracking} onChange={(v) => updateField('attendanceTracking', v)} />
-              <ToggleRow label="Audience impact scoring" checked={form.audienceImpact} onChange={(v) => updateField('audienceImpact', v)} />
-              {form.audienceImpact && (
-                <div style={{ paddingLeft: 28, display: 'grid', gap: 12 }}>
-                  <Field label="Audience impact weight (%)">
-                    <input type="number" min="0" max="100" value={form.audienceImpactWeight} onChange={(e) => updateField('audienceImpactWeight', e.target.value)} style={{ ...fieldStyle, maxWidth: 160 }} />
-                  </Field>
-                  <ToggleRow label="Audience voting currently open" checked={form.audienceVotingOpen} onChange={(v) => updateField('audienceVotingOpen', v)} />
-                </div>
-              )}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 4 }}>
+              <SwitchRow label="Judge QR access" checked={form.enableQR} onChange={(v) => updateField('enableQR', v)} />
+              <SwitchRow label="Certificate automation" checked={form.enableCertificates} onChange={(v) => updateField('enableCertificates', v)} />
+              <SwitchRow label="Attendance tracking" checked={form.attendanceTracking} onChange={(v) => updateField('attendanceTracking', v)} />
+              <SwitchRow label="Audience impact scoring" checked={form.audienceImpact} onChange={(v) => updateField('audienceImpact', v)} />
             </div>
+            {form.audienceImpact && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #e5efff', display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', alignItems: 'end' }}>
+                <Field label="Audience impact weight (%)">
+                  <input type="number" min="0" max="100" value={form.audienceImpactWeight} onChange={(e) => updateField('audienceImpactWeight', e.target.value)} style={fieldStyle} />
+                </Field>
+                <SwitchRow label="Audience voting currently open" checked={form.audienceVotingOpen} onChange={(v) => updateField('audienceVotingOpen', v)} />
+              </div>
+            )}
           </div>
 
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <button type="button" onClick={() => navigate(`/organizer/events/${id}`)} style={secondaryButtonStyle}>Cancel</button>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', position: 'sticky', bottom: 16 }}>
+            <button type="button" onClick={() => navigate(`/organizer/events/${id}`)} style={{ ...secondaryButtonStyle, background: '#ffffff' }}>Cancel</button>
             <button type="button" onClick={handleSave} disabled={saving} style={{ ...primaryButtonStyle, opacity: saving ? 0.7 : 1, cursor: saving ? 'not-allowed' : 'pointer' }}>
               {saving ? 'Saving...' : 'Save Changes'}
             </button>
@@ -359,24 +451,38 @@ function Field({ label, children }) {
   );
 }
 
-function ToggleRow({ label, checked, onChange }) {
+function SwitchRow({ label, checked, onChange }) {
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, fontWeight: 600, color: '#334155', cursor: 'pointer' }}>
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} style={{ width: 18, height: 18 }} />
-      {label}
-    </label>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 0' }}>
+      <span style={{ fontSize: 14, fontWeight: 600, color: '#334155' }}>{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        style={{
+          width: 44, height: 26, borderRadius: 999, border: 'none', padding: 3,
+          background: checked ? '#2563eb' : '#cbd5e1', cursor: 'pointer',
+          transition: 'background 0.2s ease', flexShrink: 0,
+          display: 'flex', justifyContent: checked ? 'flex-end' : 'flex-start',
+        }}
+      >
+        <span style={{ width: 20, height: 20, borderRadius: '50%', background: '#ffffff', boxShadow: '0 1px 3px rgba(15,23,42,0.3)' }} />
+      </button>
+    </div>
   );
 }
 
 const cardStyle = {
   background: '#ffffff',
   border: '1px solid #dbeafe',
-  borderRadius: 20,
-  padding: 24,
-  boxShadow: '0 20px 45px rgba(37,99,235,0.08)',
+  borderRadius: 18,
+  padding: 20,
+  boxShadow: '0 16px 36px rgba(37,99,235,0.06)',
 };
 
-const sectionTitleStyle = { margin: '0 0 16px', fontSize: 16, fontWeight: 800, color: '#0f172a' };
+const sectionTitleStyle = { margin: '0 0 14px', fontSize: 15, fontWeight: 800, color: '#0f172a' };
 
 const fieldStyle = {
   width: '100%',
@@ -390,26 +496,71 @@ const fieldStyle = {
   outline: 'none',
 };
 
+const helperTextStyle = { fontSize: 12, color: '#64748b', lineHeight: 1.4 };
+
+const posterThumbStyle = {
+  width: 120,
+  height: 120,
+  borderRadius: 16,
+  overflow: 'hidden',
+  background: '#f1f5f9',
+  border: '1px solid #dbeafe',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+};
+
+const posterEditButtonStyle = {
+  position: 'absolute',
+  bottom: -4,
+  right: -4,
+  width: 32,
+  height: 32,
+  borderRadius: '50%',
+  background: '#2563eb',
+  color: '#fff',
+  border: '2px solid #fff',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 13,
+  boxShadow: '0 4px 12px rgba(37,99,235,0.35)',
+};
+
+const aiButtonStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  border: 'none',
+  borderRadius: 10,
+  padding: '6px 12px',
+  background: 'linear-gradient(135deg, #2563eb, #0ea5e9)',
+  color: '#ffffff',
+  fontSize: 12,
+  fontWeight: 800,
+};
+
 const scheduleGridStyle = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-  gap: 16,
+  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+  gap: 14,
 };
 
 const scheduleSlotStyle = {
   display: 'grid',
-  gap: 12,
-  padding: 16,
-  borderRadius: 16,
+  gap: 10,
+  padding: 14,
+  borderRadius: 14,
   border: '1px solid #e2e8f0',
   background: '#f8fafc',
 };
 
 const scheduleSlotTitleStyle = { display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, fontWeight: 800, color: '#0f172a' };
 
-const scheduleSlotInputsStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12 };
+const scheduleSlotInputsStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10 };
 
-const criterionRowStyle = { padding: 14, borderRadius: 14, border: '1px solid #e2e8f0', background: '#f8fafc' };
+const criterionRowStyle = { padding: 12, borderRadius: 12, border: '1px solid #e2e8f0', background: '#f8fafc' };
 
 const primaryButtonStyle = {
   padding: '11px 22px',
@@ -419,6 +570,7 @@ const primaryButtonStyle = {
   border: 'none',
   fontWeight: 700,
   fontSize: 14,
+  boxShadow: '0 12px 28px rgba(37,99,235,0.28)',
 };
 
 const secondaryButtonStyle = {
