@@ -717,7 +717,10 @@ const useAuthStore = create(
       // user clicks it, so the profiles row is intentionally left alone here
       // — updating it immediately would show an email the user can't yet
       // sign in with.
-      updateCredentials: async ({ email, password } = {}) => {
+      // `currentPassword`, when given, is checked first by signing in again
+      // with it, so a session left open on a shared device can't be used to
+      // take over the account by changing its email or password.
+      updateCredentials: async ({ email, password, currentPassword } = {}) => {
         if (!SUPABASE_AUTH_ENABLED || !supabase) {
           throw new Error(NOT_CONNECTED_MESSAGE);
         }
@@ -726,6 +729,20 @@ const useAuthStore = create(
         if (email) payload.email = email;
         if (password) payload.password = password;
         if (Object.keys(payload).length === 0) return null;
+
+        if (currentPassword !== undefined) {
+          const currentEmail = get().user?.email;
+          if (!currentPassword || !currentEmail) {
+            throw new Error('Enter your current password to continue.');
+          }
+          const { error: verifyError } = await supabase.auth.signInWithPassword({
+            email: currentEmail,
+            password: currentPassword,
+          });
+          if (verifyError) {
+            throw new Error('Your current password is incorrect.');
+          }
+        }
 
         const { data, error } = await supabase.auth.updateUser(payload);
         if (error) {

@@ -49,6 +49,7 @@ const AdminAudit = lazy(() => import('./pages/admin/AdminAudit'));
 const AdminAIMonitor = lazy(() => import('./pages/admin/AdminAIMonitor'));
 const AdminReports = lazy(() => import('./pages/admin/AdminReports'));
 const AdminSettings = lazy(() => import('./pages/admin/AdminSettings'));
+const AdminAccount = lazy(() => import('./pages/admin/AdminAccount'));
 const AdminBackup = lazy(() => import('./pages/admin/AdminBackup'));
 
 const OrganizerDashboard = lazy(() => import('./pages/organizer/OrganizerDashboard'));
@@ -438,7 +439,7 @@ export default function App() {
           <Route path="/admin/reports" element={<ProtectedRoute role="admin"><AdminReports /></ProtectedRoute>} />
           <Route path="/admin/settings" element={<ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute>} />
           <Route path="/admin/backup" element={<ProtectedRoute role="admin"><AdminBackup /></ProtectedRoute>} />
-          <Route path="/admin/profile" element={<ProtectedRoute role="admin"><AdminSettings /></ProtectedRoute>} />
+          <Route path="/admin/profile" element={<ProtectedRoute role="admin"><AdminAccount /></ProtectedRoute>} />
 
           {/* Approval Routes */}
           <Route path="/approvals" element={<ProtectedRoute roles={APPROVAL_ROLES}><AdminRoles /></ProtectedRoute>} />

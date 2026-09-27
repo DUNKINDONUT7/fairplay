@@ -31,6 +31,7 @@ const NAV_GROUPS = {
           { label: 'System Analytics', path: '/admin/analytics', icon: 'bi bi-graph-up' },
           { label: 'Audit Log', path: '/admin/audit', icon: 'bi bi-journal-text' },
           { label: 'Platform Settings', path: '/admin/settings', icon: 'bi bi-gear' },
+          { label: 'My Account', path: '/admin/profile', icon: 'bi bi-person-gear' },
           { label: 'Backup and Restore', path: '/admin/backup', icon: 'bi bi-database' },
         ],
       },
