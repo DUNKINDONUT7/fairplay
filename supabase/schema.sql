@@ -1170,7 +1170,16 @@ security definer
 set search_path = public
 as $$
 declare
-  v_role text := coalesce(new.raw_user_meta_data->>'role', 'organizer');
+  -- raw_user_meta_data comes straight from whoever called signUp() — the
+  -- anon key is public, so anyone can put any role in it. It may only pick
+  -- between the non-privileged roles; 'admin' (or anything unknown) is never
+  -- granted here and falls back to 'participant'. Admins are promoted by an
+  -- existing admin (guarded by prevent_role_self_escalation).
+  v_requested_role text := coalesce(new.raw_user_meta_data->>'role', 'organizer');
+  v_role text := case
+    when v_requested_role in ('participant', 'organizer', 'judge') then v_requested_role
+    else 'participant'
+  end;
 begin
   -- Self-registered organizers start 'pending' and need an admin's approval
   -- (see approve_organizer in the section below) before they can sign in.

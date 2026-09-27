@@ -11,6 +11,24 @@ export const isSupabaseConfigured =
   !hasPlaceholder(supabaseUrl, 'YOUR_SUPABASE_URL') &&
   !hasPlaceholder(supabaseAnonKey, 'YOUR_SUPABASE_ANON_KEY');
 
+// The URL fragment as the page first loaded, captured before the client
+// below reads the auth tokens out of it and wipes it from the address bar.
+// /auth/confirmed uses this to tell a session that came from the email link
+// apart from one that was already signed in on this browser (e.g. an admin).
+const initialAuthFragment = new URLSearchParams(
+  typeof window !== 'undefined' ? window.location.hash.replace(/^#/, '') : '',
+);
+// The user id (JWT `sub`) of the session the link carried, or '' if none.
+export const landedAuthUserId = (() => {
+  try {
+    const token = initialAuthFragment.get('access_token') || '';
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return String(payload?.sub || '');
+  } catch {
+    return '';
+  }
+})();
+
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
 import { roleHomePath } from '../../utils/navigation';
+import { landedAuthUserId } from '../../utils/supabaseClient';
 
 // Landing page for Supabase's email confirmation link (set as the
 // emailRedirectTo in authStore.register(), and must also be added to
@@ -17,8 +18,16 @@ export default function EmailConfirmed() {
   const [redirecting, setRedirecting] = useState(false);
   const [awaitingApproval, setAwaitingApproval] = useState(false);
 
+  // Only a session that came from this confirmation link counts. Without
+  // link tokens (expired/used link, or the page opened directly) any session
+  // here belongs to whoever was already signed in on this browser — e.g. an
+  // admin — and must not be sent on to that account's dashboard.
+  const linkUserId = landedAuthUserId;
+  const confirmedUser = user && linkUserId && user.id === linkUserId ? user : null;
+
   useEffect(() => {
-    if (loading || !initialized || !user) return;
+    if (loading || !initialized || !confirmedUser) return;
+    const user = confirmedUser;
 
     // A newly confirmed organizer still needs an admin to approve them, so
     // they don't get a dashboard yet — and the session the confirmation link
@@ -35,10 +44,10 @@ export default function EmailConfirmed() {
     }, 1600);
 
     return () => clearTimeout(timer);
-  }, [loading, initialized, user, navigate, logout]);
+  }, [loading, initialized, confirmedUser, navigate, logout]);
 
-  const stillWorking = !awaitingApproval && (loading || !initialized);
-  const failed = !awaitingApproval && !stillWorking && !user;
+  const stillWorking = !awaitingApproval && Boolean(linkUserId) && (loading || !initialized);
+  const failed = !awaitingApproval && !stillWorking && !confirmedUser;
 
   return (
     <div
