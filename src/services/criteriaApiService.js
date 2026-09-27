@@ -188,6 +188,10 @@ export async function requestCriteriaProfiles(payload) {
   const normalizedProfiles = normalizeProfiles(rawProfiles);
 
   if (normalizedProfiles.length > 0) {
+    // Attaches the model the server actually used (returned by the
+    // OpenAI-compatible upstream response) for AI-usage logging, without the
+    // client ever choosing or holding a model name itself.
+    normalizedProfiles.model = json?.model || 'unknown';
     return normalizedProfiles;
   }
 

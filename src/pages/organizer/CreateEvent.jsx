@@ -1681,7 +1681,6 @@ export default function CreateEvent() {
                       <StatTile label="Total weight" value={`${totalWeight}%`} tone={totalWeight === 100 ? '#2563eb' : '#b45309'} />
                       <StatTile label="Scoring method" value={criteriaDraft.scoringMethod} />
                       <StatTile label="Generation source" value={getCriteriaSourceLabel(criteriaDraft.source)} tone={getCriteriaSourceTone(criteriaDraft.source)} />
-                      <StatTile label="Model" value={criteriaDraft.modelUsed || 'local'} />
                     </div>
                     {criteriaDraft.fallbackReason && (
                       <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 14, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 13 }}>

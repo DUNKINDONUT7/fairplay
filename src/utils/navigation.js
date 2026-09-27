@@ -14,7 +14,12 @@ export function roleHomePath(role) {
 }
 
 export function sanitizeReturnTo(returnTo) {
-  if (typeof returnTo !== 'string' || !returnTo.startsWith('/')) {
+  if (
+    typeof returnTo !== 'string' ||
+    !returnTo.startsWith('/') ||
+    returnTo.startsWith('//') ||
+    returnTo.startsWith('/\\')
+  ) {
     return '';
   }
 

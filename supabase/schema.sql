@@ -366,14 +366,25 @@ alter table public.attendance add column if not exists source text default 'manu
 alter table public.attendance add column if not exists notes text;
 alter table public.attendance add column if not exists check_in_status text default 'checked-in';
 alter table public.attendance add column if not exists metadata jsonb default '{}'::jsonb;
-update public.attendance
-set
-  attendee_id = coalesce(attendee_id, participant_id::text),
-  attendee_name = coalesce(attendee_name, participant_name),
-  attendee_type = coalesce(attendee_type, 'participant'),
-  role = coalesce(role, 'participant'),
-  check_in_status = coalesce(check_in_status, 'checked-in')
-where attendee_name is null or attendee_id is null;
+-- Guarded: this file already dropped participant_id/participant_name from
+-- attendance the first time it ran successfully, so a later re-run must skip
+-- this backfill entirely instead of erroring on a column that's now gone.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'attendance' and column_name = 'participant_id'
+  ) then
+    update public.attendance
+    set
+      attendee_id = coalesce(attendee_id, participant_id::text),
+      attendee_name = coalesce(attendee_name, participant_name),
+      attendee_type = coalesce(attendee_type, 'participant'),
+      role = coalesce(role, 'participant'),
+      check_in_status = coalesce(check_in_status, 'checked-in')
+    where attendee_name is null or attendee_id is null;
+  end if;
+end $$;
 
 -- The old columns above are superseded by attendee_id/attendee_name/etc.
 -- (nothing in the app reads or writes participant_id, participant_name,
@@ -1975,3 +1986,170 @@ drop trigger if exists guard_event_content_lock on public.events;
 create trigger guard_event_content_lock
 before update on public.events
 for each row execute function public.guard_event_content_lock();
+
+-- ============================================================================
+-- SECTION: Security hardening round 2 (2026-09-27)
+-- Three gaps from a security audit, each verified safe against every
+-- existing write path in the app before being closed here:
+--
+--   1. is_staff_user()/is_admin_user() only ever checked `role`, never
+--      `status` — a suspended or still-pending organizer/admin kept full
+--      staff powers at the database level even though the app itself blocks
+--      them at sign-in (App.jsx's pending-approval gate). No legitimate flow
+--      relies on a non-active account having these powers, so adding the
+--      status check is purely a restriction on already-unintended access.
+--   2. handle_new_auth_user defaulted an omitted role to 'organizer' instead
+--      of 'participant'. The real organizer self-signup flow always sends
+--      role:'organizer' explicitly (authStore.js), so this only ever
+--      affected callers that omitted the field — nothing legitimate does.
+--   3. certificates had no INSERT/UPDATE check at all (anon and
+--      authenticated, using(true)/with check(true)), which lets anyone mint
+--      a fake "Verified" certificate that the public certificate-checker
+--      page then displays as genuine. Every real write to this table
+--      (certificateStore.js, tournamentStore.js's champion-certificate
+--      auto-issue) runs from an organizer's own authenticated session
+--      against their own event, so scoping writes to that event's owner (or
+--      an admin) changes nothing for the working feature.
+--
+-- Deliberately NOT touched here (would need a coordinated redesign, not a
+-- narrow patch, to avoid breaking a currently-working flow):
+--   - scores / judges / judge_assignments direct writes — the "open judge
+--     link" session (JudgeSessionGate.jsx) reads and writes these tables
+--     with the anon key and no real Supabase Auth session, so restricting
+--     them to staff-only would break judges from entering their scoring
+--     session at all.
+--   - profiles / registrations broad read access — some of that data is
+--     read by the same anon-key judge/participant flows above; narrowing it
+--     needs to happen together with whatever replaces that flow.
+-- Safe to re-run.
+-- ============================================================================
+
+create or replace function public.is_staff_user()
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where profiles.id = auth.uid()::text
+      and profiles.role in ('admin', 'organizer')
+      and profiles.status = 'active'
+  );
+$$;
+
+create or replace function public.is_admin_user()
+returns boolean
+language sql
+stable
+as $$
+  select exists (
+    select 1
+    from public.profiles
+    where profiles.id = auth.uid()::text
+      and profiles.role = 'admin'
+      and profiles.status = 'active'
+  );
+$$;
+
+create or replace function public.handle_new_auth_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_requested_role text := coalesce(new.raw_user_meta_data->>'role', 'participant');
+  v_role text := case
+    when v_requested_role in ('participant', 'organizer', 'judge') then v_requested_role
+    else 'participant'
+  end;
+begin
+  insert into public.profiles (id, email, full_name, role, status, created_at, updated_at)
+  values (
+    new.id::text,
+    new.email,
+    coalesce(new.raw_user_meta_data->>'full_name', new.email),
+    v_role,
+    case when v_role = 'organizer' then 'pending' else 'active' end,
+    timezone('utc', now()),
+    timezone('utc', now())
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop policy if exists "Allow anon full access to certificates" on public.certificates;
+
+drop policy if exists "Anyone can read certificates" on public.certificates;
+create policy "Anyone can read certificates"
+on public.certificates for select
+to anon, authenticated
+using (true);
+
+drop policy if exists "Owner or admin can issue certificates" on public.certificates;
+create policy "Owner or admin can issue certificates"
+on public.certificates for insert
+to authenticated
+with check (
+  exists (
+    select 1 from public.events e
+    where e.id = certificates.event_id
+      and (e.owner_id = auth.uid()::text or public.is_admin_user())
+  )
+);
+
+drop policy if exists "Owner or admin can update certificates" on public.certificates;
+create policy "Owner or admin can update certificates"
+on public.certificates for update
+to authenticated
+using (
+  exists (
+    select 1 from public.events e
+    where e.id = certificates.event_id
+      and (e.owner_id = auth.uid()::text or public.is_admin_user())
+  )
+)
+with check (
+  exists (
+    select 1 from public.events e
+    where e.id = certificates.event_id
+      and (e.owner_id = auth.uid()::text or public.is_admin_user())
+  )
+);
+
+-- ============================================================================
+-- SECTION: Security hardening round 3 (2026-09-27)
+-- Found by Supabase's own live Security Advisor (`supabase db advisors
+-- --linked --type security`) after round 2 shipped. Both items are pure
+-- restrictions with zero effect on any real caller:
+--
+--   1. auto_close_expired_events() was only ever meant to run from the daily
+--      pg_cron schedule (which calls it directly as the Postgres role, not
+--      through the REST API). Postgres grants EXECUTE on every new function
+--      to PUBLIC by default, and the original `grant ... to service_role`
+--      never revoked that default — so anon/authenticated could call
+--      /rest/v1/rpc/auto_close_expired_events directly. Nothing in the app
+--      ever calls this RPC (grep confirms zero references in src/), so
+--      revoking public/anon/authenticated access changes nothing for the
+--      working feature.
+--   2. A handful of functions never pinned `search_path`, which the advisor
+--      flags because a mutable search_path is a known injection vector if a
+--      lower-privilege role can create objects that shadow one of the
+--      function's unqualified references. Pinning it to `public` doesn't
+--      change what any of them do (they already only ever refer to
+--      public.* objects).
+-- Safe to re-run.
+-- ============================================================================
+
+revoke execute on function public.auto_close_expired_events() from public, anon, authenticated;
+
+alter function public.set_updated_at() set search_path = public;
+alter function public.prevent_locked_score_mutation() set search_path = public;
+alter function public.is_staff_user() set search_path = public;
+alter function public.is_admin_user() set search_path = public;
+alter function public.prevent_role_self_escalation() set search_path = public;
+alter function public.fairplay_actor_hash(text) set search_path = public;
+alter function public.set_event_owner() set search_path = public;
+alter function public.guard_event_content_lock() set search_path = public;

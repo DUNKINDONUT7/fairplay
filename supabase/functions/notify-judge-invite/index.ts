@@ -1,3 +1,8 @@
+// @ts-nocheck — this runs on Deno (Supabase Edge Functions), not Node/browser.
+// VS Code's default TypeScript checker doesn't know the Deno global or how to
+// resolve remote https:// imports, so it reports false-positive errors here.
+// Deno itself type-checks and runs this file fine; install the "Deno" VS Code
+// extension and scope it to supabase/functions if you want real checking.
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.4';
 import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
@@ -223,6 +228,24 @@ serve(async (req) => {
       const existingUser = existingUsersData?.users?.find((user) => user.email?.toLowerCase() === judgeEmail) || null;
 
       if (existingUser) {
+        // Only safe to reuse this account if it is already a judge — matching
+        // by email alone would otherwise let this endpoint reset the password
+        // and overwrite the role metadata of ANY existing account (including
+        // an admin's or a participant's) just by inviting their email address
+        // as a "judge". Re-inviting an existing judge to a new event is the
+        // one legitimate case this needs to keep working.
+        const { data: existingProfile } = await serviceRoleClient
+          .from('profiles')
+          .select('role')
+          .eq('id', existingUser.id)
+          .maybeSingle();
+
+        if (existingProfile && existingProfile.role !== 'judge') {
+          return jsonResponse({
+            error: `This email already belongs to an existing ${existingProfile.role} account and cannot be re-invited as a judge. Use a different email address.`,
+          }, 409);
+        }
+
         authUserId = existingUser.id;
         await serviceRoleClient.auth.admin.updateUserById(existingUser.id, {
           password: temporaryPassword,

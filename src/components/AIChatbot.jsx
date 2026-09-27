@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/authStore';
 import { getApiConfig, callAiProxy } from '../services/criteriaApiService';
 
 const STORAGE_KEY = 'fairplay_chatbot_messages';
+const GUEST_COUNT_KEY = 'fairplay_chatbot_guest_ai_count';
+const GUEST_FREE_LIMIT = 5;
 
 const FAQ_KNOWLEDGE_BASE = {
   admin: {
@@ -34,6 +36,20 @@ const FAQ_KNOWLEDGE_BASE = {
     'How do I get started?': 'Use the Get Started flow on the landing page to create an organizer account. Once an admin approves it, sign in and continue into your role dashboard.',
   },
 };
+
+const PLATFORM_KEYWORDS = [
+  'event', 'events', 'criteria', 'criterion', 'rubric', 'score', 'scores', 'scoring',
+  'judge', 'judges', 'judging', 'contestant', 'contestants', 'participant', 'participants',
+  'register', 'registration', 'qr', 'attendance', 'report', 'reports', 'result', 'results',
+  'leaderboard', 'certificate', 'certificates', 'account', 'accounts', 'role', 'roles',
+  'dashboard', 'fairplay', 'submission', 'submissions', 'approve', 'approval', 'session',
+  'invite', 'organizer', 'admin', 'weight', 'weights', 'tally', 'ranking', 'bracket',
+];
+
+function isLikelyOffTopic(question) {
+  const normalized = question.toLowerCase();
+  return !PLATFORM_KEYWORDS.some((keyword) => normalized.includes(keyword));
+}
 
 const PAGE_HINTS = [
   {
@@ -78,12 +94,77 @@ function buildFallbackAnswer(question, roleFaq, pageLabel) {
     }
   }
 
+  if (isLikelyOffTopic(question)) {
+    return "That's outside what I can help with here — I can only help with FairPlay's events, judging, scoring, and reports. Ask me something about those and I'll point you in the right direction.";
+  }
+
   return `I could not find a direct answer for that yet. Since you are on ${pageLabel}, check the visible actions on this page first, then open the matching dashboard section if you need the full workflow.`;
+}
+
+function readGuestAiCount() {
+  if (typeof window === 'undefined') return 0;
+  try {
+    return Number(window.localStorage.getItem(GUEST_COUNT_KEY)) || 0;
+  } catch (error) {
+    return 0;
+  }
+}
+
+// Injected once for hover/focus states and motion that inline styles can't
+// express (pseudo-classes, keyframes, prefers-reduced-motion).
+const WIDGET_STYLES = `
+@keyframes fpPanelIn { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes fpLauncherIn { from { opacity: 0; transform: scale(0.7); } to { opacity: 1; transform: scale(1); } }
+@keyframes fpBounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.5; } 40% { transform: translateY(-4px); opacity: 1; } }
+.fp-panel { animation: fpPanelIn 0.2s ease-out; }
+.fp-launcher { animation: fpLauncherIn 0.2s ease-out; transition: transform 0.15s ease; }
+.fp-launcher:hover, .fp-launcher:focus-visible { transform: scale(1.06); }
+.fp-icon-btn { transition: background-color 0.15s ease, color 0.15s ease; }
+.fp-icon-btn:hover, .fp-icon-btn:focus-visible { background: rgba(148,163,184,0.16); color: #f8fafc; }
+.fp-quick-prompt { transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease; }
+.fp-quick-prompt:hover:not(:disabled) { background: rgba(8,47,73,0.6); border-color: rgba(103,232,249,0.4); }
+.fp-quick-prompt:active:not(:disabled) { transform: scale(0.97); }
+.fp-quick-prompt:disabled { opacity: 0.4; cursor: not-allowed; }
+.fp-chat-input:focus { outline: none; border-color: rgba(103,232,249,0.65); box-shadow: 0 0 0 3px rgba(103,232,249,0.18); }
+.fp-send-btn { transition: transform 0.1s ease, opacity 0.15s ease; }
+.fp-send-btn:active:not(:disabled) { transform: scale(0.96); }
+.fp-login-pill { transition: filter 0.15s ease, transform 0.1s ease; cursor: pointer; }
+.fp-login-pill:hover { filter: brightness(1.15); }
+.fp-login-pill:active { transform: scale(0.97); }
+@media (prefers-reduced-motion: reduce) {
+  .fp-panel, .fp-launcher, .fp-bounce-dot { animation: none !important; }
+}
+`;
+
+function TypingIndicator() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[0, 1, 2].map((index) => (
+          <span
+            key={index}
+            className="fp-bounce-dot"
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: '#67e8f9',
+              display: 'inline-block',
+              animation: 'fpBounce 1.1s ease-in-out infinite',
+              animationDelay: `${index * 0.15}s`,
+            }}
+          />
+        ))}
+      </div>
+      <span style={{ color: '#94a3b8', fontSize: 12 }}>FairPlay is typing</span>
+    </div>
+  );
 }
 
 export default function AIChatbot() {
   const { user } = useAuthStore();
   const location = useLocation();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState(() => {
     if (typeof window === 'undefined') {
@@ -98,12 +179,38 @@ export default function AIChatbot() {
   });
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [guestAiCount, setGuestAiCount] = useState(readGuestAiCount);
+  const [guestNoticeShown, setGuestNoticeShown] = useState(false);
   const messagesEndRef = useRef(null);
+  const prevUserIdRef = useRef(undefined);
 
   const userRole = user?.role || 'public';
   const roleFaq = FAQ_KNOWLEDGE_BASE[userRole] || FAQ_KNOWLEDGE_BASE.public;
   const pageContext = useMemo(() => getPageContext(location.pathname), [location.pathname]);
   const quickPrompts = pageContext.quickPrompts;
+  const isGuest = userRole === 'public';
+  const guestQuestionsLeft = Math.max(0, GUEST_FREE_LIMIT - guestAiCount);
+  const guestLimitReached = isGuest && guestQuestionsLeft <= 0;
+
+  // Every login/logout/account-switch starts a clean chat session — no old
+  // history is resent as context on future requests, which keeps each
+  // request's token usage small, and a guest's free-question count resets
+  // once they've actually signed in.
+  useEffect(() => {
+    const currentId = user?.id ?? null;
+    if (prevUserIdRef.current !== undefined && prevUserIdRef.current !== currentId) {
+      setMessages([]);
+      setGuestAiCount(0);
+      setGuestNoticeShown(false);
+      try {
+        window.sessionStorage.removeItem(STORAGE_KEY);
+        window.localStorage.removeItem(GUEST_COUNT_KEY);
+      } catch (error) {
+        // Ignore storage failures (private browsing, etc.).
+      }
+    }
+    prevUserIdRef.current = currentId;
+  }, [user?.id]);
 
   useEffect(() => {
     if (messages.length === 0) {
@@ -128,16 +235,41 @@ export default function AIChatbot() {
     }
   }, [messages]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(GUEST_COUNT_KEY, String(guestAiCount));
+    } catch (error) {
+      // Ignore storage failures (private browsing, etc.).
+    }
+  }, [guestAiCount]);
+
   const appendMessage = (message) => {
     setMessages((current) => [...current, message]);
+  };
+
+  const goToLogin = () => {
+    setIsOpen(false);
+    navigate('/login');
   };
 
   const askAssistant = async (question) => {
     setIsLoading(true);
 
+    if (guestLimitReached && !guestNoticeShown) {
+      setGuestNoticeShown(true);
+      appendMessage({
+        id: `msg-${Date.now()}-limit`,
+        type: 'bot',
+        text: `You've used all ${GUEST_FREE_LIMIT} free AI answers as a guest. I can still help with quick FAQ answers below — log in for unlimited AI support.`,
+        time: new Date().toISOString(),
+        mode: 'faq',
+      });
+    }
+
     try {
       const apiConfig = getApiConfig(import.meta.env.VITE_AI_CHATBOT_MODEL);
-      if (apiConfig.enabled) {
+      if (apiConfig.enabled && !guestLimitReached) {
         const json = await callAiProxy({
           model: apiConfig.model,
           temperature: 0.4,
@@ -151,7 +283,11 @@ The current user's role is ${userRole}. They are viewing: ${pageContext.pageLabe
 Known workflows for this role:
 ${Object.entries(roleFaq).map(([q, a]) => `- ${q} ${a}`).join('\n')}
 
-Answer using this context. If a question is about a workflow not listed above, give your best practical guidance consistent with how the platform works — do not invent unrelated product features (e.g. this is not an ESG, sustainability, or generic SaaS tool). Keep answers concise and specific.`,
+SCOPE RULES:
+- Only answer questions about using FairPlay: events, judging criteria/rubrics, scoring, QR attendance, judges, participants, registration, reports, certificates, accounts, and roles.
+- If the question is unrelated to FairPlay (recipes, general trivia, coding help unrelated to this platform, personal advice, etc.), do not answer it. Reply briefly that it's outside what you help with here and redirect to platform topics.
+- You have no access to live data (no real scores, rankings, or per-judge records). Never invent or guess an actual value for a live-data question (e.g. "what is Judge A's score"). Instead act as a navigator: name the exact in-app page or section where the user can see that themselves (e.g. Live Scoring, Reports, Judge Activity).
+- Do not invent unrelated product features (e.g. this is not an ESG, sustainability, or generic SaaS tool). Keep answers concise and specific.`,
             },
             ...messages.slice(-6).map((message) => ({ role: message.type === 'user' ? 'user' : 'assistant', content: message.text })),
             { role: 'user', content: question },
@@ -167,6 +303,9 @@ Answer using this context. If a question is about a workflow not listed above, g
             time: new Date().toISOString(),
             mode: 'ai',
           });
+          if (isGuest) {
+            setGuestAiCount((count) => count + 1);
+          }
           setIsLoading(false);
           return;
         }
@@ -204,8 +343,11 @@ Answer using this context. If a question is about a workflow not listed above, g
 
   return (
     <>
+      <style>{WIDGET_STYLES}</style>
+
       {!isOpen && (
         <button
+          className="fp-launcher"
           onClick={() => setIsOpen(true)}
           style={{
             position: 'fixed',
@@ -229,42 +371,93 @@ Answer using this context. If a question is about a workflow not listed above, g
       )}
 
       {isOpen && (
-        <div style={{ position: 'fixed', right: 20, bottom: 20, width: 'min(420px, calc(100vw - 24px))', height: 'min(680px, calc(100vh - 40px))', background: 'rgba(3, 10, 24, 0.98)', border: '1px solid rgba(103,232,249,0.18)', borderRadius: 22, display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,0.55)', zIndex: 1300 }}>
+        <div
+          className="fp-panel"
+          role="dialog"
+          aria-label="FairPlay support chat"
+          style={{ position: 'fixed', right: 20, bottom: 20, width: 'min(420px, calc(100vw - 24px))', height: 'min(680px, calc(100vh - 40px))', background: 'rgba(3, 10, 24, 0.98)', border: '1px solid rgba(103,232,249,0.18)', borderRadius: 22, display: 'flex', flexDirection: 'column', boxShadow: '0 30px 80px rgba(0,0,0,0.55)', zIndex: 1300 }}
+        >
           <div style={{ padding: '18px 20px', borderBottom: '1px solid rgba(103,232,249,0.12)', background: 'linear-gradient(180deg, rgba(8,47,73,0.65), rgba(3,10,24,0.65))', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <img src="/icon.svg" alt="FairPlay" style={{ width: 36, height: 36 }} />
-              <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+              <img src="/icon.svg" alt="" style={{ width: 36, height: 36, flexShrink: 0 }} />
+              <div style={{ minWidth: 0 }}>
                 <div style={{ color: '#f8fafc', fontWeight: 800 }}>FairPlay Support</div>
-                <div style={{ color: '#94a3b8', fontSize: 12 }}>{pageContext.pageLabel} · {userRole}</div>
+                <div style={{ color: '#94a3b8', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pageContext.pageLabel} · {userRole}</div>
               </div>
             </div>
-            <button onClick={() => setIsOpen(false)} style={{ border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 18 }}><i className="bi bi-x-lg" /></button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {isGuest && (
+                <button
+                  type="button"
+                  onClick={goToLogin}
+                  className="fp-login-pill"
+                  style={{
+                    border: 'none',
+                    borderRadius: 999,
+                    padding: '6px 10px',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    background: guestLimitReached ? 'rgba(248,113,113,0.16)' : guestQuestionsLeft <= 2 ? 'rgba(251,191,36,0.16)' : 'rgba(103,232,249,0.14)',
+                    color: guestLimitReached ? '#fca5a5' : guestQuestionsLeft <= 2 ? '#fcd34d' : '#67e8f9',
+                  }}
+                  title="Log in for unlimited AI support"
+                >
+                  {guestLimitReached ? 'Log in for AI' : `${guestQuestionsLeft} free AI left`}
+                </button>
+              )}
+              <button onClick={() => setIsOpen(false)} className="fp-icon-btn" aria-label="Close support chat" style={{ border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 16, width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><i className="bi bi-x-lg" aria-hidden="true" /></button>
+            </div>
           </div>
 
           <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(103,232,249,0.08)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {quickPrompts.map((prompt) => (
-              <button key={prompt} onClick={() => handleQuickPrompt(prompt)} style={{ borderRadius: 999, border: '1px solid rgba(103,232,249,0.18)', background: 'rgba(8,47,73,0.38)', color: '#c6f7ff', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
+              <button key={prompt} className="fp-quick-prompt" onClick={() => handleQuickPrompt(prompt)} disabled={isLoading} style={{ borderRadius: 999, border: '1px solid rgba(103,232,249,0.18)', background: 'rgba(8,47,73,0.38)', color: '#c6f7ff', fontSize: 12, padding: '8px 12px', cursor: 'pointer' }}>
                 {prompt}
               </button>
             ))}
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div aria-live="polite" style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
             {messages.map((message) => (
-              <div key={message.id} style={{ display: 'flex', justifyContent: message.type === 'user' ? 'flex-end' : 'flex-start' }}>
-                <div style={{ maxWidth: '82%', padding: '12px 14px', borderRadius: 16, background: message.type === 'user' ? 'rgba(37,99,235,0.24)' : 'rgba(15,23,42,0.92)', border: `1px solid ${message.type === 'user' ? 'rgba(96,165,250,0.28)' : 'rgba(103,232,249,0.14)'}`, color: '#f8fafc' }}>
-                  <div style={{ fontSize: 14, lineHeight: 1.5 }}>{message.text}</div>
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+              <div key={message.id} style={{ display: 'flex', justifyContent: message.type === 'user' ? 'flex-end' : 'flex-start', alignItems: 'flex-end', gap: 8 }}>
+                {message.type === 'bot' && (
+                  <img src="/icon.svg" alt="" style={{ width: 22, height: 22, borderRadius: '50%', background: 'rgba(103,232,249,0.14)', padding: 3, flexShrink: 0 }} />
+                )}
+                <div style={{
+                  maxWidth: '78%',
+                  padding: '12px 14px',
+                  borderRadius: 16,
+                  borderBottomLeftRadius: message.type === 'bot' ? 4 : 16,
+                  borderBottomRightRadius: message.type === 'user' ? 4 : 16,
+                  background: message.type === 'user' ? 'rgba(37,99,235,0.24)' : 'rgba(15,23,42,0.92)',
+                  border: `1px solid ${message.type === 'user' ? 'rgba(96,165,250,0.28)' : 'rgba(103,232,249,0.14)'}`,
+                  color: '#f8fafc',
+                }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{message.text}</div>
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#64748b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
                     <span>{new Date(message.time).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                    {message.mode && <span>{message.mode.toUpperCase()}</span>}
+                    {message.mode && (
+                      <span style={{
+                        padding: '1px 7px',
+                        borderRadius: 999,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 0.3,
+                        background: message.mode === 'ai' ? 'rgba(103,232,249,0.14)' : 'rgba(148,163,184,0.14)',
+                        color: message.mode === 'ai' ? '#67e8f9' : '#94a3b8',
+                      }}>
+                        {message.mode === 'ai' ? 'AI' : 'FAQ'}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
             ))}
             {isLoading && (
               <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <div style={{ padding: '12px 14px', borderRadius: 16, background: 'rgba(15,23,42,0.92)', border: '1px solid rgba(103,232,249,0.14)', color: '#94a3b8', fontSize: 13 }}>
-                  FairPlay is typing...
+                <div style={{ padding: '12px 14px', borderRadius: 16, borderBottomLeftRadius: 4, background: 'rgba(15,23,42,0.92)', border: '1px solid rgba(103,232,249,0.14)' }}>
+                  <TypingIndicator />
                 </div>
               </div>
             )}
@@ -272,8 +465,16 @@ Answer using this context. If a question is about a workflow not listed above, g
           </div>
 
           <form onSubmit={handleSendMessage} style={{ padding: 16, borderTop: '1px solid rgba(103,232,249,0.08)', display: 'flex', gap: 10 }}>
-            <input value={userInput} onChange={(event) => setUserInput(event.target.value)} placeholder="Ask about events, criteria, scoring, QR, or reports" disabled={isLoading} style={{ flex: 1, padding: '12px 14px', borderRadius: 14, background: 'rgba(2, 6, 23, 0.72)', border: '1px solid rgba(103,232,249,0.18)', color: '#f8fafc', outline: 'none' }} />
-            <button type="submit" disabled={isLoading || !userInput.trim()} style={{ minWidth: 96, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg, #06b6d4, #2563eb)', color: '#03111c', fontWeight: 800, cursor: isLoading || !userInput.trim() ? 'not-allowed' : 'pointer', opacity: isLoading || !userInput.trim() ? 0.55 : 1 }}>
+            <input
+              value={userInput}
+              onChange={(event) => setUserInput(event.target.value)}
+              placeholder="Ask about events, criteria, scoring, QR, or reports"
+              disabled={isLoading}
+              className="fp-chat-input"
+              style={{ flex: 1, minWidth: 0, padding: '12px 14px', borderRadius: 14, background: 'rgba(2, 6, 23, 0.72)', border: '1px solid rgba(103,232,249,0.18)', color: '#f8fafc', fontSize: 16 }}
+            />
+            <button type="submit" disabled={isLoading || !userInput.trim()} className="fp-send-btn" style={{ minWidth: 96, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg, #06b6d4, #2563eb)', color: '#03111c', fontWeight: 800, cursor: isLoading || !userInput.trim() ? 'not-allowed' : 'pointer', opacity: isLoading || !userInput.trim() ? 0.55 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <i className="bi bi-send-fill" aria-hidden="true" style={{ fontSize: 13 }} />
               Send
             </button>
           </form>

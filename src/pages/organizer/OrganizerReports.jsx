@@ -13,6 +13,16 @@ function formatBytes(value) {
   return `${Math.max(1, Math.ceil(value / 1024))} KB`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[c]));
+}
+
 function getSavedTournamentReport(event) {
   if (!event?.metadata || !Array.isArray(event.metadata.generatedReports)) {
     return null;
@@ -185,7 +195,7 @@ export default function OrganizerReports() {
     const html = `
       <html>
         <head>
-          <title>${eventToPrint.title} Report</title>
+          <title>${escapeHtml(eventToPrint.title)} Report</title>
           <style>
             body { font-family: Inter, system-ui, sans-serif; margin: 0; padding: 32px; color: #111827; background: #fff; }
             h1 { font-size: 32px; margin-bottom: 8px; }
@@ -200,7 +210,7 @@ export default function OrganizerReports() {
           </style>
         </head>
         <body>
-          <h1>${eventToPrint.title}</h1>
+          <h1>${escapeHtml(eventToPrint.title)}</h1>
           <p><span class="badge">Event Report</span> Generated on ${new Date().toLocaleDateString()}</p>
           <div class="grid">
             <div class="panel">
@@ -211,15 +221,15 @@ export default function OrganizerReports() {
             </div>
             <div class="panel">
               <h2>Top Scoring Entry</h2>
-              <p>${leaderboard[0]?.contestantName || 'TBD'}</p>
+              <p>${escapeHtml(leaderboard[0]?.contestantName || 'TBD')}</p>
               <p>Avg. Score: ${leaderboard[0]?.averageScore ?? 'N/A'}</p>
               <p>Rank: ${leaderboard[0]?.rank ?? 'N/A'}</p>
             </div>
           </div>
           <div class="panel" style="margin-bottom:24px;">
             <h2>Championship Match</h2>
-            <p>${championshipMatch ? `${championshipMatch.match.team1?.name || 'TBD'} vs ${championshipMatch.match.team2?.name || 'TBD'}` : 'No final match saved yet.'}</p>
-            <p>${championshipMatch ? `Winner: ${championshipMatch.match.winner?.name || 'TBD'}` : ''}</p>
+            <p>${championshipMatch ? `${escapeHtml(championshipMatch.match.team1?.name || 'TBD')} vs ${escapeHtml(championshipMatch.match.team2?.name || 'TBD')}` : 'No final match saved yet.'}</p>
+            <p>${championshipMatch ? `Winner: ${escapeHtml(championshipMatch.match.winner?.name || 'TBD')}` : ''}</p>
             <p>${championshipMatch ? `Final Score: ${championshipMatch.match.score1 || 0} - ${championshipMatch.match.score2 || 0}` : ''}</p>
           </div>
           <div class="panel">
@@ -231,10 +241,10 @@ export default function OrganizerReports() {
               <tbody>
                 ${leaderboard.slice(0, 5).map((row) => `
                   <tr>
-                    <td>${row.rank}</td>
-                    <td>${row.contestantName}</td>
-                    <td>${row.averageScore}</td>
-                    <td>${row.totalScores}</td>
+                    <td>${escapeHtml(row.rank)}</td>
+                    <td>${escapeHtml(row.contestantName)}</td>
+                    <td>${escapeHtml(row.averageScore)}</td>
+                    <td>${escapeHtml(row.totalScores)}</td>
                   </tr>
                 `).join('')}
               </tbody>

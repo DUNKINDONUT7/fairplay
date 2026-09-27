@@ -543,7 +543,6 @@ export async function generateCriteriaWithAIFallback(params = {}) {
   let source = 'fallback';
   let error = null;
   let fallbackReason = null;
-  const modelUsed = import.meta.env.VITE_AI_CRITERIA_MODEL || 'openai/gpt-oss-120b';
   const promptText = params.prompt || 'Create a professional judging rubric.';
   const promptEstimate = Math.ceil(promptText.length / 4);
 
@@ -567,6 +566,10 @@ export async function generateCriteriaWithAIFallback(params = {}) {
 
   const responseTime = Date.now() - startTime;
   const generationSucceeded = Array.isArray(result) ? result.length > 0 : Boolean(result);
+  // The real model comes back from the AI provider's own response (set on
+  // `result` by requestCriteriaProfiles) — never guessed or hardcoded here,
+  // so no model name needs to live in client code.
+  const modelUsed = source === 'api' ? (result?.model || 'unknown') : 'fallback';
 
   if (!generationSucceeded) {
     error = fallbackReason || 'No criteria could be generated.';

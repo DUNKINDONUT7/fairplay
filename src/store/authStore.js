@@ -701,7 +701,23 @@ const useAuthStore = create(
           throw new Error(NOT_CONNECTED_MESSAGE);
         }
 
-        const { error } = await supabase.auth.resetPasswordForEmail(String(email || '').trim(), {
+        const trimmedEmail = String(email || '').trim();
+
+        // Deliberate exception to the usual "don't reveal whether an account
+        // exists" rule — product decision: tell the user outright that this
+        // email isn't registered, at the cost of making email enumeration
+        // possible through this form.
+        const { data: existingProfile } = await supabase
+          .from('profiles')
+          .select('id')
+          .ilike('email', trimmedEmail)
+          .maybeSingle();
+
+        if (!existingProfile) {
+          throw new Error('This email is not registered on FairPlay. Check the spelling, or sign up first.');
+        }
+
+        const { error } = await supabase.auth.resetPasswordForEmail(trimmedEmail, {
           redirectTo: APP_URL ? `${APP_URL}/auth/reset-password` : undefined,
         });
         if (error) {

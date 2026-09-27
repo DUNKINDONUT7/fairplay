@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
 import PaginationControls from '../../components/admin/PaginationControls';
@@ -139,12 +139,11 @@ function groupByEvent(rows, key = 'eventId') {
 }
 
 export default function AdminDashboard() {
-  const navigate = useNavigate();
   const { user, users, organizerApplications, refreshProfiles } = useAuthStore();
   const { events, fetchEvents, deleteEvent } = useEventStore();
   const { judges, fetchJudges } = useJudgeStore();
   const { registrations, fetchRegistrations } = useRegistrationStore();
-  const { scores, fetchScores } = useScoreStore();
+  const { scores, fetchScores, calculateLeaderboard } = useScoreStore();
   const { attendance, fetchAttendance } = useAttendanceStore();
   const { maintenanceEnabled, aiEnabled } = usePlatformSettingsStore();
   const { success, error: notifyError } = useNotificationStore();
@@ -154,6 +153,7 @@ export default function AdminDashboard() {
   const [eventPage, setEventPage] = useState(1);
   const [eventLimit, setEventLimit] = useState(5);
   const [eventToDelete, setEventToDelete] = useState(null);
+  const [leaderboardEvent, setLeaderboardEvent] = useState(null);
   const [activity, setActivity] = useState(null);
   const [lastBackup, setLastBackup] = useState(undefined);
   const [storedFlags, setStoredFlags] = useState([]);
@@ -177,6 +177,23 @@ export default function AdminDashboard() {
 
   const scoreRows = useMemo(() => Object.values(scores || {}), [scores]);
   const usersById = useMemo(() => new Map(users.map((u) => [String(u.id), u])), [users]);
+
+  // Recomputed whenever scoreRows changes so the modal stays live if scores
+  // come in while it's open; calculateLeaderboard itself reads the store
+  // directly rather than subscribing, so scoreRows has to be a dependency.
+  const leaderboardRows = useMemo(() => {
+    if (!leaderboardEvent) return [];
+    const ranked = calculateLeaderboard(leaderboardEvent.id, leaderboardEvent.criteria || []);
+    if (ranked.length > 0) return ranked;
+    const contestants = Array.isArray(leaderboardEvent.contestants) ? leaderboardEvent.contestants : [];
+    return contestants.map((contestant, index) => ({
+      rank: index + 1,
+      contestantId: contestant.id,
+      contestantName: contestant.name || contestant.teamName || `Participant ${index + 1}`,
+      averageScore: null,
+      totalScores: 0,
+    }));
+  }, [leaderboardEvent, calculateLeaderboard, scoreRows]);
 
   const stats = useMemo(() => {
     const byStatus = (list) => events.filter((e) => list.includes(e.status)).length;
@@ -292,6 +309,11 @@ export default function AdminDashboard() {
 
   return (
     <DashboardLayout title="Admin Dashboard" subtitle="Everything happening on FairPlay, in one place">
+      <style>{`
+        .admin-action-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
+        .admin-action-btn.leaderboard:hover { background: #e0e7ff; border-color: #c7d2fe; }
+        .admin-action-btn.danger:hover { background: #fee2e2; border-color: #fca5a5; }
+      `}</style>
       <ConfirmDialog
         open={Boolean(eventToDelete)}
         title="Delete this event?"
@@ -300,6 +322,7 @@ export default function AdminDashboard() {
         onCancel={() => setEventToDelete(null)}
         onConfirm={confirmDelete}
       />
+      <LeaderboardModal event={leaderboardEvent} rows={leaderboardRows} onClose={() => setLeaderboardEvent(null)} />
 
       <div style={{ display: 'grid', gap: 22 }}>
         {/* ── Hero ─────────────────────────────────────────────── */}
@@ -498,10 +521,42 @@ export default function AdminDashboard() {
                       </td>
                       <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{formatDate(event.startDate || event.scheduledDate)}</td>
                       <td style={{ ...tdStyle, textAlign: 'right' }}>
-                        <div style={{ display: 'inline-flex', gap: 6 }}>
-                          <button type="button" onClick={() => navigate(`/events/${event.id}`)} style={iconButtonStyle} aria-label={`View ${event.title}`} title="View public page"><i className="bi bi-box-arrow-up-right" /></button>
-                          <button type="button" onClick={() => navigate(`/events/${event.id}/leaderboard`)} style={iconButtonStyle} aria-label={`${event.title} leaderboard`} title="Leaderboard"><i className="bi bi-bar-chart" /></button>
-                          <button type="button" onClick={() => setEventToDelete(event)} style={{ ...iconButtonStyle, color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }} aria-label={`Delete ${event.title}`} title="Delete event"><i className="bi bi-trash" /></button>
+                        {/* "View page" opens the public site in a new tab (not an in-app
+                            navigate) so the admin dashboard never unmounts. "Leaderboard"
+                            opens in-place as a modal instead, for the same reason — no
+                            page switching at all. */}
+                        <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <a
+                            href={`/events/${event.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="admin-action-btn"
+                            style={actionButtonStyle}
+                            aria-label={`Open ${event.title}'s public event page in a new tab`}
+                            title="Opens the public event page in a new tab"
+                          >
+                            <i className="bi bi-box-arrow-up-right" /> View page
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => setLeaderboardEvent(event)}
+                            className="admin-action-btn leaderboard"
+                            style={{ ...actionButtonStyle, color: '#4338ca', borderColor: '#e0e7ff', background: '#eef2ff' }}
+                            aria-label={`View ${event.title}'s leaderboard`}
+                            title="View leaderboard without leaving this page"
+                          >
+                            <i className="bi bi-bar-chart" /> Leaderboard
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEventToDelete(event)}
+                            className="admin-action-btn danger"
+                            style={{ ...actionButtonStyle, color: '#dc2626', borderColor: '#fecaca', background: '#fef2f2' }}
+                            aria-label={`Delete ${event.title}`}
+                            title="Permanently delete this event"
+                          >
+                            <i className="bi bi-trash" /> Delete
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -616,6 +671,85 @@ function MiniStat({ icon, value, label }) {
   );
 }
 
+// Same modal pattern as ConfirmDialog (overlay + Escape-to-close) — keeps
+// the admin on this page instead of navigating to the public leaderboard
+// route and back.
+function LeaderboardModal({ event, rows, onClose }) {
+  useEffect(() => {
+    if (!event) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [event, onClose]);
+
+  if (!event) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 3000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', borderRadius: 20, width: '100%', maxWidth: 520, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 60px rgba(0,0,0,0.18)' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '22px 24px 16px', borderBottom: '1px solid #eef2f7' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+            <span style={{ width: 40, height: 40, borderRadius: 12, flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 18, background: '#eef2ff', color: '#4338ca' }}>
+              <i className="bi bi-bar-chart" />
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 800, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{event.title}</h2>
+              <p style={{ margin: '2px 0 0', fontSize: 12, color: '#64748b' }}>Leaderboard</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close leaderboard"
+            style={{ border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 16, width: 32, height: 32, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+          >
+            <i className="bi bi-x-lg" />
+          </button>
+        </div>
+
+        <div style={{ padding: '8px 0', overflowY: 'auto' }}>
+          {rows.length === 0 ? (
+            <div style={{ padding: '40px 24px', textAlign: 'center', color: '#94a3b8' }}>
+              <i className="bi bi-bar-chart" style={{ fontSize: 32, display: 'block', marginBottom: 10, color: '#cbd5e1' }} />
+              No leaderboard data yet.
+            </div>
+          ) : rows.map((item, index) => (
+            <div
+              key={item.contestantId || item.rank}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 14, padding: '12px 24px', borderBottom: index < rows.length - 1 ? '1px solid #f1f5f9' : 'none', background: item.rank === 1 ? '#fffbeb' : 'transparent' }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                <span style={{
+                  width: 34, height: 34, borderRadius: 10, flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 13, fontWeight: 800,
+                  background: item.rank === 1 ? '#fef3c7' : item.rank === 2 ? '#e2e8f0' : item.rank === 3 ? '#fed7aa' : '#eff6ff',
+                  color: item.rank === 1 ? '#b45309' : '#1d4ed8',
+                }}>
+                  #{item.rank}
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.contestantName}</div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {item.totalScores ? `${item.totalScores} judge score${item.totalScores === 1 ? '' : 's'}` : 'Waiting for scores'}
+                  </div>
+                </div>
+              </div>
+              <span style={{ fontSize: 18, fontWeight: 800, color: item.rank === 1 ? '#b45309' : '#0f172a', flexShrink: 0 }}>
+                {item.averageScore !== null && item.averageScore !== undefined ? Number(item.averageScore).toFixed(2) : '--'}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const heroStyle = {
   position: 'relative',
   overflow: 'hidden',
@@ -651,5 +785,5 @@ const linkStyle = { fontSize: 12, fontWeight: 700, color: '#2563eb', textDecorat
 const fieldStyle = { width: '100%', padding: '9px 12px', borderRadius: 10, border: '1px solid #cbd5e1', background: '#ffffff', color: '#0f172a', fontSize: 13, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box' };
 const thStyle = { padding: '12px 16px', fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', borderBottom: '1px solid #e2e8f0', background: '#fbfcfe' };
 const tdStyle = { padding: '14px 16px', fontSize: 13, color: '#475569', verticalAlign: 'middle' };
-const iconButtonStyle = { width: 34, height: 34, borderRadius: 9, border: '1px solid #e2e8f0', background: '#ffffff', color: '#334155', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' };
+const actionButtonStyle = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#ffffff', color: '#334155', fontSize: 12, fontWeight: 700, cursor: 'pointer', textDecoration: 'none', whiteSpace: 'nowrap' };
 const srOnly = { position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' };

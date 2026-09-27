@@ -1,3 +1,8 @@
+// @ts-nocheck — this runs on Deno (Supabase Edge Functions), not Node/browser.
+// VS Code's default TypeScript checker doesn't know the Deno global or how to
+// resolve remote https:// imports, so it reports false-positive errors here.
+// Deno itself type-checks and runs this file fine; install the "Deno" VS Code
+// extension and scope it to supabase/functions if you want real checking.
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 const corsHeaders = {
@@ -9,6 +14,16 @@ const corsHeaders = {
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MAX_MESSAGES = 40;
+// Every existing caller (chatbot, criteria generator, description generator,
+// smart report) sends exactly one of these two models today — see
+// VITE_AI_CHATBOT_MODEL / VITE_AI_CRITERIA_MODEL in .env. This allow-list
+// stops a caller with just the public anon key from picking an arbitrary,
+// possibly far more expensive model. Override/extend via the
+// AI_ALLOWED_MODELS secret (comma-separated) if a new model is ever added,
+// without needing a code change.
+const DEFAULT_ALLOWED_MODELS = ['openai/gpt-oss-120b'];
+const MAX_TOTAL_CONTENT_CHARS = 24000;
+const MAX_OUTPUT_TOKENS = 4096;
 
 function jsonResponse(body: Record<string, unknown>, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -46,6 +61,20 @@ serve(async (req) => {
     return jsonResponse({ error: 'model is required.' }, 400);
   }
 
+  const allowedModels = (Deno.env.get('AI_ALLOWED_MODELS') || '')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const modelAllowList = allowedModels.length > 0 ? allowedModels : DEFAULT_ALLOWED_MODELS;
+  if (!modelAllowList.includes(model)) {
+    return jsonResponse({ error: 'This model is not allowed.' }, 400);
+  }
+
+  const totalContentChars = messages.reduce((sum, m) => sum + String(m?.content || '').length, 0);
+  if (totalContentChars > MAX_TOTAL_CONTENT_CHARS) {
+    return jsonResponse({ error: 'Request content is too long.' }, 400);
+  }
+
   const provider = defaultProvider === 'groq' ? 'groq' : 'openrouter';
   const apiKey = provider === 'groq' ? groqKey : openRouterKey;
   const url = provider === 'groq' ? GROQ_URL : OPENROUTER_URL;
@@ -58,6 +87,7 @@ serve(async (req) => {
     model,
     messages,
     temperature: typeof body.temperature === 'number' ? body.temperature : 0.4,
+    max_tokens: MAX_OUTPUT_TOKENS,
   };
   if (body.response_format) {
     upstreamBody.response_format = body.response_format;
