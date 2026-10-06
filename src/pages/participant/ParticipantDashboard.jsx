@@ -6,7 +6,6 @@ import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useScoreStore from '../../store/scoreStore';
 import useRegistrationStore from '../../store/registrationStore';
-import SmartQRCode from '../../components/qr/SmartQRCode';
 
 const EVENT_TYPE_ICON = {
   esports: 'bi-controller',
@@ -79,8 +78,6 @@ export default function ParticipantDashboard() {
     return registrations.filter((r) => isMyRegistration(r, user));
   }, [registrations, user]);
 
-  const myQrToken = myRegistrations[0]?.individualDetails?.qrToken || myRegistrations[0]?.id || null;
-
   const myPrimaryEvent = useMemo(() => {
     const active = myRegistrations.find((r) => {
       const event = events.find((e) => String(e.id) === String(r.eventId));
@@ -138,40 +135,6 @@ export default function ParticipantDashboard() {
             </div>
           </motion.div>
         ))}
-      </div>
-
-      {/* My Smart QR Pass */}
-      <div style={{ ...cardStyle, marginBottom: 28, display: 'flex', gap: '24px', alignItems: 'center', flexWrap: 'wrap', background: 'linear-gradient(135deg, #eff6ff, #f0f9ff)', border: '1px solid #bfdbfe' }}>
-        {myQrToken ? (
-          <>
-            <div style={{ padding: 10, background: '#ffffff', borderRadius: 14, boxShadow: '0 6px 18px rgba(37,99,235,0.1)' }}>
-              <SmartQRCode token={myQrToken} size={140} />
-            </div>
-            <div style={{ flex: 1, minWidth: '250px' }}>
-              <h3 style={{ fontSize: 20, fontWeight: 700, color: '#0f172a', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <i className="bi bi-qr-code-scan" style={{ color: '#2563eb' }} />
-                My Event Pass
-              </h3>
-              <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, marginBottom: '16px' }}>
-                Show this QR code to organizers for fast check-in, or to judges when it's your turn to perform.
-              </p>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 12px', borderRadius: 999, background: '#dcfce7', color: '#15803d', fontSize: 12, fontWeight: 700 }}>
-                <i className="bi bi-shield-check" />
-                Active Pass
-              </span>
-            </div>
-          </>
-        ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
-            <IconChip icon="bi-qr-code" color="#2563eb" size={52} />
-            <div>
-              <h3 style={{ fontSize: 18, fontWeight: 700, color: '#0f172a', marginBottom: '6px' }}>No Event Pass Yet</h3>
-              <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.6, margin: 0 }}>
-                Register for an event below to get your personal check-in QR code.
-              </p>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Search */}
