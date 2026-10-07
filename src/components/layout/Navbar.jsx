@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import useAuthStore from '../../store/authStore';
 import useNotificationStore from '../../store/notificationStore';
+import NotificationPreview, { getNotificationPreview } from '../notifications/NotificationPreview';
 
 const ROLE_COLORS = {
   admin: '#2563eb',
@@ -31,6 +32,7 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
   const { loadNotifications, subscribeToNotifications, getNotificationsForUser, markAsRead, markAllAsRead } = useNotificationStore();
   const [showDropdown, setShowDropdown] = useState(false);
   const [showNotif, setShowNotif] = useState(false);
+  const [notificationPreview, setNotificationPreview] = useState(null);
 
   const dropdownLinks = userRole === 'admin'
     ? [
@@ -133,6 +135,7 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
           <motion.button
             whileHover={{ scale: 1.03 }}
             whileTap={{ scale: 0.97 }}
+            data-tour="notifications"
             onClick={() => setShowNotif((current) => !current)}
             style={{
               background: '#ffffff',
@@ -183,7 +186,10 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
                       markAsRead(notification.id);
                       if (notification.actionUrl) {
                         setShowNotif(false);
-                        navigate(notification.actionUrl);
+                        // Results and brackets open in a pop-up so the user stays in their dashboard.
+                        const preview = getNotificationPreview(notification.actionUrl);
+                        if (preview) setNotificationPreview(preview);
+                        else navigate(notification.actionUrl);
                       }
                     }}
                     style={{ padding: '12px 16px', borderBottom: '1px solid #f1f5f9', background: 'rgba(37,99,235,0.06)', cursor: 'pointer' }}
@@ -243,6 +249,13 @@ export default function Navbar({ isMobile = false, onMenuToggle }) {
           )}
         </div>
       </div>
+      {notificationPreview && (
+        <NotificationPreview
+          preview={notificationPreview}
+          onClose={() => setNotificationPreview(null)}
+          onNavigate={(path) => { setNotificationPreview(null); navigate(path); }}
+        />
+      )}
     </motion.header>
   );
 }

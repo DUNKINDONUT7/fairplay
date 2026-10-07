@@ -1,3 +1,4 @@
+import EventPicker from '../components/common/EventPicker';
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import DashboardLayout from '../components/layout/DashboardLayout';
@@ -112,12 +113,15 @@ export default function LeaderboardPage() {
             onChange={(event) => setSearch(event.target.value)}
             style={fieldStyle}
           />
-          <select value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} style={{ ...fieldStyle, minWidth: 240 }}>
-            <option value="all">All scored events</option>
-            {scorableEvents.map((event) => (
-              <option key={event.id} value={event.id}>{event.title}</option>
-            ))}
-          </select>
+          <EventPicker
+            events={scorableEvents}
+            value={eventFilter}
+            onChange={setEventFilter}
+            allLabel="All scored events"
+            allValue="all"
+            ariaLabel="Filter by event"
+            style={{ width: 280 }}
+          />
           <select value={sortBy} onChange={(event) => setSortBy(event.target.value)} style={{ ...fieldStyle, minWidth: 200 }}>
             <option value="score">Sort by average score</option>
             <option value="submissions">Sort by submissions</option>

@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useTournamentStore from '../../store/tournamentStore';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
+import { isLeagueMatch } from '../../utils/bracketEngine';
+import { BRACKET_FORMAT_LABELS } from '../../utils/bracketRules';
 
 const STORAGE_KEY = 'fairplay_judge_identity';
 
@@ -58,7 +60,12 @@ export default function ScorerLiveScoring() {
 
       if (!matched) { setPhase('error'); return; }
 
-      await ensureEventTournamentAutomation(matched, matched.contestants || []);
+      // Use the organizer's bracket as it is; only build one if none exists yet.
+      try {
+        await ensureEventTournamentAutomation(matched, matched.contestants || [], { preserveExisting: true });
+      } catch (automationError) {
+        console.warn('Bracket setup skipped:', automationError?.message || automationError);
+      }
       await fetchTournaments();
       setEvent(matched);
 
@@ -116,7 +123,8 @@ export default function ScorerLiveScoring() {
       ...prev,
       [matchId]: { ...(prev[matchId] || {}), [field]: value },
     }));
-    updateMatchDraft(currentTournament.id, matchId, field, value);
+    // Rejects when the bracket is locked or finalized; saving reports that.
+    updateMatchDraft(currentTournament.id, matchId, field, value).catch(() => {});
   }
 
   async function submitMatch(matchId) {
@@ -141,8 +149,8 @@ export default function ScorerLiveScoring() {
   }
 
   function canSubmitMatch(match) {
-    // Allow submit for round-robin (ties allowed)
-    if (currentTournament?.bracketType === 'round-robin') {
+    // Round robin and group-stage matches may end in a draw
+    if (isLeagueMatch(currentTournament, match)) {
       return true;
     }
     // For elimination, don't allow ties
@@ -282,7 +290,7 @@ export default function ScorerLiveScoring() {
             </div>
           )}
           <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '10px 16px', fontSize: 13, color: '#475569' }}>
-            <span style={{ fontWeight: 700 }}>{currentTournament.bracketType === 'round-robin' ? 'Round Robin' : 'Single Elimination'}</span>
+            <span style={{ fontWeight: 700 }}>{BRACKET_FORMAT_LABELS[currentTournament.bracketType] || 'Single elimination'}</span>
             {' · '}Round {currentTournament.currentRound || 1} of {currentTournament.totalRounds || '?'}
           </div>
         </div>
@@ -376,7 +384,7 @@ export default function ScorerLiveScoring() {
                                 : <><i className="bi bi-check2-circle" /> Submit Result</>
                               }
                             </button>
-                            {!canSubmitMatch(match) && currentTournament?.bracketType !== 'round-robin' && (
+                            {!canSubmitMatch(match) && !isLeagueMatch(currentTournament, match) && (
                               <div style={{ marginTop: 8, fontSize: 12, color: '#dc2626', display: 'flex', alignItems: 'center', gap: 6 }}>
                                 <i className="bi bi-exclamation-circle-fill" />
                                 Elimination matches cannot end in a tie. Set different scores to continue.

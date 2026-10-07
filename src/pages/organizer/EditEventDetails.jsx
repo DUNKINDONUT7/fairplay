@@ -20,7 +20,7 @@ const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 
 function createTimeOptions() {
   const options = [];
-  for (let hour = 7; hour <= 17; hour += 1) {
+  for (let hour = 7; hour <= 20; hour += 1) {
     const value = `${String(hour).padStart(2, '0')}:00`;
     const displayHour = hour > 12 ? hour - 12 : hour;
     const suffix = hour >= 12 ? 'PM' : 'AM';

@@ -1,3 +1,5 @@
+import EventPicker from '../../components/common/EventPicker';
+import useRememberedEvent from '../../hooks/useRememberedEvent';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
@@ -115,7 +117,7 @@ export default function OrganizerAttendance() {
   const { events, fetchEvents } = useEventStore();
   const { attendance, fetchAttendance, getAttendanceSummary } = useAttendanceStore();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedEventId, setSelectedEventId] = useState(searchParams.get('eventId') || '');
+  const [selectedEventId, setSelectedEventId] = useRememberedEvent(searchParams.get('eventId') || '');
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
 
@@ -176,15 +178,7 @@ export default function OrganizerAttendance() {
   return (
     <DashboardLayout title="Attendance" subtitle="Monitor who has checked in — participants and audience, tracked separately">
       <div style={{ marginBottom: 20 }}>
-        <div style={{ position: 'relative', width: 320, maxWidth: '100%' }}>
-          <i className="bi bi-calendar-event" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 13 }} />
-          <select value={selectedEventId} onChange={(event) => handleEventChange(event.target.value)} style={{ ...selectStyle, paddingLeft: 36 }}>
-            <option value="">Select an event</option>
-            {eligibleEvents.map((event) => (
-              <option key={event.id} value={event.id}>{event.title}</option>
-            ))}
-          </select>
-        </div>
+        <EventPicker events={eligibleEvents} value={selectedEventId} onChange={handleEventChange} />
       </div>
 
       {!selectedEventId ? (

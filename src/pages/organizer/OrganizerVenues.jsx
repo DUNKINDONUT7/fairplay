@@ -57,7 +57,8 @@ function summarizeVenue(location, events) {
     return leftTime - rightTime;
   });
 
-  const nextEvent = sortedEvents.find((event) => event.status !== 'completed') || sortedEvents[0] || null;
+  // The next one still to happen; when everything here is over, the most recent.
+  const nextEvent = sortedEvents.find((event) => event.status !== 'completed') || sortedEvents[sortedEvents.length - 1] || null;
   const participantTotal = sortedEvents.reduce((sum, event) => sum + Number(event.participants || event.contestants?.length || 0), 0);
   const categories = [...new Set(sortedEvents.map((event) => event.eventType || event.type).filter(Boolean))];
   const status = deriveVenueStatus(sortedEvents);
@@ -71,7 +72,7 @@ function summarizeVenue(location, events) {
     participantTotal,
     nextEvent,
     categories,
-    recentEvents: sortedEvents.slice(0, 3),
+    recentEvents: [...sortedEvents].reverse().slice(0, 3),
   };
 }
 
@@ -183,15 +184,18 @@ export default function OrganizerVenues() {
             justifyContent: 'space-between',
           }}
         >
-          <div style={{ display: 'flex', gap: 12, flex: 1, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 12, flex: 1, flexWrap: 'wrap', minWidth: 0 }}>
+            <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+              <i className="bi bi-search" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 14 }} />
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search venue, event, or category"
+              aria-label="Search venues"
               style={{
-                flex: 1,
-                minWidth: 240,
-                padding: '12px 14px',
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '12px 14px 12px 38px',
                 borderRadius: 12,
                 border: '1px solid #cbd5e1',
                 background: '#ffffff',
@@ -199,8 +203,10 @@ export default function OrganizerVenues() {
                 outline: 'none',
               }}
             />
+            </div>
             <select
               value={statusFilter}
+              aria-label="Filter by status"
               onChange={(event) => setStatusFilter(event.target.value)}
               style={{
                 minWidth: 180,
@@ -230,9 +236,12 @@ export default function OrganizerVenues() {
               color: '#ffffff',
               fontWeight: 800,
               cursor: 'pointer',
+              whiteSpace: 'nowrap',
             }}
+            title="Venues are taken from the location of each event"
           >
-            Add Via Event
+            <i className="bi bi-plus-lg" style={{ marginRight: 8 }} />
+            New Event at a Venue
           </button>
         </div>
 
@@ -259,7 +268,7 @@ export default function OrganizerVenues() {
               : 'No venue matches your current search or status filter.'}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 18 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 360px), 1fr))', gap: 18, alignItems: 'start' }}>
             {filteredVenues.map((venue, index) => (
               <motion.div
                 key={venue.id}
@@ -269,55 +278,60 @@ export default function OrganizerVenues() {
                 style={{
                   background: '#ffffff',
                   border: '1px solid #dbeafe',
-                  borderRadius: 22,
-                  padding: 22,
+                  borderRadius: 20,
+                  padding: 20,
                   boxShadow: '0 18px 40px rgba(37,99,235,0.06)',
                   display: 'grid',
+                  // One column that may shrink: long names wrap inside the card
+                  // instead of pushing its contents past the edge.
+                  gridTemplateColumns: 'minmax(0, 1fr)',
                   gap: 16,
+                  minWidth: 0,
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, alignItems: 'start' }}>
-                  <div>
-                    <h3 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{venue.name}</h3>
-                    <p style={{ margin: '8px 0 0', fontSize: 13, color: '#64748b' }}>
-                      {venue.totalEvents} event{venue.totalEvents === 1 ? '' : 's'} scheduled here
-                    </p>
-                  </div>
-                  <span
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: 999,
-                      background: venue.statusTone.bg,
-                      color: venue.statusTone.color,
-                      fontSize: 12,
-                      fontWeight: 800,
-                    }}
-                  >
-                    {venue.status}
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', minWidth: 0 }}>
+                  <span style={{ width: 40, height: 40, borderRadius: 12, display: 'grid', placeItems: 'center', background: '#eff6ff', color: '#2563eb', fontSize: 18, flexShrink: 0 }}>
+                    <i className="bi bi-geo-alt-fill" />
                   </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <h3 style={{ margin: 0, fontSize: 16, lineHeight: 1.35, fontWeight: 800, color: '#0f172a', overflowWrap: 'anywhere' }}>{venue.name}</h3>
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        marginTop: 8,
+                        padding: '3px 10px',
+                        borderRadius: 999,
+                        background: venue.statusTone.bg,
+                        color: venue.statusTone.color,
+                        fontSize: 12,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {venue.status}
+                    </span>
+                  </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-                  <div style={miniPanelStyle}>
-                    <div style={miniLabelStyle}>Participants</div>
-                    <div style={miniValueStyle}>{venue.participantTotal}</div>
-                  </div>
-                  <div style={miniPanelStyle}>
-                    <div style={miniLabelStyle}>Next Event</div>
-                    <div style={{ ...miniValueStyle, fontSize: 16 }}>{venue.nextEvent ? formatSchedule(venue.nextEvent) : 'TBD'}</div>
-                  </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', borderRadius: 14, border: '1px solid #e2e8f0', background: '#f8fbff', overflow: 'hidden' }}>
+                  {[
+                    ['Events', venue.totalEvents],
+                    ['Participants', venue.participantTotal],
+                    [venue.status === 'Completed' ? 'Latest' : 'Next', venue.nextEvent ? formatSchedule(venue.nextEvent) : 'TBD'],
+                  ].map(([label, value], statIndex) => (
+                    <div key={label} style={{ padding: '12px 12px', borderLeft: statIndex === 0 ? 'none' : '1px solid #e2e8f0', minWidth: 0 }}>
+                      <div style={miniLabelStyle}>{label}</div>
+                      <div style={{ ...miniValueStyle, fontSize: typeof value === 'number' ? 20 : 13, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{value}</div>
+                    </div>
+                  ))}
                 </div>
 
-                <div>
-                  <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 8 }}>
-                    Event Categories
-                  </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {venue.categories.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {venue.categories.map((category) => (
                       <span
                         key={category}
                         style={{
-                          padding: '6px 10px',
+                          padding: '4px 10px',
                           borderRadius: 999,
                           background: 'rgba(37,99,235,0.08)',
                           color: '#2563eb',
@@ -330,47 +344,42 @@ export default function OrganizerVenues() {
                       </span>
                     ))}
                   </div>
-                </div>
+                )}
 
-                <div>
-                  <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 8 }}>
-                    Recent Events
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, marginBottom: 8 }}>
+                    {venue.totalEvents > venue.recentEvents.length ? `Latest ${venue.recentEvents.length} of ${venue.totalEvents} events` : 'Events here'}
                   </div>
-                  <div style={{ display: 'grid', gap: 8 }}>
+                  <div style={{ display: 'grid', gap: 6 }}>
                     {venue.recentEvents.map((event) => (
-                      <div
+                      // The whole row opens the event; no small button to aim for or to get clipped.
+                      <button
                         key={event.id}
+                        type="button"
+                        onClick={() => navigate(`/organizer/events/${event.id}`)}
                         style={{
-                          padding: '12px 14px',
-                          borderRadius: 14,
-                          background: '#f8fbff',
+                          width: '100%',
+                          padding: '10px 12px',
+                          borderRadius: 12,
+                          background: '#ffffff',
                           border: '1px solid #e2e8f0',
                           display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 12,
+                          gap: 10,
                           alignItems: 'center',
+                          textAlign: 'left',
+                          cursor: 'pointer',
+                          fontFamily: 'inherit',
+                          minWidth: 0,
                         }}
                       >
-                        <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{event.title}</div>
-                          <div style={{ fontSize: 12, color: '#64748b' }}>{formatSchedule(event)}</div>
-                        </div>
-                        <button
-                          onClick={() => navigate(`/organizer/events/${event.id}`)}
-                          style={{
-                            padding: '8px 12px',
-                            borderRadius: 10,
-                            border: '1px solid #bfdbfe',
-                            background: '#eff6ff',
-                            color: '#1d4ed8',
-                            fontWeight: 700,
-                            fontSize: 12,
-                            cursor: 'pointer',
-                          }}
-                        >
-                          View
-                        </button>
-                      </div>
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#0f172a', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{event.title}</span>
+                          <span style={{ display: 'block', fontSize: 12, color: '#64748b', marginTop: 2, textTransform: 'capitalize' }}>
+                            {formatSchedule(event)} · {String(event.status || 'draft').replace(/[-_]/g, ' ')}
+                          </span>
+                        </span>
+                        <i className="bi bi-chevron-right" style={{ color: '#94a3b8', fontSize: 13, flexShrink: 0 }} />
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -383,24 +392,17 @@ export default function OrganizerVenues() {
   );
 }
 
-const miniPanelStyle = {
-  background: '#f8fbff',
-  border: '1px solid #e2e8f0',
-  borderRadius: 16,
-  padding: 14,
-};
-
 const miniLabelStyle = {
-  fontSize: 11,
+  fontSize: 10,
   color: '#64748b',
   textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  marginBottom: 8,
+  letterSpacing: '0.07em',
+  marginBottom: 4,
   fontWeight: 700,
 };
 
 const miniValueStyle = {
-  fontSize: 24,
   color: '#0f172a',
-  fontWeight: 900,
+  fontWeight: 800,
+  fontVariantNumeric: 'tabular-nums',
 };

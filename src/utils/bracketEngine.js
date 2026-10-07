@@ -34,6 +34,10 @@ export function normalizeEntrants(entrants = []) {
 }
 
 export function buildRounds(matches = [], totalRounds = 0, bracketType = 'single') {
+  if (bracketType === 'group-knockout') {
+    return buildGroupKnockoutRounds(matches);
+  }
+
   if (bracketType === 'round-robin') {
     const map = new Map();
     matches.forEach((match) => {
@@ -441,4 +445,392 @@ export function createHistoryEntry(tournament, label = 'Match update') {
     champion: tournament.champion || null,
     currentRound: tournament.currentRound || 0,
   };
+}
+
+// Every entrant's placement in a bracket, first to last — the one ranking the
+// certificates, reports and bracket page all read from.
+//
+// Single elimination: whoever went further places higher. Entrants knocked
+// out in the same round are ordered by how close their last game was (smaller
+// losing margin first), then overall score difference, then seed.
+// Round robin: the standings table as it is.
+//
+// `final` is false while games are still being played, in which case entrants
+// still alive are listed first (by seed) and the order below them can change.
+export function calculateBracketPlacements(tournament) {
+  if (!tournament) return [];
+  const teams = normalizeEntrants(
+    Array.isArray(tournament.entrantSnapshot) && tournament.entrantSnapshot.length > 0
+      ? tournament.entrantSnapshot
+      : tournament.teams || []
+  );
+  const matches = Array.isArray(tournament.matches) ? tournament.matches : [];
+  const playable = matches.filter((match) => match.status !== 'bye');
+  const final = playable.length > 0 && playable.every((match) => match.status === 'completed');
+
+  if (tournament.bracketType === 'round-robin') {
+    return calculateRoundRobinStandings(matches, teams).map((row, index) => ({
+      id: String(row.teamId),
+      name: row.teamName,
+      seed: row.seed,
+      placement: index + 1,
+      wins: row.wins,
+      losses: row.losses,
+      scoreFor: row.scoreFor,
+      scoreAgainst: row.scoreAgainst,
+      eliminatedRound: null,
+      final,
+    }));
+  }
+
+  if (tournament.bracketType === 'group-knockout') {
+    return calculateGroupKnockoutPlacements(tournament, teams, matches, final);
+  }
+
+  const totalRounds = Number(tournament.totalRounds || 0);
+  const table = new Map(teams.map((team) => [String(team.id), {
+    id: String(team.id),
+    name: team.name,
+    seed: team.seed,
+    wins: 0,
+    losses: 0,
+    scoreFor: 0,
+    scoreAgainst: 0,
+    eliminatedRound: null,
+    lossMargin: 0,
+  }]));
+
+  playable
+    .filter((match) => match.status === 'completed' && match.winner)
+    .forEach((match) => {
+      const score1 = Number(match.score1 || 0);
+      const score2 = Number(match.score2 || 0);
+      [[match.team1, score1, score2], [match.team2, score2, score1]].forEach(([team, scored, conceded]) => {
+        const row = team ? table.get(String(team.id)) : null;
+        if (!row) return;
+        row.scoreFor += scored;
+        row.scoreAgainst += conceded;
+        if (String(match.winner.id) === String(team.id)) {
+          row.wins += 1;
+        } else {
+          row.losses += 1;
+          row.eliminatedRound = Number(match.round || 0);
+          row.lossMargin = conceded - scored;
+        }
+      });
+    });
+
+  // How far each entrant got: the champion past the last round, anyone still
+  // alive just below that, everyone else at the round they went out in.
+  const reach = (row) => {
+    if (row.eliminatedRound !== null) return row.eliminatedRound;
+    return final ? totalRounds + 1 : totalRounds + 0.5;
+  };
+
+  return Array.from(table.values())
+    .sort((left, right) =>
+      reach(right) - reach(left) ||
+      left.lossMargin - right.lossMargin ||
+      (right.scoreFor - right.scoreAgainst) - (left.scoreFor - left.scoreAgainst) ||
+      left.seed - right.seed
+    )
+    .map(({ lossMargin, ...row }, index) => ({ ...row, placement: index + 1, final }));
+}
+
+// ============================================================================
+// Group Stage + Knockout
+//
+// Entrants are split into groups (2 groups, or 4 once there are 12 or more).
+// Everyone plays everyone in their own group; the top two of each group then
+// go into a knockout, first of one group against second of another.
+//
+// Group matches carry stage: 'group' and may end in a draw. Knockout matches
+// carry stage: 'knockout', start with empty slots, and are filled in the
+// moment the last group match is saved.
+// ============================================================================
+
+const GROUP_LABELS = ['A', 'B', 'C', 'D'];
+export const GROUP_KNOCKOUT_MIN_ENTRANTS = 4;
+
+function groupCountFor(entrantCount) {
+  return entrantCount >= 12 ? 4 : 2;
+}
+
+// Group membership is read back from the matches, not kept on the team
+// objects, because entrants are rebuilt (normalizeEntrants) every time a
+// tournament is loaded and would lose any extra field.
+function getGroupMembers(matches, teams) {
+  const groups = new Map();
+  matches.filter((match) => match.stage === 'group').forEach((match) => {
+    if (!groups.has(match.group)) groups.set(match.group, new Map());
+    [match.team1, match.team2].forEach((team) => {
+      if (team) groups.get(match.group).set(String(team.id), team);
+    });
+  });
+  const order = new Map(teams.map((team, index) => [String(team.id), index]));
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, members]) => ({
+      label,
+      teams: Array.from(members.values()).sort((left, right) => (order.get(String(left.id)) ?? 0) - (order.get(String(right.id)) ?? 0)),
+    }));
+}
+
+export function calculateGroupStandings(matches = [], teams = []) {
+  return getGroupMembers(matches, teams).flatMap((group) =>
+    calculateRoundRobinStandings(matches.filter((match) => match.stage === 'group' && match.group === group.label), group.teams)
+      .map((row) => ({ ...row, group: group.label }))
+  );
+}
+
+function buildGroupKnockoutRounds(matches) {
+  const groupRounds = matches.filter((match) => match.stage === 'group').reduce((max, match) => Math.max(max, Number(match.round) || 0), 0);
+  const knockoutRounds = matches.filter((match) => match.stage === 'knockout').reduce((max, match) => Math.max(max, (Number(match.round) || 0) - groupRounds), 0);
+  const rounds = [];
+
+  for (let round = 1; round <= groupRounds; round += 1) {
+    rounds.push({
+      round,
+      label: `Group Stage · Round ${round}`,
+      matches: matches
+        .filter((match) => match.stage === 'group' && Number(match.round) === round)
+        .sort((left, right) => String(left.group).localeCompare(String(right.group)) || left.position - right.position),
+    });
+  }
+  for (let step = 1; step <= knockoutRounds; step += 1) {
+    const fromEnd = knockoutRounds - step;
+    rounds.push({
+      round: groupRounds + step,
+      label: fromEnd === 0 ? 'Finals' : fromEnd === 1 ? 'Semifinals' : fromEnd === 2 ? 'Quarterfinals' : `Knockout Round ${step}`,
+      matches: matches
+        .filter((match) => match.stage === 'knockout' && Number(match.round) === groupRounds + step)
+        .sort((left, right) => left.position - right.position),
+    });
+  }
+  return rounds;
+}
+
+// Puts the group winners and runners-up into the first knockout round once
+// every group match has a result; empties those slots again if one does not.
+function seedKnockoutFromGroups(matches, standings) {
+  const groupMatches = matches.filter((match) => match.stage === 'group');
+  const groupStageDone = groupMatches.length > 0 && groupMatches.every((match) => match.status === 'completed');
+  const firstKnockoutRound = matches
+    .filter((match) => match.stage === 'knockout')
+    .reduce((min, match) => Math.min(min, Number(match.round)), Infinity);
+
+  matches
+    .filter((match) => match.stage === 'knockout' && Number(match.round) === firstKnockoutRound)
+    .forEach((match) => {
+      const pick = (source) => {
+        if (!groupStageDone || !source) return null;
+        const row = standings.find((entry) => entry.group === source.group && entry.rank === source.rank);
+        return row ? { id: row.teamId, name: row.teamName, seed: row.seed } : null;
+      };
+      match.team1 = pick(match.source1);
+      match.team2 = pick(match.source2);
+      match.status = match.team1 && match.team2 ? 'scheduled' : 'pending';
+    });
+}
+
+export function generateGroupKnockoutBracket(entrants = []) {
+  const teams = normalizeEntrants(entrants);
+  if (teams.length < GROUP_KNOCKOUT_MIN_ENTRANTS) {
+    throw new Error(`Group Stage + Knockout needs at least ${GROUP_KNOCKOUT_MIN_ENTRANTS} entrants.`);
+  }
+
+  const groupCount = groupCountFor(teams.length);
+  // Snake order (A B B A A B ...) so the strongest entrants are spread out.
+  const groups = Array.from({ length: groupCount }, () => []);
+  teams.forEach((team, index) => {
+    const lap = Math.floor(index / groupCount);
+    const slot = index % groupCount;
+    groups[lap % 2 === 0 ? slot : groupCount - 1 - slot].push(team);
+  });
+
+  const matches = [];
+  let groupRounds = 0;
+  groups.forEach((members, groupIndex) => {
+    const label = GROUP_LABELS[groupIndex];
+    const roundRobin = generateRoundRobinBracket(members);
+    groupRounds = Math.max(groupRounds, roundRobin.totalRounds);
+    roundRobin.matches.forEach((match) => {
+      matches.push({ ...match, id: `G${label}-R${match.round}-M${match.position + 1}`, bracket: `group-${label}`, stage: 'group', group: label });
+    });
+  });
+
+  // First of one group meets second of the next, with the two halves of the
+  // draw arranged so group winners can only meet again in the final.
+  const pairings = groupCount === 2
+    ? [['A', 'B'], ['B', 'A']]
+    : [['A', 'B'], ['C', 'D'], ['B', 'A'], ['D', 'C']];
+  const knockoutRounds = Math.log2(groupCount * 2);
+  for (let step = 1; step <= knockoutRounds; step += 1) {
+    const count = (groupCount * 2) / (2 ** step);
+    for (let position = 0; position < count; position += 1) {
+      const first = step === 1;
+      matches.push({
+        id: `KO-R${step}-M${position + 1}`,
+        bracket: 'knockout',
+        stage: 'knockout',
+        round: groupRounds + step,
+        position,
+        team1: null,
+        team2: null,
+        source1: first ? { group: pairings[position][0], rank: 1 } : null,
+        source2: first ? { group: pairings[position][1], rank: 2 } : null,
+        placeholder1: first ? `Winner of Group ${pairings[position][0]}` : 'Winner of previous match',
+        placeholder2: first ? `Runner-up of Group ${pairings[position][1]}` : 'Winner of previous match',
+        score1: 0,
+        score2: 0,
+        winner: null,
+        status: 'pending',
+        scheduledDate: null,
+        completedDate: null,
+      });
+    }
+  }
+
+  return {
+    teams,
+    matches,
+    rounds: buildGroupKnockoutRounds(matches),
+    standings: calculateGroupStandings(matches, teams),
+    totalRounds: groupRounds + knockoutRounds,
+    totalSlots: teams.length,
+    byes: 0,
+    currentRound: 1,
+    champion: null,
+  };
+}
+
+export function updateGroupKnockoutMatch(tournament, matchId, updates = {}, options = {}) {
+  const finalize = Boolean(options.finalize);
+  const matches = (tournament.matches || []).map((match) => (match.id === matchId ? { ...match, ...updates } : { ...match }));
+  const current = matches.find((match) => match.id === matchId);
+  if (!current) return tournament;
+  const totalRounds = Number(tournament.totalRounds || 0);
+
+  if (current.stage === 'group') {
+    if (matches.some((match) => match.stage === 'knockout' && match.status === 'completed')) {
+      throw new Error('Group stage results can no longer change once the knockout has started.');
+    }
+    if (finalize) {
+      const score1 = Number(current.score1 || 0);
+      const score2 = Number(current.score2 || 0);
+      current.winner = score1 > score2 ? current.team1 : score2 > score1 ? current.team2 : null;
+      current.status = 'completed';
+      current.completedDate = new Date().toISOString();
+    }
+  } else if (finalize) {
+    if (!current.team1 || !current.team2) {
+      throw new Error('Both slots must be filled before saving this match.');
+    }
+    const score1 = Number(current.score1 || 0);
+    const score2 = Number(current.score2 || 0);
+    if (score1 === score2) {
+      throw new Error('Knockout matches cannot end in a tie.');
+    }
+    current.winner = score1 > score2 ? current.team1 : current.team2;
+    current.status = 'completed';
+    current.completedDate = new Date().toISOString();
+
+    if (Number(current.round) < totalRounds) {
+      const next = matches.find((match) =>
+        match.stage === 'knockout' &&
+        Number(match.round) === Number(current.round) + 1 &&
+        match.position === Math.floor(current.position / 2)
+      );
+      if (next) {
+        next[current.position % 2 === 0 ? 'team1' : 'team2'] = current.winner;
+        if (next.status !== 'completed') next.status = next.team1 && next.team2 ? 'scheduled' : 'pending';
+      }
+    }
+  }
+
+  const standings = calculateGroupStandings(matches, tournament.teams || []);
+  if (current.stage === 'group') seedKnockoutFromGroups(matches, standings);
+
+  const nextTournament = { ...tournament, matches, standings, rounds: buildGroupKnockoutRounds(matches) };
+  return { ...nextTournament, champion: finalize ? calculateChampion(nextTournament) : tournament.champion };
+}
+
+// Placements for Group Stage + Knockout: knockout teams first, by how far they
+// went (same tie-breaks as single elimination); then everyone who did not get
+// out of their group, by group rank, points and score difference.
+function calculateGroupKnockoutPlacements(tournament, teams, matches, final) {
+  const totalRounds = Number(tournament.totalRounds || 0);
+  const groupRow = new Map(calculateGroupStandings(matches, teams).map((row) => [String(row.teamId), row]));
+  const table = new Map(teams.map((team) => [String(team.id), {
+    id: String(team.id), name: team.name, seed: team.seed,
+    wins: 0, losses: 0, scoreFor: 0, scoreAgainst: 0,
+    eliminatedRound: null, lossMargin: 0, inKnockout: false,
+  }]));
+
+  matches.filter((match) => match.status === 'completed').forEach((match) => {
+    const score1 = Number(match.score1 || 0);
+    const score2 = Number(match.score2 || 0);
+    [[match.team1, score1, score2], [match.team2, score2, score1]].forEach(([team, scored, conceded]) => {
+      const row = team ? table.get(String(team.id)) : null;
+      if (!row) return;
+      row.scoreFor += scored;
+      row.scoreAgainst += conceded;
+      if (scored > conceded) row.wins += 1;
+      if (scored < conceded) row.losses += 1;
+      if (match.stage === 'knockout' && match.winner && String(match.winner.id) !== String(team.id)) {
+        row.eliminatedRound = Number(match.round || 0);
+        row.lossMargin = conceded - scored;
+      }
+    });
+  });
+  matches.filter((match) => match.stage === 'knockout').forEach((match) => {
+    [match.team1, match.team2].forEach((team) => {
+      const row = team ? table.get(String(team.id)) : null;
+      if (row) row.inKnockout = true;
+    });
+  });
+
+  const reach = (row) => {
+    if (!row.inKnockout) return 0;
+    if (row.eliminatedRound !== null) return row.eliminatedRound;
+    return final ? totalRounds + 1 : totalRounds + 0.5;
+  };
+  const groupOf = (row) => groupRow.get(row.id) || { rank: 99, points: 0, scoreDifference: 0 };
+
+  return Array.from(table.values())
+    .sort((left, right) =>
+      reach(right) - reach(left) ||
+      left.lossMargin - right.lossMargin ||
+      groupOf(left).rank - groupOf(right).rank ||
+      groupOf(right).points - groupOf(left).points ||
+      groupOf(right).scoreDifference - groupOf(left).scoreDifference ||
+      left.seed - right.seed
+    )
+    .map(({ lossMargin, inKnockout, ...row }, index) => ({
+      ...row,
+      // "Out in round N" only makes sense for a knockout exit.
+      eliminatedRound: inKnockout ? row.eliminatedRound : null,
+      group: groupRow.get(row.id)?.group || null,
+      placement: index + 1,
+      final,
+    }));
+}
+
+// ---- one entry point per action, so callers never branch on the format ----
+export function generateBracketFor(bracketType, entrants = []) {
+  if (bracketType === 'round-robin') return generateRoundRobinBracket(entrants);
+  if (bracketType === 'group-knockout') return generateGroupKnockoutBracket(entrants);
+  return generateSingleEliminationBracket(entrants);
+}
+
+export function updateBracketMatch(tournament, matchId, updates = {}, options = {}) {
+  if (tournament.bracketType === 'round-robin') return updateRoundRobinMatch(tournament, matchId, updates, options);
+  if (tournament.bracketType === 'group-knockout') return updateGroupKnockoutMatch(tournament, matchId, updates, options);
+  return updateSingleEliminationMatch(tournament, matchId, updates, options);
+}
+
+// League-style matches are saved with a button and may be drawn; knockout
+// matches need a winner.
+export function isLeagueMatch(tournament, match) {
+  return tournament?.bracketType === 'round-robin' || match?.stage === 'group';
 }

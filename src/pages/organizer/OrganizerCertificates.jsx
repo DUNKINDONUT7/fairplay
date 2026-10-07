@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+import EventPicker from '../../components/common/EventPicker';
+import useRememberedEvent from '../../hooks/useRememberedEvent';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import DashboardLayout from '../../components/layout/DashboardLayout';
@@ -9,6 +11,8 @@ import useScoreStore from '../../store/scoreStore';
 import useNotificationStore from '../../store/notificationStore';
 import useAuthStore from '../../store/authStore';
 import useAttendanceStore from '../../store/attendanceStore';
+import useTournamentStore from '../../store/tournamentStore';
+import { calculateBracketPlacements } from '../../utils/bracketEngine';
 import { buildAppUrl } from '../../utils/appUrl';
 import btechLogo from '../../../assets/logo/BTECH.jpg';
 
@@ -17,6 +21,16 @@ const TEMPLATE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const TEMPLATE_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
 const CERTIFICATE_EXPORT_WIDTH = 900;
 const CERTIFICATE_EXPORT_HEIGHT = 636;
+
+// What the category badge reads as. The stored keys stay as they are.
+const CATEGORY_LABELS = {
+  champion: 'Champion',
+  second: '2nd Place',
+  third: '3rd Place',
+  participant: 'Participant',
+  judge: 'Judge',
+};
+const categoryLabel = (category) => CATEGORY_LABELS[category] || category;
 
 function categoryFromPlacement(placement) {
   if (placement === 1) return 'champion';
@@ -531,13 +545,15 @@ export default function OrganizerCertificates() {
   const { calculateLeaderboard, fetchScores, getScoresForEvent } = useScoreStore();
   const { success, error } = useNotificationStore();
   const { attendance, fetchAttendance } = useAttendanceStore();
+  const { tournaments, fetchTournaments } = useTournamentStore();
 
-  const [selectedEventId, setSelectedEventId] = useState('');
+  const [selectedEventId, setSelectedEventId] = useRememberedEvent('');
   const [activeTab, setActiveTab] = useState('contestants');
   const [previewCert, setPreviewCert] = useState(null);
   const [judgeNames, setJudgeNames] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExportingAll, setIsExportingAll] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isScanningTemplate, setIsScanningTemplate] = useState(false);
   const hiddenCertRef = useRef(null);
   const [hiddenCertData, setHiddenCertData] = useState(null);
@@ -561,13 +577,51 @@ export default function OrganizerCertificates() {
     fetchAttendance(selectedEventId);
     fetchScores(selectedEventId);
     fetchCertificates(selectedEventId);
-  }, [fetchScores, fetchCertificates, selectedEventId]);
+    fetchTournaments(selectedEventId);
+  }, [fetchScores, fetchCertificates, fetchTournaments, selectedEventId]);
 
   const selectedEvent = events.find((e) => String(e.id) === String(selectedEventId)) || null;
 
   const leaderboard = selectedEvent
     ? calculateLeaderboard(selectedEvent.id, selectedEvent.criteria || [])
     : [];
+
+  // Bracket events have no judge scores, so their recipients are the teams
+  // (or players) on the event roster — one certificate per entry, under the
+  // team's name. Every team gets a placement from its bracket's standings.
+  const isBracketEvent = Boolean(selectedEvent) && leaderboard.length === 0 && (selectedEvent.contestants || []).length > 0;
+  const bracketPlacements = new Map();
+  const bracketPlacementsByName = [];
+  if (isBracketEvent) {
+    tournaments
+      .filter((tournament) => String(tournament.eventId) === String(selectedEvent.id))
+      .forEach((tournament) => {
+        calculateBracketPlacements(tournament)
+          // Placements only mean something once the bracket has been played out.
+          .filter((row) => row.final)
+          .forEach((row) => {
+            bracketPlacements.set(row.id, row.placement);
+            bracketPlacementsByName.push({ name: String(row.name).trim().toLowerCase(), bracket: String(tournament.title || '').toLowerCase(), placement: row.placement });
+          });
+      });
+  }
+  const recipientRows = isBracketEvent
+    ? selectedEvent.contestants
+        .map((contestant) => ({
+          contestantId: String(contestant.id),
+          contestantName: contestant.name,
+          detail: contestant.subEventName || '',
+          averageScore: null,
+          // Bracket entrants can carry a team or registration id rather than
+          // the roster id, so fall back to the name within the same sub-event.
+          rank: bracketPlacements.get(String(contestant.id)) ||
+            bracketPlacementsByName.find((row) => (
+              row.name === String(contestant.name).trim().toLowerCase() &&
+              (!contestant.subEventName || row.bracket.includes(String(contestant.subEventName).toLowerCase()))
+            ))?.placement || null,
+        }))
+        .sort((left, right) => left.detail.localeCompare(right.detail) || (left.rank || 999) - (right.rank || 999))
+    : leaderboard;
 
   const autoJudgeNames = selectedEvent
     ? [...new Set(
@@ -589,13 +643,15 @@ export default function OrganizerCertificates() {
   );
 
   const eligibleLeaderboard = attendanceRequired
-    ? leaderboard.filter((entry) => checkedInIds.has(String(entry.contestantId)))
-    : leaderboard;
-  const excludedForAbsence = attendanceRequired ? leaderboard.length - eligibleLeaderboard.length : 0;
+    ? recipientRows.filter((entry) => checkedInIds.has(String(entry.contestantId)))
+    : recipientRows;
+  const excludedForAbsence = attendanceRequired ? recipientRows.length - eligibleLeaderboard.length : 0;
 
   const participantRecipients = eligibleLeaderboard.map((entry) => ({
     id: entry.contestantId,
-    name: entry.contestantName,
+    // In a sports fest the same team name plays several sports; the sport is
+    // added so each certificate says which one it is for.
+    name: entry.detail ? `${entry.contestantName} (${entry.detail})` : entry.contestantName,
     score: entry.averageScore,
     placement: entry.rank,
   }));
@@ -711,6 +767,27 @@ export default function OrganizerCertificates() {
     });
   };
 
+  // Reloads everything this page is built from — not just scores — and says
+  // so, since on an up-to-date page nothing on screen would otherwise change.
+  const handleRefresh = async () => {
+    if (!selectedEventId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      await Promise.all([
+        user?.id ? fetchEvents(user.id, { silent: true }) : Promise.resolve(),
+        fetchScores(selectedEventId, { silent: true }),
+        fetchCertificates(selectedEventId),
+        fetchAttendance(selectedEventId, { silent: true }),
+        fetchTournaments(selectedEventId, { silent: true }),
+      ]);
+      success('Certificates, scores and attendance are up to date.');
+    } catch {
+      error('Could not refresh. Check your connection and try again.');
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleGenerateAll = async () => {
     if (!selectedEvent) {
       error('Select an event first.');
@@ -764,6 +841,7 @@ export default function OrganizerCertificates() {
     if (placement === 1) return '🏆 1st';
     if (placement === 2) return '🥈 2nd';
     if (placement === 3) return '🥉 3rd';
+    if (!placement) return 'Participant';
     return `#${placement}`;
   };
 
@@ -771,26 +849,18 @@ export default function OrganizerCertificates() {
     <DashboardLayout title="Certificate Generator" subtitle="Generate and download official certificates for your events">
       {/* Event selector */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap', alignItems: 'center' }}>
-        <select
-          value={selectedEventId}
-          onChange={(e) => setSelectedEventId(e.target.value)}
-          style={fieldStyle}
-        >
-          <option value="">Select an event</option>
-          {events.map((e) => (
-            <option key={e.id} value={e.id}>{e.title}</option>
-          ))}
-        </select>
+        <EventPicker events={events} value={selectedEventId} onChange={setSelectedEventId} />
 
         {selectedEvent && (
           <>
             <button
-              onClick={async () => { await fetchScores(selectedEventId); await fetchCertificates(selectedEventId); }}
-              title="Refresh scores from database"
-              style={{ ...secondaryButtonStyle, padding: '10px 14px' }}
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              title="Reload scores, attendance and certificates from the database"
+              style={{ ...secondaryButtonStyle, padding: '10px 14px', opacity: isRefreshing ? 0.7 : 1, cursor: isRefreshing ? 'wait' : 'pointer' }}
             >
-              <i className="bi bi-arrow-clockwise" style={{ marginRight: 6 }} />
-              Refresh
+              <i className={isRefreshing ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-arrow-clockwise'} style={{ marginRight: 6 }} />
+              {isRefreshing ? 'Refreshing…' : 'Refresh'}
             </button>
             <button
               onClick={handleGenerateAll}
@@ -833,9 +903,9 @@ export default function OrganizerCertificates() {
             />
             <SummaryCard
               icon="bi bi-people"
-              label="Ranked recipients"
+              label={isBracketEvent ? 'Team recipients' : 'Ranked recipients'}
               value={participantRecipients.length}
-              helper="contestants from scores"
+              helper={isBracketEvent ? 'teams from the event roster' : 'contestants from scores'}
             />
             <SummaryCard
               icon="bi bi-person-badge"
@@ -1033,7 +1103,7 @@ export default function OrganizerCertificates() {
 
           {/* Tabs */}
           <div style={{ display: 'flex', gap: 2, marginBottom: 16, borderBottom: '2px solid #e5efff' }}>
-            {[['contestants', 'Contestants'], ['judges', 'Judges / Officials'], ['generated', `Generated (${eventCertificates.length})`]].map(
+            {[['contestants', isBracketEvent ? 'Teams' : 'Contestants'], ['judges', 'Judges / Officials'], ['generated', `Generated (${eventCertificates.length})`]].map(
               ([key, label]) => (
                 <button
                   key={key}
@@ -1059,41 +1129,48 @@ export default function OrganizerCertificates() {
           {/* Contestants tab */}
           {activeTab === 'contestants' && (
             <div style={panelStyle}>
-              {leaderboard.length === 0 ? (
-                <p style={{ color: '#94a3b8', fontSize: 14 }}>No scores found for this event yet. Score data is needed to generate contestant certificates.</p>
+              {recipientRows.length === 0 ? (
+                <p style={{ color: '#94a3b8', fontSize: 14 }}>No recipients yet. Judged events need submitted scores; bracket events need teams on the roster.</p>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid #e5efff' }}>
-                      {['Rank', 'Name', 'Score', 'Category', 'Actions'].map((h) => (
+                      {(isBracketEvent ? ['Placement', 'Team', 'Category', 'Actions'] : ['Rank', 'Name', 'Score', 'Category', 'Actions']).map((h) => (
                         <th key={h} style={thStyle}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {leaderboard.map((entry) => {
+                    {recipientRows.map((entry) => {
                       const cert = eventCertificates.find(
                         (c) => String(c.recipientId) === String(entry.contestantId) && !JUDGE_CATEGORIES.includes(c.category)
                       );
                       return (
                         <tr key={entry.contestantId} style={{ borderBottom: '1px solid #f1f5f9' }}>
                           <td style={tdStyle}>
-                            <span style={{
-                              padding: '3px 10px',
-                              borderRadius: 999,
-                              fontSize: 12,
-                              fontWeight: 700,
-                              background: entry.rank <= 3 ? '#fef3c7' : '#eff6ff',
-                              color: entry.rank <= 3 ? '#92400e' : '#1d4ed8',
-                            }}>
-                              {placementLabel(entry.rank, null)}
-                            </span>
+                            {entry.rank ? (
+                              <span style={{
+                                padding: '3px 10px',
+                                borderRadius: 999,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                background: entry.rank <= 3 ? '#fef3c7' : '#eff6ff',
+                                color: entry.rank <= 3 ? '#92400e' : '#1d4ed8',
+                              }}>
+                                {placementLabel(entry.rank, null)}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8', fontSize: 12 }} title="Placements appear once every match in the bracket has been played">Pending</span>
+                            )}
                           </td>
-                          <td style={{ ...tdStyle, fontWeight: 600, color: '#0f172a' }}>{entry.contestantName}</td>
-                          <td style={tdStyle}>{entry.averageScore}</td>
+                          <td style={{ ...tdStyle, fontWeight: 600, color: '#0f172a' }}>
+                            {entry.contestantName}
+                            {entry.detail && <div style={{ fontSize: 12, fontWeight: 400, color: '#64748b' }}>{entry.detail}</div>}
+                          </td>
+                          {!isBracketEvent && <td style={tdStyle}>{entry.averageScore}</td>}
                           <td style={tdStyle}>
                             <span style={badgeStyle(categoryFromPlacement(entry.rank))}>
-                              {categoryFromPlacement(entry.rank)}
+                              {categoryLabel(categoryFromPlacement(entry.rank))}
                             </span>
                           </td>
                           <td style={tdStyle}>
@@ -1109,7 +1186,7 @@ export default function OrganizerCertificates() {
                               <button
                                 onClick={() => handlePreviewTemplate({
                                   id: entry.contestantId,
-                                  name: entry.contestantName,
+                                  name: entry.detail ? `${entry.contestantName} (${entry.detail})` : entry.contestantName,
                                   score: entry.averageScore,
                                   placement: entry.rank,
                                 })}
@@ -1229,7 +1306,7 @@ export default function OrganizerCertificates() {
                         <td style={{ ...tdStyle, fontWeight: 600, color: '#0f172a' }}>{cert.recipientName}</td>
                         <td style={tdStyle}>
                           <span style={badgeStyle(cert.category === 'judge' ? 'judge' : categoryFromPlacement(cert.placement))}>
-                            {cert.category === 'judge' ? 'judge' : categoryFromPlacement(cert.placement)}
+                            {categoryLabel(cert.category === 'judge' ? 'judge' : categoryFromPlacement(cert.placement))}
                           </span>
                         </td>
                         <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: 12 }}>{cert.verificationCode}</td>

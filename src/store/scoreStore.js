@@ -5,6 +5,7 @@ import { bindDataCacheReset } from '../utils/dataCache';
 import useEventStore from './eventStore';
 import useNotificationStore from './notificationStore';
 import useAudienceScoreStore from './audienceScoreStore';
+import { getCurrentRoundKey, isCurrentRoundScore } from '../utils/rounds';
 
 function scoreKey(eventId, judgeId, contestantId) {
   return `${eventId}_${judgeId}_${contestantId}`;
@@ -38,7 +39,17 @@ function normalizeScore(score) {
     timestamp: score.timestamp || score.updated_at || score.created_at || new Date().toISOString(),
     locked: Boolean(score.locked),
     lockedAt: score.lockedAt || score.locked_at || null,
+    // Which round of a multi-round contest this score was given in.
+    roundName: score.roundName || score.round_name || '',
   };
+}
+
+// The event roster is the authority on a contestant's name. Score rows carry
+// a copy, but older rows were saved without one and fall back to
+// "Contestant <id>".
+function resolveContestantName(event, contestantId, fallback) {
+  const contestant = (event?.contestants || []).find((entry) => String(entry.id) === String(contestantId));
+  return contestant?.name || fallback || `Contestant ${contestantId}`;
 }
 
 function findScoreEvent(eventId) {
@@ -124,7 +135,9 @@ const useScoreStore = create(
 
       submitScore: async (eventId, judgeId, contestantId, criteriaScores, metadata = {}) => {
         const key = scoreKey(eventId, judgeId, contestantId);
+        const roundName = getCurrentRoundKey(findScoreEvent(eventId));
         const nextScore = normalizeScore({
+          roundName,
           id: key,
           eventId,
           judgeId,
@@ -162,6 +175,7 @@ const useScoreStore = create(
             judge_name: nextScore.judgeName,
             criteria_scores: nextScore.criteriaScores,
             remarks: nextScore.remarks || '',
+            round_name: nextScore.roundName || null,
             // locked intentionally omitted — resubmitting must never reset an
             // existing lock, and the DB trigger rejects the write outright if
             // the row is already locked anyway.
@@ -189,11 +203,17 @@ const useScoreStore = create(
 
       updateScore: async (eventId, judgeId, contestantId, criteriaScores, metadata = {}) => {
         const key = scoreKey(eventId, judgeId, contestantId);
-        const existing = get().scores[key];
-        if (existing?.locked) return false;
+        const stored = get().scores[key];
+        if (stored?.locked) return false;
+        // A score left over from an earlier round is replaced, not edited:
+        // its remarks and comments don't carry into the new round.
+        const scoreEvent = findScoreEvent(eventId);
+        const existing = stored && isCurrentRoundScore(stored, scoreEvent) ? stored : null;
 
         const nextScore = normalizeScore({
           ...existing,
+          id: stored?.id,
+          roundName: getCurrentRoundKey(scoreEvent),
           eventId,
           judgeId,
           contestantId,
@@ -231,6 +251,7 @@ const useScoreStore = create(
             judge_name: nextScore.judgeName,
             criteria_scores: nextScore.criteriaScores,
             remarks: nextScore.remarks || '',
+            round_name: nextScore.roundName || null,
             locked: nextScore.locked || false,
             updated_at: nextScore.timestamp,
           };
@@ -279,18 +300,28 @@ const useScoreStore = create(
         return nextScore;
       },
 
+      // The current round's scores — what judges are working on and what the
+      // leaderboard ranks. For a single-round event that is simply all of them.
       getScoresForEvent: (eventId) => {
+        const event = findScoreEvent(eventId);
+        return get().getAllScoresForEvent(eventId).filter((score) => isCurrentRoundScore(score, event));
+      },
+
+      // Every score row for the event, whichever round it is from.
+      getAllScoresForEvent: (eventId) => {
         const allScores = get().scores;
         return Object.values(allScores).filter((score) => String(score.eventId) === String(eventId));
       },
 
       getLiveFeed: (eventId, criteria = []) => {
+        const event = findScoreEvent(eventId);
         return get()
           .getScoresForEvent(eventId)
           .map((entry) => {
             const { totalScore } = get().calculateWeightedTotal(criteria, entry.criteriaScores || {});
             return {
               ...entry,
+              contestantName: resolveContestantName(event, entry.contestantId, entry.contestantName),
               totalScore,
             };
           })
@@ -298,10 +329,7 @@ const useScoreStore = create(
       },
 
       getScoresByJudge: (eventId, judgeId) => {
-        const allScores = get().scores;
-        return Object.values(allScores).filter(
-          (score) => String(score.eventId) === String(eventId) && String(score.judgeId) === String(judgeId)
-        );
+        return get().getScoresForEvent(eventId).filter((score) => String(score.judgeId) === String(judgeId));
       },
 
       calculateWeightedTotal: (criteria, scores) => {
@@ -331,7 +359,7 @@ const useScoreStore = create(
               total: 0,
               count: 0,
               scores: [],
-              contestantName: score.contestantName || `Contestant ${score.contestantId}`,
+              contestantName: resolveContestantName(event, score.contestantId, score.contestantName),
             };
           }
           const result = get().calculateWeightedTotal(criteria, score.criteriaScores);
@@ -340,24 +368,40 @@ const useScoreStore = create(
           contestantScores[score.contestantId].scores.push(result);
         });
 
+        const cutEarlier = new Set(
+          (Array.isArray(event?.roundResults) ? event.roundResults : [])
+            .flatMap((round) => (round.standings || []).filter((row) => !row.advanced).map((row) => String(row.contestantId)))
+        );
         Object.entries(audienceSummary.byContestant || {}).forEach(([id, audience]) => {
+          if (cutEarlier.has(String(id))) return;
           if (!contestantScores[id]) {
             contestantScores[id] = {
               total: 0,
               count: 0,
               scores: [],
-              contestantName: audience.contestantName || `Contestant ${id}`,
+              contestantName: resolveContestantName(event, id, audience.contestantName),
             };
           }
         });
 
-        return Object.entries(contestantScores)
+        const rubricWeight = (criteria || []).reduce((sum, criterion) => sum + (criterion.weight || 0), 0) || 100;
+        const rubricMax = (criteria || []).reduce((sum, criterion) => {
+          const numbers = String(criterion.scoringRange || '1-10').match(/d+(.d+)?/g) || [];
+          return sum + ((Number(numbers[numbers.length - 1]) || 10) * (criterion.weight || 0)) / rubricWeight;
+        }, 0) || 10;
+        const audienceScale = rubricMax / 10;
+
+        const ranked = Object.entries(contestantScores)
           .map(([id, data]) => {
             const judgeAverage = data.count > 0 ? Math.round((data.total / data.count) * 100) / 100 : 0;
             const audience = audienceSummary.byContestant?.[id] || null;
             const audienceAverage = audience?.averageScore || 0;
+            // Audience votes are always 1-10. On a longer scale (say 100
+            // points) they are stretched to that scale first, or their share
+            // of the final score would be ten times too small. On the default
+            // 10-point scale this changes nothing.
             const finalScore = audienceEnabled
-              ? Math.round(((judgeAverage * judgeWeight) + (audienceAverage * audienceWeight)) * 100) / 10000
+              ? Math.round(((judgeAverage * judgeWeight) + (audienceAverage * audienceScale * audienceWeight)) * 100) / 10000
               : judgeAverage;
 
             return {
@@ -374,10 +418,39 @@ const useScoreStore = create(
           })
           .sort((left, right) => right.averageScore - left.averageScore)
           .map((item, index) => ({ ...item, rank: index + 1 }));
+
+        // Multi-round contests: whoever was cut in an earlier round still has a
+        // place in the final order — below everyone who went further, in the
+        // order they finished the round they went out in.
+        const placed = new Set(ranked.map((item) => String(item.contestantId)));
+        const roundResults = Array.isArray(event?.roundResults) ? event.roundResults : [];
+        [...roundResults].reverse().forEach((round) => {
+          (round.standings || [])
+            .filter((row) => !row.advanced && !placed.has(String(row.contestantId)))
+            .sort((left, right) => right.score - left.score)
+            .forEach((row) => {
+              placed.add(String(row.contestantId));
+              ranked.push({
+                contestantId: String(row.contestantId),
+                contestantName: resolveContestantName(event, row.contestantId, row.name),
+                averageScore: row.score,
+                judgeAverage: row.score,
+                audienceAverage: 0,
+                audienceSubmissions: 0,
+                audienceWeight,
+                judgeWeight,
+                totalScores: row.submissions || 0,
+                eliminatedIn: round.name,
+                rank: ranked.length + 1,
+              });
+            });
+        });
+
+        return ranked;
       },
 
       finalizeEventScores: async (eventId) => {
-        const scoresForEvent = get().getScoresForEvent(eventId);
+        const scoresForEvent = get().getAllScoresForEvent(eventId);
         if (scoresForEvent.length === 0) return 0;
 
         const lockedAt = new Date().toISOString();
@@ -413,7 +486,10 @@ const useScoreStore = create(
 
       getScoreByKey: (eventId, judgeId, contestantId) => {
         const key = scoreKey(eventId, judgeId, contestantId);
-        return get().scores[key] || null;
+        const score = get().scores[key] || null;
+        // A score from an earlier round is not "this judge's score" any more:
+        // the judge starts the new round with a blank sheet.
+        return score && isCurrentRoundScore(score, findScoreEvent(eventId)) ? score : null;
       },
     }),
     {

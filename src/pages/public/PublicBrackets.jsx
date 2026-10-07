@@ -5,6 +5,7 @@ import useEventStore from '../../store/eventStore';
 import useTournamentStore from '../../store/tournamentStore';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
 import PublicEventNav from '../../components/public/PublicEventNav';
+import { describeBracketSchedule, isBracketPublic } from '../../utils/bracketRules';
 
 export default function PublicBrackets() {
   const { id } = useParams();
@@ -37,7 +38,11 @@ export default function PublicBrackets() {
 
   const event = events.find((entry) => String(entry.id) === String(id)) || null;
   const tournament = tournaments.find((entry) => String(entry.eventId) === String(id)) || null;
-  const canViewBracket = tournament && (tournament.isPublished || tournament.liveStatus === 'completed');
+  // Shown whenever the event itself is public; there is no separate publish step.
+  const canViewBracket = tournament && (tournament.matches || []).length > 0 && isBracketPublic(event);
+
+  const schedule = describeBracketSchedule(event, tournament);
+  const scheduleLine = [schedule.dates, schedule.times, schedule.venue].filter(Boolean).join('  ·  ');
 
   return (
     <div style={styles.page}>
@@ -59,6 +64,12 @@ export default function PublicBrackets() {
             <p style={styles.subtitle}>
               Live bracket progression for spectators, judges, and teams.
             </p>
+            {scheduleLine && (
+              <p style={{ ...styles.subtitle, marginTop: 6, fontWeight: 700 }}>
+                <i className="bi bi-calendar-event" style={{ marginRight: 8 }} />
+                {scheduleLine}
+              </p>
+            )}
           </div>
 
           {canViewBracket ? (

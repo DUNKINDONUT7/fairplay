@@ -1,3 +1,4 @@
+import EventPicker from '../../components/common/EventPicker';
 import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
@@ -57,6 +58,8 @@ export default function OrganizerContestants() {
   const [selectedPerson, setSelectedPerson] = useState(null);
   const [teamToReject, setTeamToReject] = useState(null);
   const [savingTeamId, setSavingTeamId] = useState('');
+  const [confirmApproveAll, setConfirmApproveAll] = useState(false);
+  const [approvingAll, setApprovingAll] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -139,6 +142,40 @@ export default function OrganizerContestants() {
 
   const filtersActive = Boolean(term || eventFilter || statusFilter);
 
+  // "Approve all" covers the teams still waiting in the current view (so the
+  // search and event filter narrow it down). A team whose roster is outside
+  // the event's size limit is left for a one-by-one decision.
+  const isRosterComplete = (team) => {
+    const event = eventsById.get(String(team.eventId));
+    const rosterSize = (team.players?.length ? team.players : team.members || []).length;
+    const min = Number(team.minParticipants || event?.minParticipants || 0);
+    const max = Number(team.maxParticipants || event?.maxTeamMembers || event?.maxParticipants || 0);
+    return (!min || rosterSize >= min) && (!max || rosterSize <= max);
+  };
+  const waitingTeams = filteredTeams.filter((team) => statusKey(team.status) === 'pending');
+  const readyTeams = waitingTeams.filter(isRosterComplete);
+  const heldTeams = waitingTeams.length - readyTeams.length;
+
+  async function approveAllTeams() {
+    setConfirmApproveAll(false);
+    setApprovingAll(true);
+    let approved = 0;
+    const failed = [];
+    for (const team of readyTeams) {
+      useTeamStore.setState({ error: null });
+      try {
+        const updated = await updateTeam(team.id, { status: 'Approved' });
+        if (!updated || useTeamStore.getState().error) throw new Error('Update failed');
+        approved += 1;
+      } catch {
+        failed.push(team.name);
+      }
+    }
+    setApprovingAll(false);
+    if (approved) success(`${approved} team${approved === 1 ? '' : 's'} approved.`);
+    if (failed.length) notifyError(`Could not approve ${failed.join(', ')}. Please try again.`);
+  }
+
   return (
     <DashboardLayout title="Participant Management" subtitle="Review registrations, approve teams, and see who joined your events">
       <ConfirmDialog
@@ -148,6 +185,16 @@ export default function OrganizerContestants() {
         confirmLabel="Reject team"
         onCancel={() => setTeamToReject(null)}
         onConfirm={() => setTeamStatus(teamToReject, 'Rejected')}
+      />
+
+      <ConfirmDialog
+        open={confirmApproveAll}
+        danger={false}
+        title={`Approve ${readyTeams.length} team${readyTeams.length === 1 ? '' : 's'}?`}
+        message={`${filtersActive ? 'Every waiting team in the current search and filters' : 'Every waiting team'} with a complete roster will be approved.${heldTeams ? ` ${heldTeams} with an incomplete roster will stay waiting for you to review.` : ''} You can still reject a team afterwards.`}
+        confirmLabel="Approve all"
+        onCancel={() => setConfirmApproveAll(false)}
+        onConfirm={approveAllTeams}
       />
 
       <div style={{ display: 'grid', gap: 20 }}>
@@ -195,10 +242,14 @@ export default function OrganizerContestants() {
                   style={{ ...fieldStyle, paddingLeft: 34 }}
                 />
               </div>
-              <select value={eventFilter} onChange={(event) => setEventFilter(event.target.value)} aria-label="Filter by event" style={{ ...fieldStyle, flex: '0 1 220px' }}>
-                <option value="">All events</option>
-                {activeEvents.map((event) => <option key={event.id} value={event.id}>{event.title}</option>)}
-              </select>
+              <EventPicker
+                events={activeEvents}
+                value={eventFilter}
+                onChange={setEventFilter}
+                allLabel="All events"
+                ariaLabel="Filter by event"
+                style={{ flex: '0 1 260px', width: 'auto' }}
+              />
               <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} aria-label="Filter by status" style={{ ...fieldStyle, flex: '0 1 170px' }}>
                 <option value="">All statuses</option>
                 {statusOptions.map((status) => <option key={status} value={status}>{titleCase(status)}</option>)}
@@ -210,6 +261,28 @@ export default function OrganizerContestants() {
               )}
             </div>
           </div>
+
+          {activeTab === 'teams' && waitingTeams.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, padding: '12px 20px', background: '#fffbeb', borderBottom: '1px solid #fde68a' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <i className="bi bi-hourglass-split" style={{ color: '#b45309' }} />
+                <div style={{ fontSize: 13, color: '#78350f' }}>
+                  <strong>{waitingTeams.length} team{waitingTeams.length === 1 ? '' : 's'} waiting for approval</strong>
+                  {filtersActive ? ' in this view' : ''}
+                  {heldTeams > 0 && <span> · {heldTeams} with an incomplete roster {heldTeams === 1 ? 'needs' : 'need'} a one-by-one review</span>}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmApproveAll(true)}
+                disabled={approvingAll || readyTeams.length === 0}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 16px', borderRadius: 10, border: 'none', background: '#15803d', color: '#ffffff', fontWeight: 700, fontSize: 13, cursor: approvingAll || readyTeams.length === 0 ? 'not-allowed' : 'pointer', opacity: approvingAll || readyTeams.length === 0 ? 0.6 : 1, whiteSpace: 'nowrap' }}
+              >
+                <i className={approvingAll ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-check2-all'} />
+                {approvingAll ? 'Approving…' : `Approve all (${readyTeams.length})`}
+              </button>
+            </div>
+          )}
 
           {/* Table */}
           <div style={{ overflowX: 'auto' }}>
@@ -232,7 +305,7 @@ export default function OrganizerContestants() {
                     const max = Number(team.maxParticipants || event?.maxTeamMembers || event?.maxParticipants || 0);
                     const complete = (!min || rosterSize >= min) && (!max || rosterSize <= max);
                     const key = statusKey(team.status);
-                    const saving = savingTeamId === String(team.id);
+                    const saving = approvingAll || savingTeamId === String(team.id);
                     return (
                       <tr key={team.id} style={rowStyle}>
                         <td style={tdStyle}>

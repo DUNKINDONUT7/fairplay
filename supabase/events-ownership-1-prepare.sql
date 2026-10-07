@@ -85,12 +85,13 @@ set search_path = public
 as $$
 declare
   v_contestants jsonb;
+  v_max integer;
 begin
   if p_contestant is null or jsonb_typeof(p_contestant) <> 'object' or coalesce(p_contestant->>'id', '') = '' then
     raise exception 'A contestant with an id is required.';
   end if;
 
-  select coalesce(contestants, '[]'::jsonb) into v_contestants
+  select coalesce(contestants, '[]'::jsonb), coalesce(max_participants, 0) into v_contestants, v_max
   from public.events
   where id = p_event_id
   for update;
@@ -102,6 +103,14 @@ begin
   if not exists (
     select 1 from jsonb_array_elements(v_contestants) c where c->>'id' = p_contestant->>'id'
   ) then
+    -- Enforce the event's maximum here, under the row lock, so two people
+    -- registering at the same moment can't both take the last slot.
+    if v_max > 0 and (
+      select count(*) from jsonb_array_elements(v_contestants) c
+      where coalesce(c->>'name', '') <> '' and c->>'id' !~ '^.+-contestant-[0-9]+$'
+    ) >= v_max then
+      raise exception 'This event is full. It has reached its maximum of % participants.', v_max;
+    end if;
     v_contestants := v_contestants || jsonb_build_array(p_contestant);
     update public.events
     set contestants = v_contestants,

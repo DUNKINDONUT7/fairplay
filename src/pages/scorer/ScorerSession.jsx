@@ -4,6 +4,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import useEventStore from '../../store/eventStore';
 import useTournamentStore from '../../store/tournamentStore';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
+import { BRACKET_FORMAT_LABELS } from '../../utils/bracketRules';
 
 function statusBadge(status) {
   const map = {
@@ -55,7 +56,12 @@ export default function ScorerSession() {
         return;
       }
 
-      await ensureEventTournamentAutomation(matchedEvent, matchedEvent.contestants || []);
+      // Use the organizer's bracket as it is; only build one if none exists yet.
+      try {
+        await ensureEventTournamentAutomation(matchedEvent, matchedEvent.contestants || [], { preserveExisting: true });
+      } catch (automationError) {
+        console.warn('Bracket setup skipped:', automationError?.message || automationError);
+      }
       await fetchTournaments();
       setEvent(matchedEvent);
       setAssignment(matchedAssignment);
@@ -99,7 +105,7 @@ export default function ScorerSession() {
       [matchId]: { ...(prev[matchId] || {}), [field]: value },
     }));
     if (currentTournament) {
-      updateMatchDraft(currentTournament.id, matchId, field, value);
+      updateMatchDraft(currentTournament.id, matchId, field, value).catch(() => {});
     }
   }
 
@@ -197,7 +203,7 @@ export default function ScorerSession() {
           )}
           <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: '10px 16px', fontSize: 13, color: '#475569' }}>
             <span style={{ fontWeight: 700 }}>
-              {currentTournament.bracketType === 'round-robin' ? 'Round Robin' : 'Single Elimination'}
+              {BRACKET_FORMAT_LABELS[currentTournament.bracketType] || 'Single elimination'}
             </span>
             {' · '}Round {currentTournament.currentRound || 1} of {currentTournament.totalRounds || '?'}
           </div>

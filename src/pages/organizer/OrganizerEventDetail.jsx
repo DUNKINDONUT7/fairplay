@@ -11,6 +11,11 @@ import useNotificationStore from '../../store/notificationStore';
 import { buildAppUrl } from '../../utils/appUrl';
 import { inferTeamLimitConfig, getParticipantLimitMessage, TEAM_EVENT_CATEGORIES } from '../../utils/teamEventRules';
 import { shuffleArray } from '../../utils/helpers';
+import { getEventCapacity, getEventFullMessage } from '../../utils/systemSelectors';
+import Breadcrumbs from '../../components/common/Breadcrumbs';
+import useEventReport from '../../hooks/useEventReport';
+import { formatScore } from '../../utils/eventReport';
+import { EMAIL_PATTERN, sendParticipantAddedEmail } from '../../services/participantEmailService';
 
 const TOURNAMENT_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -111,6 +116,8 @@ function AddContestantModal({ event, onAdd, onClose }) {
   const [name, setName] = useState('');
   const [type, setType] = useState(defaultType);
   const [members, setMembers] = useState(['', '']);
+  const [email, setEmail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -121,7 +128,9 @@ function AddContestantModal({ event, onAdd, onClose }) {
   const cleanMembers = members.map((m) => m.trim()).filter(Boolean);
   const outOfRange = type === 'team' && (cleanMembers.length < teamConfig.min || cleanMembers.length > teamConfig.max);
   const memberCountError = outOfRange ? getParticipantLimitMessage(teamConfig) : '';
-  const canSubmit = name.trim() && (type === 'individual' || (cleanMembers.length > 0 && !memberCountError));
+  const cleanEmail = email.trim().toLowerCase();
+  const emailValid = EMAIL_PATTERN.test(cleanEmail);
+  const canSubmit = !submitting && name.trim() && emailValid && (type === 'individual' || (cleanMembers.length > 0 && !memberCountError));
 
   function updateMember(index, value) {
     setMembers((current) => current.map((m, i) => (i === index ? value : m)));
@@ -135,9 +144,14 @@ function AddContestantModal({ event, onAdd, onClose }) {
     setMembers((current) => current.filter((_, i) => i !== index));
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     if (!canSubmit) return;
-    onAdd(name.trim(), type, type === 'team' ? cleanMembers.map((memberName) => ({ name: memberName })) : []);
+    setSubmitting(true);
+    try {
+      await onAdd(name.trim(), type, type === 'team' ? cleanMembers.map((memberName) => ({ name: memberName })) : [], cleanEmail);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -167,10 +181,29 @@ function AddContestantModal({ event, onAdd, onClose }) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && type === 'individual') handleSubmit(); }}
           placeholder={type === 'individual' ? 'Juan dela Cruz' : 'Team Alpha'}
-          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1', fontSize: 14, color: '#0f172a', outline: 'none', boxSizing: 'border-box', marginBottom: type === 'team' ? 16 : 20 }}
+          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: '1.5px solid #cbd5e1', fontSize: 14, color: '#0f172a', outline: 'none', boxSizing: 'border-box', marginBottom: 16 }}
         />
+
+        <label htmlFor="add-participant-email" style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 8 }}>
+          {type === 'individual' ? 'Email' : 'Team Contact Email'}
+        </label>
+        <input
+          id="add-participant-email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && type === 'individual') handleSubmit(); }}
+          placeholder={type === 'individual' ? 'juan@email.com' : 'captain@email.com'}
+          style={{ width: '100%', padding: '12px 14px', borderRadius: 12, border: `1.5px solid ${email.trim() && !emailValid ? '#fca5a5' : '#cbd5e1'}`, fontSize: 14, color: '#0f172a', outline: 'none', boxSizing: 'border-box', marginBottom: 6 }}
+        />
+        <div style={{ fontSize: 12, color: email.trim() && !emailValid ? '#dc2626' : '#64748b', lineHeight: 1.5, marginBottom: type === 'team' ? 16 : 20 }}>
+          {email.trim() && !emailValid
+            ? 'Enter a valid email address.'
+            : type === 'individual'
+              ? 'An email will be sent to this address to let them know they have been added.'
+              : 'One email will be sent to this address to let the team know they have been added.'}
+        </div>
 
         {type === 'team' && (
           <>
@@ -211,10 +244,75 @@ function AddContestantModal({ event, onAdd, onClose }) {
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: '11px', borderRadius: 12, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#64748b', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={handleSubmit} disabled={!canSubmit} style={{ flex: 1, padding: '11px', borderRadius: 12, border: 'none', background: canSubmit ? 'linear-gradient(135deg,#2563eb,#0ea5e9)' : '#e2e8f0', color: canSubmit ? '#fff' : '#94a3b8', fontWeight: 800, fontSize: 14, cursor: canSubmit ? 'pointer' : 'not-allowed' }}>Add</button>
+          <button onClick={handleSubmit} disabled={!canSubmit} style={{ flex: 1, padding: '11px', borderRadius: 12, border: 'none', background: canSubmit ? 'linear-gradient(135deg,#2563eb,#0ea5e9)' : '#e2e8f0', color: canSubmit ? '#fff' : '#94a3b8', fontWeight: 800, fontSize: 14, cursor: canSubmit ? 'pointer' : 'not-allowed' }}>{submitting ? 'Adding…' : 'Add & Send Email'}</button>
         </div>
       </div>
     </div>
+  );
+}
+
+// The outcome of a finished event, ahead of everything about running it.
+function EventResultsPanel({ report, onRanking, onReport }) {
+  const brackets = report.tournament.brackets;
+  const perSport = brackets.length > 1;
+  const podium = perSport
+    ? brackets.filter((bracket) => bracket.champion).map((bracket) => ({
+        key: bracket.id,
+        label: bracket.title.replace(`${report.info.title} - `, ''),
+        name: bracket.champion,
+        value: '',
+      }))
+    : [...report.ranked].sort((left, right) => left.rank - right.rank).slice(0, 3).map((participant) => ({
+        key: participant.id,
+        label: participant.rank === 1 ? 'Champion' : participant.placement,
+        name: participant.name,
+        value: report.isJudged ? formatScore(participant.final) : participant.record,
+      }));
+
+  return (
+    <section aria-label="Final results" style={{ ...card, borderTop: '4px solid #10b981' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div>
+          <div style={{ ...eyebrow, color: '#047857' }}><i className="bi bi-patch-check-fill" style={{ marginRight: 6 }} />Event completed</div>
+          <h2 style={{ ...panelTitle, marginBottom: 4 }}>Final Results</h2>
+          <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>
+            {report.isJudged
+              ? `${report.ranked.length} of ${report.stats.totalParticipants} participants ranked · ${report.stats.completedEvaluations} scores from ${report.stats.totalJudges} judge${report.stats.totalJudges === 1 ? '' : 's'}`
+              : `${report.tournament.completedMatches} of ${report.tournament.totalMatches} matches played${perSport ? ` across ${brackets.length} sports` : ''}`}
+          </p>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={onReport} style={secondaryBtn}><i className="bi bi-file-earmark-text" /> View Results</button>
+          <button onClick={onRanking} style={{ ...secondaryBtn, background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', color: '#ffffff', border: 'none' }}>
+            <i className="bi bi-trophy" /> View Ranking
+          </button>
+        </div>
+      </div>
+
+      {podium.length === 0 ? (
+        <p style={{ color: '#94a3b8', fontSize: 14, margin: 0 }}>This event was completed without any scores or match results.</p>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+          {podium.map((entry, index) => {
+            const lead = index === 0 || perSport;
+            return (
+              <div key={entry.key} style={{ padding: 16, borderRadius: 14, background: lead ? '#eff6ff' : '#f8fafc', border: `1px solid ${lead ? '#bfdbfe' : '#e2e8f0'}`, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 800, color: lead ? '#1d4ed8' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  <i className={lead ? 'bi bi-trophy-fill' : 'bi bi-award'} style={{ color: lead ? '#f59e0b' : '#94a3b8' }} />
+                  {perSport ? `${entry.label} champion` : entry.label}
+                </div>
+                <div style={{ fontSize: 17, fontWeight: 800, color: '#0f172a', margin: '8px 0 2px', overflowWrap: 'anywhere' }}>{entry.name}</div>
+                {entry.value && (
+                  <div style={{ fontSize: 13, color: '#475569' }}>
+                    {report.isJudged ? 'Score ' : 'Win–loss '}<strong style={{ color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{entry.value}</strong>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -287,6 +385,8 @@ export default function OrganizerEventDetail() {
   const [confirmingEndSession, setConfirmingEndSession] = useState(false);
   const [confirmingRevokeInvite, setConfirmingRevokeInvite] = useState(null);
   const [revokingInviteId, setRevokingInviteId] = useState(null);
+  // Results, ranking and score counts — the same report the Ranking page shows.
+  const { report } = useEventReport(id);
   const [confirmingDeleteInvite, setConfirmingDeleteInvite] = useState(null);
   const [deletingInviteId, setDeletingInviteId] = useState(null);
   const [inviteSearch, setInviteSearch] = useState('');
@@ -305,17 +405,37 @@ export default function OrganizerEventDetail() {
 
   const event = getEventById(id);
 
-  async function handleAddContestant(name, type, members = []) {
+  async function handleAddContestant(name, type, members = [], email = '') {
     if (isFinalized) return;
+    if (getEventCapacity(event).isFull) {
+      notifyError(`${getEventFullMessage(event)} Raise the event's maximum to add more.`);
+      setShowAddContestant(false);
+      return;
+    }
     const existing = event.contestants || [];
+    if (email && existing.some((contestant) => String(contestant.email || '').trim().toLowerCase() === email)) {
+      notifyError(`${email} is already used by another participant in this event.`);
+      return;
+    }
     const newContestant = {
       id: `${type}-manual-${Date.now()}`,
       name,
       type,
+      ...(email ? { email } : {}),
       ...(type === 'team' ? { members } : {}),
     };
     await updateEvent(id, { contestants: [...existing, newContestant], participants: existing.length + 1 });
     setShowAddContestant(false);
+    if (email) {
+      // The participant is already on the roster; a failed email only means
+      // they weren't told, so it is reported rather than undone.
+      try {
+        await sendParticipantAddedEmail({ event, contestant: newContestant, email });
+        notifySuccess(`${name} was added and notified at ${email}.`);
+      } catch (sendError) {
+        notifyError(`${name} was added, but the email to ${email} could not be sent: ${sendError.message}`);
+      }
+    }
   }
 
   async function handleBulkImportCsv(file) {
@@ -346,8 +466,21 @@ export default function OrganizerEventDetail() {
       return;
     }
 
-    await updateEvent(id, { contestants: [...existing, ...imported], participants: existing.length + imported.length });
-    notifySuccess(`Imported ${imported.length} participant${imported.length === 1 ? '' : 's'} from CSV.`);
+    // Only as many rows as there are open slots; the rest are reported, not
+    // silently dropped.
+    const { remaining, max } = getEventCapacity(event);
+    if (remaining === 0) {
+      notifyError(`${getEventFullMessage(event)} Nothing was imported.`);
+      return;
+    }
+    const accepted = imported.slice(0, remaining);
+    const skipped = imported.length - accepted.length;
+
+    await updateEvent(id, { contestants: [...existing, ...accepted], participants: existing.length + accepted.length });
+    notifySuccess(`Imported ${accepted.length} participant${accepted.length === 1 ? '' : 's'} from CSV.`);
+    if (skipped > 0) {
+      notifyError(`${skipped} participant${skipped === 1 ? ' was' : 's were'} not imported because the event's maximum of ${max} was reached.`);
+    }
   }
 
   // No-shows are marked, not deleted, so the roster and any scores already
@@ -445,6 +578,7 @@ export default function OrganizerEventDetail() {
   // already scored the old roster would silently invalidate the locked
   // scores' meaning.
   const isFinalized = event.status === 'completed';
+  const capacity = getEventCapacity(event);
 
   const judgeQRValue = buildAppUrl(`/judge/open/${event.id}`);
   const participantQRValue = buildAppUrl(`/participant/register?eventId=${event.id}`);
@@ -583,22 +717,62 @@ export default function OrganizerEventDetail() {
       subtitle={`${event.eventType || event.type} • ${event.location || 'Venue TBD'}`}
     >
       <div style={{ maxWidth: 1100, margin: '0 auto', display: 'grid', gap: 20 }}>
-        {/* Back + status */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <button onClick={() => navigate('/organizer/events')} style={secondaryBtn}>
-            <i className="bi bi-arrow-left" /> Back to My Events
-          </button>
-          <span style={{
-            padding: '6px 14px', borderRadius: 999, fontWeight: 700, fontSize: 12, textTransform: 'uppercase',
-            background: event.status === 'active' ? 'rgba(16,185,129,0.12)' : 'rgba(100,116,139,0.12)',
-            color: event.status === 'active' ? '#10b981' : '#64748b',
-          }}>
-            {event.status}
-          </span>
+        {/* Where you are + the pages this event connects to */}
+        <div>
+          <Breadcrumbs items={[{ label: 'My Events', to: '/organizer/events' }, { label: event.title }]} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <span style={{
+              padding: '6px 14px', borderRadius: 999, fontWeight: 700, fontSize: 12, textTransform: 'uppercase',
+              background: event.status === 'active' ? 'rgba(16,185,129,0.12)' : isFinalized ? '#ecfdf5' : 'rgba(100,116,139,0.12)',
+              color: event.status === 'active' ? '#10b981' : isFinalized ? '#047857' : '#64748b',
+            }}>
+              {isFinalized && <i className="bi bi-patch-check-fill" style={{ marginRight: 6 }} />}
+              {event.status}
+            </span>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => navigate(`/organizer/scoring?eventId=${event.id}`)} style={secondaryBtn}>
+                <i className="bi bi-bar-chart-line" /> Scoring
+              </button>
+              {event.competitionMode === 'tournament' && (
+                <button onClick={() => navigate(`/organizer/brackets?eventId=${event.id}`)} style={secondaryBtn}>
+                  <i className="bi bi-diagram-3" /> Bracket
+                </button>
+              )}
+              <button onClick={() => navigate(`/organizer/events/${event.id}/ranking`)} style={secondaryBtn}>
+                <i className="bi bi-trophy" /> Ranking
+              </button>
+              <button onClick={() => navigate(`/organizer/reports/${event.id}`)} style={secondaryBtn}>
+                <i className="bi bi-file-earmark-text" /> {isFinalized ? 'Results Report' : 'Report'}
+              </button>
+            </div>
+          </div>
         </div>
 
+        {/* Results first, once the event is over */}
+        {isFinalized && report && <EventResultsPanel report={report} onRanking={() => navigate(`/organizer/events/${event.id}/ranking`)} onReport={() => navigate(`/organizer/reports/${event.id}`)} />}
+
+        {/* Jump straight to a section of this long page */}
+        <nav aria-label="Sections of this page" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
+          {[
+            ['section-overview', 'Overview', 'bi-info-circle'],
+            ['section-scoring', 'Scoring Session', 'bi-play-circle'],
+            ['section-participants', `Participants (${(event.contestants || []).length})`, 'bi-people'],
+            ['section-rubric', 'Criteria', 'bi-list-check'],
+            ['section-access', 'Judges & Access', 'bi-qr-code'],
+          ].map(([target, label, icon]) => (
+            <button
+              key={target}
+              type="button"
+              onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '8px 13px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#ffffff', color: '#475569', fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0 }}
+            >
+              <i className={`bi ${icon}`} /> {label}
+            </button>
+          ))}
+        </nav>
+
         {/* Event Info */}
-        <div style={card}>
+        <div id="section-overview" style={{ ...card, scrollMarginTop: 90 }}>
           <div style={eyebrow}>Event Overview</div>
           <h2 style={panelTitle}>{event.title}</h2>
           <p style={{ color: '#475569', lineHeight: 1.7, marginBottom: 20 }}>
@@ -637,7 +811,7 @@ export default function OrganizerEventDetail() {
         )}
 
         {/* Scoring Session Control */}
-        <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
+        <div id="section-scoring" style={{ ...card, scrollMarginTop: 90, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
           <div>
             <div style={eyebrow}>Scoring Session</div>
             <h2 style={{ ...panelTitle, marginBottom: 4 }}>
@@ -670,22 +844,35 @@ export default function OrganizerEventDetail() {
         </div>
 
         {/* Contestants */}
-        <div style={card}>
+        <div id="section-participants" style={{ ...card, scrollMarginTop: 90 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <div>
               <div style={eyebrow}>Registered</div>
-              <h2 style={{ ...panelTitle, marginBottom: 0 }}>Participants ({(event.contestants || []).length})</h2>
+              <h2 style={{ ...panelTitle, marginBottom: 0 }}>
+                Participants ({capacity.count}{capacity.max ? ` / ${capacity.max}` : ''})
+              </h2>
+              {capacity.isFull && !isFinalized && (
+                <div style={{ fontSize: 12, color: '#b45309', marginTop: 4 }}>
+                  Maximum reached. Raise the event's maximum to add more.
+                </div>
+              )}
             </div>
             {!isFinalized && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button onClick={() => setShowAddContestant(true)} style={secondaryBtn}>
+                <button
+                  onClick={() => setShowAddContestant(true)}
+                  disabled={capacity.isFull}
+                  title={capacity.isFull ? getEventFullMessage(event) : undefined}
+                  style={{ ...secondaryBtn, opacity: capacity.isFull ? 0.5 : 1, cursor: capacity.isFull ? 'not-allowed' : 'pointer' }}
+                >
                   <i className="bi bi-plus-lg" /> Add Participant
                 </button>
-                <label style={{ ...secondaryBtn, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <label style={{ ...secondaryBtn, cursor: capacity.isFull ? 'not-allowed' : 'pointer', opacity: capacity.isFull ? 0.5 : 1, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <i className="bi bi-upload" /> Import CSV
                   <input
                     type="file"
                     accept=".csv,text/csv"
+                    disabled={capacity.isFull}
                     style={{ display: 'none' }}
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -826,7 +1013,7 @@ export default function OrganizerEventDetail() {
         </div>
 
         {/* Criteria */}
-        <div style={card}>
+        <div id="section-rubric" style={{ ...card, scrollMarginTop: 90 }}>
           <div style={eyebrow}>Judging Rubric</div>
           <h2 style={panelTitle}>Criteria</h2>
           {(!event.criteria || event.criteria.length === 0) ? (
@@ -852,7 +1039,7 @@ export default function OrganizerEventDetail() {
         </div>
 
         {/* QR Codes */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
+        <div id="section-access" style={{ scrollMarginTop: 90, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
           {/* Judge QR — performance events only */}
           {!TOURNAMENT_EVENT_TYPES.includes(event.eventType) && (
             <div style={{ ...card, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>

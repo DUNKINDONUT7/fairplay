@@ -34,7 +34,7 @@ function normalizeTeam(team) {
       ...stats,
     },
     status: team.status || 'Pending',
-    schoolOrganization: team.schoolOrganization || team.school_or_organization || metadata.schoolOrganization || '',
+    schoolOrganization: team.schoolOrganization || team.school_or_organization || team.school_name || metadata.schoolOrganization || '',
     division: team.division || team.team_division || metadata.division || '',
     representativeType: team.representativeType || team.representative_type || metadata.representativeType || '',
     teamLeader: team.teamLeader || team.team_leader || metadata.teamLeader || null,

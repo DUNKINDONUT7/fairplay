@@ -6,6 +6,24 @@ export function sumCriteriaWeights(criteria = []) {
   return toArray(criteria).reduce((total, criterion) => total + Number(criterion.weight || 0), 0);
 }
 
+// How full an event is against its "Maximum contestants" setting.
+// max 0 means the organizer set no limit.
+export function getEventCapacity(event) {
+  const max = Number(event?.maxParticipants || event?.max_participants || 0);
+  const count = Array.isArray(event?.contestants) ? event.contestants.length : Number(event?.participants || 0);
+  return {
+    max,
+    count,
+    remaining: max > 0 ? Math.max(0, max - count) : Infinity,
+    isFull: max > 0 && count >= max,
+  };
+}
+
+export function getEventFullMessage(event) {
+  const { max } = getEventCapacity(event);
+  return `This event is full. It has reached its maximum of ${max} participant${max === 1 ? '' : 's'}.`;
+}
+
 export function getContestantCount(event, teams = []) {
   if (Array.isArray(event?.contestants) && event.contestants.length > 0) {
     return event.contestants.length;

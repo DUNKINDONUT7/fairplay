@@ -1,3 +1,4 @@
+import EventPicker from '../../components/common/EventPicker';
 import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import PaginationControls from '../../components/admin/PaginationControls';
@@ -174,14 +175,20 @@ export default function OrganizerJudges() {
 
   const judgeMap = useMemo(() => {
     const map = {};
+    // A score can name its judge by id or by email. Both lead to the same
+    // row, so one judge never shows up twice.
+    const aliases = {};
 
     judges.filter((j) => myJudgeIds.has(String(j.id))).forEach((j) => {
       const id = j.email?.toLowerCase() || String(j.id);
       map[id] = { id, name: j.name || 'Judge', email: j.email || '', specialty: j.specialty || 'General', scoredEvents: {}, lastScoredAt: null };
+      aliases[String(j.id).toLowerCase()] = id;
+      if (j.email) aliases[j.email.toLowerCase()] = id;
     });
 
     allScores.forEach((score) => {
-      const id = String(score.judgeId).toLowerCase();
+      const rawId = String(score.judgeId).toLowerCase();
+      const id = aliases[rawId] || rawId;
       if (!map[id]) {
         map[id] = { id, name: score.judgeName || 'Judge', email: id.includes('@') ? id : '', specialty: 'General', scoredEvents: {}, lastScoredAt: null };
       } else if ((map[id].name === 'Judge' || !map[id].name) && score.judgeName && score.judgeName !== 'Judge') {
@@ -284,12 +291,14 @@ export default function OrganizerJudges() {
                   style={{ ...fieldStyle, paddingLeft: 34 }}
                 />
               </div>
-              <select value={eventFilter} onChange={(e) => setEventFilter(e.target.value)} aria-label="Only judges who scored this event" style={{ ...fieldStyle, flex: '0 1 240px' }}>
-                <option value="">All events</option>
-                {activeEvents.map((e) => (
-                  <option key={e.id} value={e.id}>Scored: {e.title}</option>
-                ))}
-              </select>
+              <EventPicker
+                events={activeEvents}
+                value={eventFilter}
+                onChange={setEventFilter}
+                allLabel="All events"
+                ariaLabel="Only judges who scored this event"
+                style={{ flex: '0 1 260px', width: 'auto' }}
+              />
               {filtersActive && (
                 <button type="button" onClick={() => { setSearchTerm(''); setEventFilter(''); setScoreFilter('all'); }} style={ghostButtonStyle}>
                   <i className="bi bi-x-lg" /> Clear
@@ -340,14 +349,21 @@ export default function OrganizerJudges() {
                           ) : (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
                               {scoredEventsList.slice(0, 2).map((ev) => (
-                                <span key={ev.eventId} title={ev.contestants.length ? `Scored: ${[...new Set(ev.contestants)].join(', ')}` : undefined} style={{ ...pillStyle, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', fontWeight: 600, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  <i className="bi bi-trophy" /> {ev.eventTitle} · {ev.count}
+                                <span
+                                  key={ev.eventId}
+                                  title={`${ev.eventTitle} — ${ev.count} score${ev.count === 1 ? '' : 's'}${ev.contestants.length ? `. Scored: ${[...new Set(ev.contestants)].join(', ')}` : ''}`}
+                                  style={{ ...pillStyle, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8', fontWeight: 600, maxWidth: 240, minWidth: 0 }}
+                                >
+                                  <i className="bi bi-trophy" style={{ flexShrink: 0 }} />
+                                  {/* The name truncates; the icon and the count always stay whole. */}
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{ev.eventTitle}</span>
+                                  <span style={{ flexShrink: 0, background: '#dbeafe', borderRadius: 999, padding: '0 7px', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>{ev.count}</span>
                                 </span>
                               ))}
                               {scoredEventsList.length > 2 && (
                                 <span style={{ fontSize: 12, color: '#475569' }}>+{scoredEventsList.length - 2} more</span>
                               )}
-                              <span style={{ fontSize: 12, color: '#64748b' }}>{totalScored} total</span>
+                              <span style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>{totalScored} total</span>
                             </div>
                           )}
                         </td>

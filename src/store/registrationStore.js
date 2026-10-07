@@ -7,6 +7,7 @@ import useEventStore from './eventStore';
 import useTeamStore from './teamStore';
 import useNotificationStore from './notificationStore';
 import { inferTeamLimitConfig, validateTeamMemberCount } from '../utils/teamEventRules';
+import { getEventCapacity, getEventFullMessage } from '../utils/systemSelectors';
 
 const initialDetails = { name: '', email: '', phone: '', qrToken: '' };
 const initialRepresentative = { fullName: '', age: '', schoolYear: '', phone: '', email: '' };
@@ -21,6 +22,25 @@ function createNumericId() {
 
 function createRegistrationId() {
   return createNumericId();
+}
+
+// The roster and maximum straight from the database. A QR registration page
+// can sit open long after the last slot was taken, so the copy of the event
+// in memory isn't trusted for the capacity check.
+async function fetchLiveCapacityEvent(eventId, fallback) {
+  if (!isSupabaseConfigured || !supabase) return fallback;
+  const { data, error } = await supabase
+    .from('events')
+    .select('contestants, max_participants')
+    .eq('id', eventId)
+    .maybeSingle();
+  if (error || !data) return fallback;
+  return {
+    ...fallback,
+    maxParticipants: Number(data.max_participants || 0),
+    contestants: (Array.isArray(data.contestants) ? data.contestants : [])
+      .filter((contestant) => contestant?.name && !/^.+-contestant-d+$/.test(String(contestant.id))),
+  };
 }
 
 function createQrToken(prefix = 'qr') {
@@ -240,6 +260,12 @@ const useRegistrationStore = create(
             throw new Error(conflict);
           }
 
+          const storedEvent = useEventStore.getState().getEventById(eventId);
+          const targetEvent = storedEvent ? await fetchLiveCapacityEvent(eventId, storedEvent) : null;
+          if (targetEvent && getEventCapacity(targetEvent).isFull) {
+            throw new Error(getEventFullMessage(targetEvent));
+          }
+
           const team = await useTeamStore.getState().createTeam({
             name: teamName,
             eventId,
@@ -317,10 +343,23 @@ const useRegistrationStore = create(
           if (!event) {
             throw new Error('Event not found.');
           }
+          const liveEvent = await fetchLiveCapacityEvent(eventId, event);
+          if (getEventCapacity(liveEvent).isFull) {
+            throw new Error(getEventFullMessage(liveEvent));
+          }
 
           const registrations = await get().fetchRegistrations(eventId);
           const qrToken = createQrToken(registrationType === 'team' ? 'team' : 'participant');
           const subEvent = (event.subEvents || []).find((entry) => String(entry.id) === String(subEventId)) || null;
+          const subEventMax = Number(subEvent?.maxParticipants || 0);
+          if (subEvent && subEventMax > 0) {
+            const taken = (liveEvent.contestants || []).filter(
+              (contestant) => String(contestant.subEventId || contestant.sub_event_id || '') === String(subEvent.id)
+            ).length;
+            if (taken >= subEventMax) {
+              throw new Error(`${subEvent.name || 'This sub-event'} is full. It has reached its maximum of ${subEventMax} participant${subEventMax === 1 ? '' : 's'}.`);
+            }
+          }
           const teamLimitConfig = inferTeamLimitConfig(event, subEvent);
           const resolvedMin = Number(minParticipants || teamLimitConfig.min || 0);
           const resolvedMax = Number(maxParticipants || teamLimitConfig.max || 0);

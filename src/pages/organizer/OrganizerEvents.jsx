@@ -8,6 +8,11 @@ import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 import { getBusinessActorId, matchesActorIdentity } from '../../utils/identity';
+import useScoreStore from '../../store/scoreStore';
+import useJudgeStore from '../../store/judgeStore';
+import useTournamentStore from '../../store/tournamentStore';
+import { composeEventReport } from '../../hooks/useEventReport';
+import { formatScore } from '../../utils/eventReport';
 
 const statusConfig = {
   all: { label: 'All', color: '#2563eb', tone: 'rgba(37,99,235,0.10)' },
@@ -145,6 +150,42 @@ function summarizeEvent(event) {
     updatedAtValue: new Date(event.createdAt || event.created_at || event.startDate || 0).getTime() || 0,
     startValue: new Date(event.startDate || event.start_date || event.createdAt || 0).getTime() || 0,
   };
+}
+
+// The final standings on a completed event's card: the top three, or one
+// champion per sport for a sports fest.
+function EventResults({ results }) {
+  if (!results || results.podium.length === 0) {
+    return (
+      <div style={{ padding: 14, borderRadius: 16, background: '#f8fafc', border: '1px dashed #cbd5e1', fontSize: 13, color: '#64748b' }}>
+        <strong style={{ color: '#334155' }}>No final results recorded.</strong> This event was completed without any scores or match results.
+      </div>
+    );
+  }
+  return (
+    <div style={{ borderRadius: 16, border: '1px solid #a7f3d0', background: '#f0fdf9', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', fontSize: 11, fontWeight: 800, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.08em', borderBottom: '1px solid #a7f3d0' }}>
+        <i className="bi bi-patch-check-fill" />
+        {results.perSport ? 'Final results · champions' : 'Final results'}
+      </div>
+      <div style={{ background: '#ffffff' }}>
+        {results.podium.map((entry, index) => (
+          <div key={entry.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderTop: index === 0 ? 'none' : '1px solid #f1f5f9' }}>
+            <span style={{ width: 28, height: 28, borderRadius: 9, display: 'grid', placeItems: 'center', flexShrink: 0, fontSize: 13, background: index === 0 || results.perSport ? '#fef3c7' : '#f1f5f9', color: index === 0 || results.perSport ? '#b45309' : '#64748b' }}>
+              <i className={index === 0 || results.perSport ? 'bi bi-trophy-fill' : 'bi bi-award'} />
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{entry.label}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#0f172a', overflowWrap: 'anywhere' }}>{entry.name}</div>
+            </div>
+            <div style={{ fontSize: results.perSport ? 12 : 15, fontWeight: 800, color: results.perSport ? '#64748b' : '#0f172a', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+              {results.perSport ? '' : entry.value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function FieldChip({ children, color = '#2563eb', tone = 'rgba(37,99,235,0.10)', icon }) {
@@ -398,12 +439,48 @@ export default function OrganizerEvents() {
   const [busyAction, setBusyAction] = useState('');
   const [eventToDelete, setEventToDelete] = useState(null);
   const organizerBusinessId = getBusinessActorId(user);
+  const scores = useScoreStore((state) => state.scores);
+  const fetchScores = useScoreStore((state) => state.fetchScores);
+  const fetchJudges = useJudgeStore((state) => state.fetchJudges);
+  const tournaments = useTournamentStore((state) => state.tournaments);
+  const fetchTournaments = useTournamentStore((state) => state.fetchTournaments);
 
   useEffect(() => {
     if (user?.id) {
       fetchEvents(user.id);
     }
-  }, [fetchEvents, user?.id]);
+    // Completed cards show their final results, which come from these.
+    fetchScores(undefined, { silent: true });
+    fetchJudges({ silent: true });
+    fetchTournaments(undefined, { silent: true });
+  }, [fetchEvents, fetchJudges, fetchScores, fetchTournaments, user?.id]);
+
+  // Final results for each completed event, from the same report the Ranking
+  // page and the PDF use — so a card can never disagree with them.
+  const resultsByEvent = useMemo(() => {
+    const map = new Map();
+    events.filter((event) => event.status === 'completed').forEach((event) => {
+      const report = composeEventReport(event);
+      const judged = report.isJudged;
+      const brackets = report.tournament.brackets;
+      const podium = brackets.length > 1
+        ? brackets.filter((bracket) => bracket.champion).map((bracket) => ({
+            key: bracket.id,
+            label: bracket.title.replace(`${event.title} - `, ''),
+            name: bracket.champion,
+            value: 'Champion',
+          }))
+        : [...report.ranked].sort((left, right) => left.rank - right.rank).slice(0, 3).map((participant) => ({
+            key: participant.id,
+            label: participant.rank === 1 ? 'Champion' : participant.placement,
+            name: participant.name,
+            value: judged ? formatScore(participant.final) : participant.record,
+          }));
+      map.set(String(event.id), { podium, judged, ranked: report.ranked.length, perSport: brackets.length > 1 });
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, scores, tournaments]);
 
   const organizerEvents = useMemo(
     () =>
@@ -848,12 +925,15 @@ export default function OrganizerEvents() {
                     style={{
                       background: '#ffffff',
                       border: '1px solid #dbeafe',
+                      // A finished event gets a quiet green cap instead of looking like one still being set up.
+                      borderTop: event.statusKey === 'completed' ? '4px solid #10b981' : '1px solid #dbeafe',
                       borderRadius: 24,
                       padding: 22,
                       boxShadow: '0 20px 44px rgba(37,99,235,0.08)',
                       display: 'grid',
                       gap: 18,
                       minWidth: 0,
+                      alignContent: 'start',
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
@@ -965,25 +1045,40 @@ export default function OrganizerEvents() {
                       </div>
                     </div>
 
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
-                        <span style={{ fontSize: 13, color: '#475569', fontWeight: 700 }}>Setup progress</span>
-                        <span style={{ fontSize: 13, color: '#1d4ed8', fontWeight: 800 }}>{event.progress}%</span>
+                    {event.statusKey === 'completed' ? (
+                      <EventResults results={resultsByEvent.get(String(event.id))} />
+                    ) : (
+                      <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, color: '#475569', fontWeight: 700 }}>Setup progress</span>
+                          <span style={{ fontSize: 13, color: '#1d4ed8', fontWeight: 800 }}>{event.progress}%</span>
+                        </div>
+                        <div style={{ height: 10, borderRadius: 999, background: '#dbeafe', overflow: 'hidden' }}>
+                          <div style={{ width: `${event.progress}%`, height: '100%', background: 'linear-gradient(90deg, #2563eb, #38bdf8)', borderRadius: 999 }} />
+                        </div>
                       </div>
-                      <div style={{ height: 10, borderRadius: 999, background: '#dbeafe', overflow: 'hidden' }}>
-                        <div style={{ width: `${event.progress}%`, height: '100%', background: 'linear-gradient(90deg, #2563eb, #38bdf8)', borderRadius: 999 }} />
-                      </div>
-                    </div>
+                    )}
 
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      <button onClick={() => navigate(`/organizer/events/${event.id}`)} style={{ ...primaryButtonStyle, flex: '1 1 160px' }}>
+                      <button onClick={() => navigate(`/organizer/events/${event.id}`)} style={{ ...(event.statusKey === 'completed' ? secondaryButtonStyle : primaryButtonStyle), flex: '1 1 150px' }}>
                         <i className="bi bi-gear" />
                         Manage Event
                       </button>
-                      <button onClick={() => navigate(`/organizer/scoring?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, flex: '1 1 150px' }}>
-                        <i className="bi bi-bar-chart-line" />
+                      <button onClick={() => navigate(`/organizer/events/${event.id}/ranking`)} style={{ ...(event.statusKey === 'completed' ? primaryButtonStyle : secondaryButtonStyle), flex: '1 1 150px' }}>
+                        <i className="bi bi-trophy" />
                         View Ranking
                       </button>
+                      {event.statusKey === 'completed' ? (
+                        <button onClick={() => navigate(`/organizer/reports/${event.id}`)} style={{ ...secondaryButtonStyle, flex: '1 1 150px' }}>
+                          <i className="bi bi-file-earmark-text" />
+                          View Results
+                        </button>
+                      ) : (
+                        <button onClick={() => navigate(`/organizer/scoring?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, flex: '1 1 150px' }}>
+                          <i className="bi bi-bar-chart-line" />
+                          Scoring
+                        </button>
+                      )}
                       {event.hasBracket ? (
                         <button onClick={() => navigate(`/organizer/brackets?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, flex: '1 1 150px', borderColor: '#bfdbfe', color: '#1d4ed8', background: '#eff6ff' }}>
                           <i className="bi bi-diagram-3" />
@@ -1047,8 +1142,11 @@ export default function OrganizerEvents() {
                               <button onClick={() => navigate(`/organizer/events/${event.id}`)} style={{ ...primaryButtonStyle, padding: '10px 12px', borderRadius: 12, fontSize: 13 }}>
                                 Manage
                               </button>
-                              <button onClick={() => navigate(`/organizer/scoring?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, padding: '10px 12px', borderRadius: 12, fontSize: 13 }}>
+                              <button onClick={() => navigate(`/organizer/events/${event.id}/ranking`)} style={{ ...secondaryButtonStyle, padding: '10px 12px', borderRadius: 12, fontSize: 13 }}>
                                 Ranking
+                              </button>
+                              <button onClick={() => navigate(`/organizer/scoring?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, padding: '10px 12px', borderRadius: 12, fontSize: 13 }}>
+                                Scoring
                               </button>
                               {event.hasBracket ? (
                                 <button onClick={() => navigate(`/organizer/brackets?eventId=${event.id}`)} style={{ ...secondaryButtonStyle, padding: '10px 12px', borderRadius: 12, fontSize: 13, borderColor: '#bfdbfe', color: '#1d4ed8', background: '#eff6ff' }}>

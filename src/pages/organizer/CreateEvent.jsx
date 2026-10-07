@@ -35,14 +35,18 @@ const STEPS = [
   { id: 5, title: 'Review', icon: 'bi bi-rocket-takeoff' },
 ];
 
+// `scoringModes` is what the "How will the champion be decided?" step offers
+// for that type. Score-based events are judged, so they never offer bracket
+// matches — an event that needs a bracket is a Tournament or a Sports Fest.
+const JUDGED_SCORING_MODES = ['points-leaderboard', 'ranked-leaderboard', 'multi-round'];
 const EVENT_TYPES = [
-  { value: 'tournament', label: 'Tournament', icon: 'bi-trophy', desc: 'Bracket-based competition', mode: 'tournament' },
-  { value: 'sportsfest', label: 'Sports Fest', icon: 'bi-bicycle', desc: 'Multiple sub-events with brackets', mode: 'tournament' },
-  { value: 'singing', label: 'Singing Contest', icon: 'bi-mic', desc: 'Points leaderboard judging', mode: 'performance' },
-  { value: 'pageant', label: 'Pageant', icon: 'bi-stars', desc: 'Score-based judging and ranking', mode: 'performance' },
-  { value: 'dance', label: 'Dance Contest', icon: 'bi-music-note-beamed', desc: 'Points leaderboard by criteria', mode: 'performance' },
-  { value: 'academic', label: 'Academic Contest', icon: 'bi-book', desc: 'Knowledge-based judging', mode: 'performance' },
-  { value: 'contest', label: 'General Contest', icon: 'bi-award', desc: 'Flexible scoring competition', mode: 'performance' },
+  { value: 'tournament', label: 'Tournament', icon: 'bi-trophy', desc: 'Bracket-based competition', mode: 'tournament', scoringModes: [] },
+  { value: 'sportsfest', label: 'Sports Fest', icon: 'bi-bicycle', desc: 'Multiple sub-events with brackets', mode: 'tournament', scoringModes: [] },
+  { value: 'singing', label: 'Singing Contest', icon: 'bi-mic', desc: 'Points leaderboard judging', mode: 'performance', scoringModes: JUDGED_SCORING_MODES },
+  { value: 'pageant', label: 'Pageant', icon: 'bi-stars', desc: 'Score-based judging and ranking', mode: 'performance', scoringModes: JUDGED_SCORING_MODES },
+  { value: 'dance', label: 'Dance Contest', icon: 'bi-music-note-beamed', desc: 'Points leaderboard by criteria', mode: 'performance', scoringModes: JUDGED_SCORING_MODES },
+  { value: 'academic', label: 'Academic Contest', icon: 'bi-book', desc: 'Knowledge-based judging', mode: 'performance', scoringModes: JUDGED_SCORING_MODES },
+  { value: 'contest', label: 'General Contest', icon: 'bi-award', desc: 'Flexible scoring competition', mode: 'performance', scoringModes: JUDGED_SCORING_MODES },
 ];
 
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
@@ -50,7 +54,7 @@ const AUDIENCE_IMPACT_EVENT_TYPES = ['singing', 'pageant', 'dance', 'academic', 
 
 function createTimeOptions() {
   const options = [];
-  for (let hour = 7; hour <= 17; hour += 1) {
+  for (let hour = 7; hour <= 20; hour += 1) {
     const value = `${String(hour).padStart(2, '0')}:00`;
     const displayHour = hour > 12 ? hour - 12 : hour;
     const suffix = hour >= 12 ? 'PM' : 'AM';
@@ -61,11 +65,42 @@ function createTimeOptions() {
 
 const TIME_OPTIONS = createTimeOptions();
 
+// `how` is shown under the cards for whichever format is picked, so the
+// organizer knows exactly what the bracket will do before the event exists.
 const BRACKET_TYPES = [
-  { value: 'single', label: 'Single Elimination', icon: 'bi-diagram-2', desc: 'One loss and you\'re out. Fast and decisive.' },
-  { value: 'round-robin', label: 'Round Robin', icon: 'bi-arrow-repeat', desc: 'Everyone plays everyone. Best record wins.' },
-  { value: 'group-knockout', label: 'Group Stage + Knockout', icon: 'bi-diagram-3', desc: 'Round robin groups then elimination rounds.' },
+  {
+    value: 'single', label: 'Single Elimination', icon: 'bi-diagram-2',
+    desc: 'One loss and you\'re out. Fast and decisive.',
+    best: 'Fewest games',
+    how: 'Teams are paired up; the winner moves on and the loser is out. With an uneven number, the top team skips the first round. 8 teams need 7 games.',
+  },
+  {
+    value: 'round-robin', label: 'Round Robin', icon: 'bi-arrow-repeat',
+    desc: 'Everyone plays everyone. Best record wins.',
+    best: 'Fairest, most games',
+    how: 'Every team plays every other team once, and a game may end in a draw. Teams are ranked by wins, then score difference. 8 teams need 28 games.',
+  },
+  {
+    value: 'group-knockout', label: 'Group Stage + Knockout', icon: 'bi-diagram-3',
+    desc: 'Groups first, then elimination rounds.',
+    best: 'Balanced',
+    how: 'Teams are drawn into 2 groups (4 groups for 12 or more teams) and play everyone in their group. The top 2 of each group then play a knockout to decide the champion. Needs at least 4 teams. 8 teams need 15 games.',
+  },
 ];
+
+function BracketFormatExplainer({ value }) {
+  const format = BRACKET_TYPES.find((entry) => entry.value === value);
+  if (!format) return null;
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', padding: '12px 14px', borderRadius: 12, background: '#f8fbff', border: '1px solid #dbeafe', marginBottom: 20 }}>
+      <i className="bi bi-info-circle" style={{ color: '#2563eb', marginTop: 2 }} />
+      <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.6 }}>
+        <strong style={{ color: '#0f172a' }}>How {format.label} works: </strong>
+        {format.how}
+      </div>
+    </div>
+  );
+}
 
 const PERFORMANCE_SCORING_MODES = [
   {
@@ -198,14 +233,24 @@ function normalizeSubEventForSave(subEvent) {
   };
 }
 
-function normalizeCriteriaOption(result, index = 0) {
+// The scoring range every generated criterion gets, from the event's point
+// scale (10 -> "1-10", 100 -> "1-100").
+function rangeForScale(pointScale) {
+  const max = Number(pointScale) || 10;
+  return `1-${max}`;
+}
+
+// `forcedRange` replaces whatever range came back from generation, so the
+// rubric always matches the point scale the organizer picked. Left out for
+// uploaded rubrics and saved templates, which keep the ranges they define.
+function normalizeCriteriaOption(result, index = 0, forcedRange = '') {
   const rawCriteria = Array.isArray(result?.criteria) ? result.criteria : [];
   const criteria = rawCriteria.map((criterion, criterionIndex) => ({
     id: criterion.id || `criterion-${index}-${criterionIndex}`,
     name: criterion.name || `Criterion ${criterionIndex + 1}`,
     weight: Number(criterion.weight || 0),
     description: criterion.description || '',
-    scoringRange: criterion.scoringRange || '1-10',
+    scoringRange: forcedRange || criterion.scoringRange || '1-10',
     judgeInstructions: criterion.judgeInstructions || 'Score with consistency and evidence.',
     editable: true,
   }));
@@ -711,7 +756,8 @@ export default function CreateEvent() {
         userId: user?.id,
       });
 
-      const normalized = (Array.isArray(options) ? options : [options]).map((opt, idx) => normalizeCriteriaOption(opt, idx)).filter((option) => option.criteria.length > 0);
+      const generatedRange = rangeForScale(form.pointScale);
+      const normalized = (Array.isArray(options) ? options : [options]).map((opt, idx) => normalizeCriteriaOption(opt, idx, generatedRange)).filter((option) => option.criteria.length > 0);
       if (normalized.length === 0) {
         throw new Error('No criteria returned.');
       }
@@ -738,7 +784,7 @@ export default function CreateEvent() {
     } finally {
       setIsGenerating(false);
     }
-  }, [error, form.audienceImpact, form.description, form.eventType, form.scoringType, form.subEvents, form.title, success, uploadedCriteriaText, user?.id]);
+  }, [error, form.audienceImpact, form.description, form.eventType, form.pointScale, form.scoringType, form.subEvents, form.title, success, uploadedCriteriaText, user?.id]);
 
   const handleCriteriaFileUpload = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -802,6 +848,21 @@ export default function CreateEvent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
+  // If the point scale is changed after a rubric exists, criteria still on
+  // the previous scale move to the new one. A range the organizer typed in
+  // by hand for a particular criterion is left alone.
+  const appliedScale = useRef(form.pointScale);
+  useEffect(() => {
+    const previous = appliedScale.current;
+    if (previous === form.pointScale) return;
+    appliedScale.current = form.pointScale;
+    const from = rangeForScale(previous);
+    const to = rangeForScale(form.pointScale);
+    const convert = (criteria) => criteria.map((criterion) => (criterion.scoringRange === from ? { ...criterion, scoringRange: to } : criterion));
+    setCriteriaDraft((current) => ({ ...current, criteria: convert(current.criteria) }));
+    setCriteriaOptions((current) => current.map((option) => ({ ...option, criteria: convert(option.criteria) })));
+  }, [form.pointScale]);
+
   const handleSelectOption = useCallback((index) => {
     setSelectedOptionIndex(index);
     setCriteriaDraft(criteriaOptions[index]);
@@ -826,12 +887,12 @@ export default function CreateEvent() {
           name: 'New Criterion',
           weight: 10,
           description: 'Describe what judges should evaluate.',
-          scoringRange: '1-10',
+          scoringRange: rangeForScale(form.pointScale),
           judgeInstructions: 'Use objective evidence when assigning a score.',
         },
       ],
     }));
-  }, []);
+  }, [form.pointScale]);
 
   const handleRemoveCriterion = useCallback((index) => {
     setCriteriaDraft((current) => ({
@@ -875,6 +936,32 @@ export default function CreateEvent() {
     });
     success(`Saved "${name.trim()}" to your rubric library.`);
   }, [criteriaDraft, error, form.eventType, form.title, saveRubricTemplate, success]);
+
+  const handleDownloadCriteriaPdf = useCallback(async () => {
+    if (criteriaDraft.criteria.length === 0) {
+      error('Generate or build a rubric first before downloading it as a PDF.');
+      return;
+    }
+    try {
+      const { downloadCriteriaPdf } = await import('../../utils/criteriaPdf');
+      const organizerName = String(user?.name || '');
+      downloadCriteriaPdf({
+        event: {
+          title: form.title,
+          typeLabel: EVENT_TYPES.find((type) => type.value === form.eventType)?.label || '',
+          date: form.startDate,
+          venue: form.location,
+        },
+        rubric: criteriaDraft,
+        // user.name falls back to the email address; leave the line blank instead.
+        preparedBy: organizerName.includes('@') ? '' : organizerName,
+      });
+      success('Criteria PDF downloaded.');
+    } catch (downloadError) {
+      console.error('Criteria PDF export failed:', downloadError);
+      error('Unable to create the criteria PDF. Please try again.');
+    }
+  }, [criteriaDraft, error, form.eventType, form.location, form.startDate, form.title, success, user]);
 
   const handleLoadRubricTemplate = useCallback((template) => {
     setCriteriaDraft({
@@ -1139,14 +1226,7 @@ export default function CreateEvent() {
 
                   <Field label="Event Image">
                     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 180px', gap: 14, alignItems: 'stretch' }}>
-                      <div style={{ display: 'grid', gap: 10 }}>
-                        <input
-                          name="imageUrl"
-                          value={form.imageUrl}
-                          onChange={handleFieldChange}
-                          placeholder="Paste event poster, banner, or cover image link"
-                          style={inputStyle}
-                        />
+                      <div style={{ display: 'grid', gap: 10, alignContent: 'center' }}>
                         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                           <label style={uploadImageButtonStyle}>
                             <i className="bi bi-image" />
@@ -1184,7 +1264,7 @@ export default function CreateEvent() {
                         )}
                       </div>
                     </div>
-                    <div style={helperTextStyle}>Paste an image link or upload a PNG/JPEG poster. This image is shown on admin oversight and event cards.</div>
+                    <div style={helperTextStyle}>Upload a PNG/JPEG poster. This image is shown on admin oversight and event cards.</div>
                   </Field>
 
                   <div style={gridTwoStyle}>
@@ -1226,20 +1306,28 @@ export default function CreateEvent() {
                     <div style={sectionCardStyle}>
                       <div style={eyebrowStyle}>Bracket format</div>
                       <h2 style={panelTitleStyle}>How will matches be structured?</h2>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 20 }}>
+                      <div role="radiogroup" aria-label="Bracket format" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 12 }}>
                         {BRACKET_TYPES.map((bt) => {
                           const active = form.bracketType === bt.value;
                           return (
-                            <button key={bt.value} type="button"
+                            <button key={bt.value} type="button" role="radio" aria-checked={active}
                               onClick={() => setForm((c) => ({ ...c, bracketType: bt.value }))}
-                              style={{ padding: 18, borderRadius: 16, border: active ? '2px solid #2563eb' : '1.5px solid #e2e8f0', background: active ? 'rgba(37,99,235,0.08)' : '#f8fafc', cursor: 'pointer', textAlign: 'left', boxShadow: active ? '0 8px 24px rgba(37,99,235,0.12)' : 'none' }}>
-                              <i className={`bi ${bt.icon}`} style={{ fontSize: 24, color: active ? '#2563eb' : '#94a3b8', display: 'block', marginBottom: 10 }} />
-                              <div style={{ fontWeight: 800, color: active ? '#1d4ed8' : '#0f172a', marginBottom: 4 }}>{bt.label}</div>
-                              <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>{bt.desc}</div>
+                              style={{ position: 'relative', padding: 18, borderRadius: 16, border: active ? '2px solid #2563eb' : '1.5px solid #e2e8f0', background: active ? 'rgba(37,99,235,0.06)' : '#ffffff', cursor: 'pointer', textAlign: 'left', boxShadow: active ? '0 8px 24px rgba(37,99,235,0.12)' : 'none' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                                <span style={{ width: 40, height: 40, borderRadius: 12, display: 'grid', placeItems: 'center', background: active ? '#2563eb' : '#f1f5f9', color: active ? '#ffffff' : '#64748b', fontSize: 18 }}>
+                                  <i className={`bi ${bt.icon}`} />
+                                </span>
+                                {/* The tick shows which one is chosen without relying on colour alone. */}
+                                <i className={active ? 'bi bi-check-circle-fill' : 'bi bi-circle'} style={{ fontSize: 18, color: active ? '#2563eb' : '#cbd5e1' }} />
+                              </div>
+                              <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>{bt.label}</div>
+                              <div style={{ fontSize: 13, color: '#64748b', lineHeight: 1.5, marginBottom: 10 }}>{bt.desc}</div>
+                              <span style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 999, color: active ? '#1d4ed8' : '#475569', background: active ? '#dbeafe' : '#f1f5f9' }}>{bt.best}</span>
                             </button>
                           );
                         })}
                       </div>
+                      <BracketFormatExplainer value={form.bracketType} />
                       <Field label="Maximum teams / participants">
                         <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 8 teams" style={inputStyle} />
                       </Field>
@@ -1382,11 +1470,13 @@ export default function CreateEvent() {
                       )}
                     </div>
                     <p style={{ color: '#64748b', fontSize: 13, marginBottom: 20, lineHeight: 1.6 }}>
-                      For singing, dance, pageant, and similar contests, use a points leaderboard instead of bracket matches. Judges score everyone, then the highest total score becomes champion.
+                      This is a score-based event: judges score every contestant on the criteria, and the scores decide the champion. For bracket matches, choose Tournament or Sports Fest as the event type instead.
                     </p>
 
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 18 }}>
-                      {PERFORMANCE_SCORING_MODES.map((modeOption) => {
+                      {PERFORMANCE_SCORING_MODES
+                        .filter((modeOption) => (EVENT_TYPES.find((type) => type.value === form.eventType)?.scoringModes || JUDGED_SCORING_MODES).includes(modeOption.value))
+                        .map((modeOption) => {
                         const active = form.performanceScoringMode === modeOption.value;
                         return (
                           <button
@@ -1455,13 +1545,15 @@ export default function CreateEvent() {
                               >
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                                   <i className={`bi ${bracketOption.icon}`} style={{ color: '#2563eb' }} />
-                                  <strong style={{ color: '#0f172a' }}>{bracketOption.label}</strong>
+                                  <strong style={{ color: '#0f172a', flex: 1 }}>{bracketOption.label}</strong>
+                                  <i className={active ? 'bi bi-check-circle-fill' : 'bi bi-circle'} style={{ color: active ? '#2563eb' : '#cbd5e1' }} />
                                 </div>
                                 <div style={{ color: '#64748b', fontSize: 13, lineHeight: 1.45 }}>{bracketOption.desc}</div>
                               </button>
                             );
                           })}
                         </div>
+                        <BracketFormatExplainer value={form.bracketType} />
                         <Field label="Maximum contestants">
                           <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 16 contestants" style={inputStyle} />
                         </Field>
@@ -1474,6 +1566,9 @@ export default function CreateEvent() {
                             <option value="50">50-point scale</option>
                             <option value="100">100-point scale</option>
                           </select>
+                          <div style={helperTextStyle}>
+                            Judges score each criterion from 1 to {form.pointScale}, and final scores are out of {form.pointScale}.
+                          </div>
                         </Field>
                         <Field label="Maximum contestants">
                           <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 30 contestants" style={inputStyle} />
@@ -1698,7 +1793,7 @@ export default function CreateEvent() {
                         <div style={eyebrowStyle}>Generated criteria</div>
                         <h2 style={panelTitleStyle}>Criteria Editor</h2>
                       </div>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         <button
                           onClick={() => { hasAutoGenerated.current = true; generateCriteria(); }}
                           disabled={isGenerating}
@@ -1722,6 +1817,10 @@ export default function CreateEvent() {
                         <button onClick={handleSaveRubricAsTemplate} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
                           <i className="bi bi-bookmark-plus" />
                           <span>Save as template</span>
+                        </button>
+                        <button onClick={handleDownloadCriteriaPdf} disabled={isGenerating || criteriaDraft.criteria.length === 0} style={{ ...secondaryButtonStyle, opacity: isGenerating || criteriaDraft.criteria.length === 0 ? 0.5 : 1 }}>
+                          <i className="bi bi-file-earmark-pdf" />
+                          <span>Download PDF</span>
                         </button>
                         <div style={{ position: 'relative' }}>
                           <button onClick={() => setShowRubricLibrary((v) => !v)} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>

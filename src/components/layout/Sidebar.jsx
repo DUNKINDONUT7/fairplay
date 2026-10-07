@@ -80,8 +80,7 @@ const NAV_GROUPS = {
         label: 'Scoring',
         icon: 'bi bi-bar-chart-line',
         items: [
-          { label: 'Live Scoring', path: '/organizer/scoring', icon: 'bi bi-bar-chart-line' },
-          { label: 'Schedule', path: '/organizer/schedule', icon: 'bi bi-calendar-week' },
+          { label: 'Scoring', path: '/organizer/scoring', icon: 'bi bi-bar-chart-line' },
           { label: 'Brackets', path: '/organizer/brackets', icon: 'bi bi-diagram-3' },
           { label: 'Reports', path: '/organizer/reports', icon: 'bi bi-file-earmark-text' },
           { label: 'Certificates', path: '/organizer/certificates', icon: 'bi bi-award' },
@@ -355,7 +354,7 @@ export default function Sidebar({ isOpen, isMobile, onToggle }) {
           )}
         </div>
 
-        <nav style={{ flex: 1, overflowY: expanded ? 'auto' : 'visible', overflowX: 'visible', paddingTop: expanded ? 10 : 52 }}>
+        <nav data-tour="sidebar" style={{ flex: 1, overflowY: expanded ? 'auto' : 'visible', overflowX: 'visible', paddingTop: expanded ? 10 : 52 }}>
           {groups.map((group) => {
             const groupOpen = expanded && (openGroups[group.label] ?? group.active);
             const singleItem = group.items.length === 1;

@@ -1,3 +1,4 @@
+import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
@@ -374,9 +375,10 @@ export default function JudgePublicScoring() {
         {selectedContestant && criteria.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 14 }}>
             {criteria.map((criterion, idx) => {
-              const rangeMax = Number(String(criterion.scoringRange || '10').split('-').pop()) || 10;
+              const rangeMax = getRangeMax(criterion.scoringRange);
               const score = scores[criterion.id] ?? 0;
-              const buttons = Array.from({ length: rangeMax + 1 }, (_, i) => i);
+              const longScale = rangeMax >= LONG_SCALE_FROM;
+              const buttons = longScale ? [] : Array.from({ length: rangeMax + 1 }, (_, i) => i);
               const isScored = score > 0;
 
               return (
@@ -404,8 +406,13 @@ export default function JudgePublicScoring() {
                     </div>
                   </div>
 
+                  {longScale && (
+                    <div style={{ padding: '12px 18px 10px' }}>
+                      <LargeScoreInput value={score} max={rangeMax} label={criterion.name} onChange={(n) => setScores((prev) => ({ ...prev, [criterion.id]: n }))} />
+                    </div>
+                  )}
                   {/* Number buttons */}
-                  <div style={{ padding: '12px 18px 10px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  <div style={{ padding: '12px 18px 10px', display: longScale ? 'none' : 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {buttons.map((n) => {
                       const sel = score === n;
                       return (

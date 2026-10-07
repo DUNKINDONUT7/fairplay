@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { hasEventStarted, isEventOver } from '../utils/bracketRules';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { bindDataCacheReset } from '../utils/dataCache';
@@ -6,11 +7,9 @@ import {
   buildRounds,
   calculateChampion,
   createHistoryEntry,
-  generateRoundRobinBracket,
-  generateSingleEliminationBracket,
+  generateBracketFor,
   normalizeEntrants,
-  updateRoundRobinMatch,
-  updateSingleEliminationMatch,
+  updateBracketMatch,
 } from '../utils/bracketEngine';
 import useCertificateStore from './certificateStore';
 import useEventStore from './eventStore';
@@ -41,6 +40,8 @@ function normalizeTournament(tournament) {
     streamTitle: tournament.streamTitle || tournament.stream_title || '',
     streamMessage: tournament.streamMessage || tournament.stream_message || '',
     isLocked: Boolean(tournament.isLocked ?? tournament.is_locked),
+    isFinalized: Boolean(tournament.isFinalized ?? tournament.is_finalized),
+    finalizedAt: tournament.finalizedAt || tournament.finalized_at || null,
     isPublished: Boolean(tournament.isPublished ?? tournament.is_published),
     publishedAt: tournament.publishedAt || tournament.published_at || null,
     lastSyncedAt: tournament.lastSyncedAt || tournament.last_synced_at || null,
@@ -106,6 +107,21 @@ function buildChampionshipReportSnapshot(tournament, match, champion) {
       completedDate: match.completedDate || null,
     },
   };
+}
+
+const FINALIZED_MESSAGE = 'This bracket has been finalized. Its scores and results can no longer be changed.';
+// What may still change on a finalized bracket: who can see it, nothing else.
+const FINALIZED_EDITABLE_FIELDS = ['isPublished', 'publishedAt', 'streamTitle', 'streamMessage'];
+
+// Scores can be entered until the bracket is finalized or its event is over.
+// (The old manual lock switch is gone; is_locked is only set by finalizing.)
+function assertBracketEditable(tournament) {
+  if (tournament.isFinalized) {
+    throw new Error(FINALIZED_MESSAGE);
+  }
+  if (isEventOver(useEventStore.getState().getEventById(tournament.eventId))) {
+    throw new Error('This event is completed, so its bracket can no longer be changed.');
+  }
 }
 
 let tournamentsRealtimeBound = false;
@@ -238,6 +254,36 @@ const useTournamentStore = create(
         const current = get().getTournamentById(id);
         if (!current) return null;
 
+        // A finalized bracket's results are permanent (the database enforces
+        // this too). Only its public visibility can still change, and that is
+        // written as those columns alone so nothing else is even sent.
+        if (current.isFinalized) {
+          const blocked = Object.keys(updates).filter((key) => !FINALIZED_EDITABLE_FIELDS.includes(key));
+          if (blocked.length > 0) {
+            throw new Error(FINALIZED_MESSAGE);
+          }
+          const visibleTournament = normalizeTournament({ ...current, ...updates, id });
+          set((state) => ({
+            tournaments: state.tournaments.map((entry) => (String(entry.id) === String(id) ? visibleTournament : entry)),
+          }));
+          if (isSupabaseConfigured) {
+            const { error } = await supabase
+              .from('tournaments')
+              .update({
+                is_published: visibleTournament.isPublished,
+                published_at: visibleTournament.publishedAt,
+                stream_title: visibleTournament.streamTitle,
+                stream_message: visibleTournament.streamMessage,
+              })
+              .eq('id', id);
+            if (error) {
+              console.error('Error updating tournament:', error.message);
+              set({ error: error.message });
+            }
+          }
+          return visibleTournament;
+        }
+
         const updatedTournament = normalizeTournament({ ...current, ...updates, id });
         set((state) => ({
           tournaments: state.tournaments.map((entry) =>
@@ -261,6 +307,9 @@ const useTournamentStore = create(
       },
 
       deleteTournament: async (id) => {
+        if (get().getTournamentById(id)?.isFinalized) {
+          throw new Error(FINALIZED_MESSAGE);
+        }
         set((state) => ({
           tournaments: state.tournaments.filter((entry) => String(entry.id) !== String(id)),
         }));
@@ -307,8 +356,11 @@ const useTournamentStore = create(
       generateBracket: async (tournamentId, options = {}) => {
         const tournament = get().getTournamentById(tournamentId);
         if (!tournament) return null;
-        if (tournament.isLocked) {
-          throw new Error('This bracket is locked.');
+        assertBracketEditable(tournament);
+        // The first build is always allowed; it is rebuilding an existing
+        // bracket that stops once the event is under way.
+        if ((tournament.matches || []).length > 0 && hasEventStarted(useEventStore.getState().getEventById(tournament.eventId))) {
+          throw new Error('The event has started, so the bracket can no longer be rebuilt.');
         }
 
         const entrants = normalizeEntrants(options.entrants || tournament.teams || []);
@@ -327,10 +379,7 @@ const useTournamentStore = create(
           throw new Error('Bracket already has results. Confirm regeneration before overwriting.');
         }
 
-        const generated =
-          tournament.bracketType === 'round-robin'
-            ? generateRoundRobinBracket(entrants)
-            : generateSingleEliminationBracket(entrants);
+        const generated = generateBracketFor(tournament.bracketType, entrants);
 
         return get().updateTournament(tournamentId, {
           teams: generated.teams,
@@ -348,26 +397,23 @@ const useTournamentStore = create(
           historyLog: [],
           streamMessage: tournament.bracketType === 'round-robin'
             ? 'Round robin bracket generated and standings are ready.'
-            : 'Bracket generated and BYE slots were auto-advanced.',
+            : tournament.bracketType === 'group-knockout'
+              ? 'Groups drawn. The knockout fills in once every group match is played.'
+              : 'Bracket generated and BYE slots were auto-advanced.',
         });
       },
 
       updateMatchDraft: async (tournamentId, matchId, field, value) => {
         const tournament = get().getTournamentById(tournamentId);
         if (!tournament) return null;
-        if (tournament.isLocked) {
-          throw new Error('Bracket is locked and cannot be edited.');
-        }
+        assertBracketEditable(tournament);
 
         const updates = {
           [field]: Number(value || 0),
           status: 'in-progress',
         };
 
-        const nextTournament =
-          tournament.bracketType === 'round-robin'
-            ? updateRoundRobinMatch(tournament, matchId, updates, { finalize: false })
-            : updateSingleEliminationMatch(tournament, matchId, updates, { finalize: false });
+        const nextTournament = updateBracketMatch(tournament, matchId, updates, { finalize: false });
 
         return get().updateTournament(tournamentId, nextTournament);
       },
@@ -375,15 +421,10 @@ const useTournamentStore = create(
       saveMatchResult: async (tournamentId, matchId) => {
         const tournament = get().getTournamentById(tournamentId);
         if (!tournament) return null;
-        if (tournament.isLocked) {
-          throw new Error('Bracket is locked and cannot be edited.');
-        }
+        assertBracketEditable(tournament);
 
         const historyEntry = createHistoryEntry(tournament, `Saved ${matchId}`);
-        const nextTournament =
-          tournament.bracketType === 'round-robin'
-            ? updateRoundRobinMatch(tournament, matchId, {}, { finalize: true })
-            : updateSingleEliminationMatch(tournament, matchId, {}, { finalize: true });
+        const nextTournament = updateBracketMatch(tournament, matchId, {}, { finalize: true });
 
         const rounds = buildRounds(nextTournament.matches, nextTournament.totalRounds || 0, nextTournament.bracketType);
         const champion = calculateChampion(nextTournament);
@@ -513,6 +554,41 @@ const useTournamentStore = create(
           isLocked,
           streamMessage: isLocked ? 'Bracket was locked by the organizer.' : 'Bracket was unlocked for editing.',
         });
+      },
+
+      // Permanently freezes a finished bracket. Unlike lockTournament this
+      // cannot be reversed, by anyone — the database refuses any later change
+      // to the results. Only applied locally once the database has accepted
+      // it, so the screen never claims a finalization that didn't happen.
+      finalizeTournament: async (tournamentId) => {
+        const tournament = get().getTournamentById(tournamentId);
+        if (!tournament) return null;
+        if (tournament.isFinalized) return tournament;
+
+        const playable = (tournament.matches || []).filter((match) => match.status !== 'bye');
+        if (playable.length === 0 || playable.some((match) => match.status !== 'completed')) {
+          throw new Error('Every match must have a saved result before the scores can be finalized.');
+        }
+
+        const finalizedAt = new Date().toISOString();
+        if (isSupabaseConfigured) {
+          const { error } = await supabase
+            .from('tournaments')
+            .update({ is_finalized: true, is_locked: true, finalized_at: finalizedAt, stream_message: 'Results are final.' })
+            .eq('id', tournamentId);
+          if (error) {
+            const missingColumn = /is_finalized|finalized_at|column/i.test(error.message || '');
+            throw new Error(missingColumn
+              ? 'Finalizing is not set up in the database yet. Run supabase/finalized-results-lock.sql first.'
+              : error.message);
+          }
+        }
+
+        const finalized = normalizeTournament({ ...tournament, isFinalized: true, isLocked: true, finalizedAt, streamMessage: 'Results are final.' });
+        set((state) => ({
+          tournaments: state.tournaments.map((entry) => (String(entry.id) === String(tournamentId) ? finalized : entry)),
+        }));
+        return finalized;
       },
 
       getTournamentById: (id) => get().tournaments.find((tournament) => String(tournament.id) === String(id)) || null,

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 import { isSupabaseConfigured, supabase } from '../../utils/supabaseClient';
 import { getContestantDisplayName } from '../../utils/helpers';
+import { getCurrentRound, getCurrentRoundKey, isCurrentRoundScore } from '../../utils/rounds';
 
 const BUBBLE_STYLE = `
   @keyframes floatBubble {
@@ -63,13 +65,19 @@ function getStoredJudge() {
   catch { return null; }
 }
 
-function ScoreSelector({ value, onChange }) {
+// The buttons follow the criterion's own range; this used to be a fixed 1-10
+// whatever the rubric said.
+function ScoreSelector({ value, onChange, max = 10, label }) {
   const [hovered, setHovered] = useState(null);
   const display = hovered ?? value;
 
+  if (max >= LONG_SCALE_FROM) {
+    return <LargeScoreInput value={value ?? 0} max={max} label={label} onChange={onChange} />;
+  }
+
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => {
+      {Array.from({ length: max }, (_, i) => i + 1).map((n) => {
         const filled = display !== null && n <= display;
         const selected = value === n;
         return (
@@ -142,7 +150,7 @@ function CriterionCard({ criterion, score, comment, onScore, onComment }) {
               background: '#2563eb', color: '#fff',
               fontSize: 13, fontWeight: 800,
             }}>
-              {score}/10
+              {score}/{getRangeMax(criterion.scoringRange)}
             </span>
           )}
         </div>
@@ -153,7 +161,7 @@ function CriterionCard({ criterion, score, comment, onScore, onComment }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
           Score
         </div>
-        <ScoreSelector value={score ?? null} onChange={onScore} />
+        <ScoreSelector value={score ?? null} onChange={onScore} max={getRangeMax(criterion.scoringRange)} label={criterion.name} />
       </div>
 
       {/* Comment */}
@@ -194,6 +202,7 @@ export default function JudgeLiveScoring() {
   const navigate = useNavigate();
   const location = useLocation();
   const { fetchEvents } = useEventStore();
+  const liveEvents = useEventStore((state) => state.events);
   const { notifyScoreSubmitted } = useNotificationStore();
 
   const [event, setEvent] = useState(null);
@@ -205,6 +214,8 @@ export default function JudgeLiveScoring() {
   const [saving, setSaving] = useState(false);
   const [revoked, setRevoked] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [roundNotice, setRoundNotice] = useState('');
+  const seenRoundKey = useRef(null);
 
   useEffect(() => {
     const stored = getStoredJudge();
@@ -244,13 +255,17 @@ export default function JudgeLiveScoring() {
       // Restore existing scores from Supabase
       if (isSupabaseConfigured && supabase) {
         try {
-          const { data: rows } = await supabase
+          const { data: allRows } = await supabase
             .from('scores')
-            .select('id,event_id,judge_id,contestant_id,criteria_scores,comments,remarks')
+            .select('id,event_id,judge_id,contestant_id,criteria_scores,comments,remarks,round_name')
             .eq('judge_id', stored.judgeId)
             .eq('event_id', matched.id);
 
-          if (rows && rows.length > 0) {
+          // Only this round's scores come back onto the sheet; a new round
+          // starts blank.
+          const rows = (allRows || []).filter((row) => isCurrentRoundScore(row, matched));
+
+          if (rows.length > 0) {
             const restoredScores = {};
             const restoredComments = {};
             const restoredSubmitted = {};
@@ -290,6 +305,76 @@ export default function JudgeLiveScoring() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // The event store already listens for changes to events (and re-checks on
+  // a timer), so following it here is all it takes for this page to pick up
+  // what the organizer does — closing a round, cutting contestants, opening
+  // or ending scoring — without the judge reloading.
+  const eventId = event?.id;
+  useEffect(() => {
+    if (!eventId) return;
+    const fresh = liveEvents.find((entry) => String(entry.id) === String(eventId));
+    if (fresh) setEvent((current) => (current === fresh ? current : fresh));
+  }, [eventId, liveEvents]);
+
+  // A new round starts with a blank sheet. Going back to a reopened round
+  // brings that round's saved scores back.
+  const roundKey = getCurrentRoundKey(event);
+  useEffect(() => {
+    if (!event || !judge?.judgeId) return undefined;
+    if (seenRoundKey.current === null) {
+      seenRoundKey.current = roundKey;
+      return undefined;
+    }
+    if (seenRoundKey.current === roundKey) return undefined;
+    seenRoundKey.current = roundKey;
+
+    let cancelled = false;
+    (async () => {
+      const restoredScores = {};
+      const restoredComments = {};
+      const restoredSubmitted = {};
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: allRows } = await supabase
+            .from('scores')
+            .select('contestant_id,criteria_scores,comments,round_name')
+            .eq('judge_id', judge.judgeId)
+            .eq('event_id', event.id);
+          (allRows || []).filter((row) => isCurrentRoundScore(row, event)).forEach((row) => {
+            restoredScores[row.contestant_id] = { ...(row.criteria_scores || {}) };
+            restoredComments[row.contestant_id] = { ...(row.comments || {}) };
+            if ((event.criteria || []).every((criterion) => restoredScores[row.contestant_id][criterion.id] != null)) {
+              restoredSubmitted[row.contestant_id] = true;
+            }
+          });
+        } catch {
+          // Non-critical — the round simply starts blank.
+        }
+      }
+      if (cancelled) return;
+      const out = new Set((event.eliminatedContestantIds || []).map(String));
+      const stillIn = (event.contestants || []).filter((contestant) => !out.has(String(contestant.id)));
+      setScores(restoredScores);
+      setComments(restoredComments);
+      setSubmitted(restoredSubmitted);
+      setActiveContestantId((stillIn.find((contestant) => !restoredSubmitted[contestant.id]) || stillIn[0])?.id ?? null);
+      setSaveError('');
+      setRoundNotice(`${getCurrentRound(event)?.name || 'A new round'} has started. Your score sheet now shows the ${stillIn.length} contestant${stillIn.length === 1 ? '' : 's'} in this round.`);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roundKey, judge?.judgeId]);
+
+  // If the contestant on screen is cut or marked a no-show, move on.
+  useEffect(() => {
+    if (!event || activeContestantId == null) return;
+    const out = new Set((event.eliminatedContestantIds || []).map(String));
+    if (!out.has(String(activeContestantId))) return;
+    const stillIn = (event.contestants || []).filter((contestant) => !out.has(String(contestant.id)));
+    setActiveContestantId((stillIn.find((contestant) => !submitted[contestant.id]) || stillIn[0])?.id ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, activeContestantId]);
+
   function setScore(contestantId, criterionId, val) {
     // Block editing already-submitted contestants
     if (submitted[contestantId]) return;
@@ -311,6 +396,14 @@ export default function JudgeLiveScoring() {
     const criteria = event?.criteria || [];
     const s = scores[contestantId] || {};
     return criteria.every((c) => s[c.id] != null);
+  }
+
+  // The highest weighted total the rubric allows — 10 on the default scale,
+  // 100 on a 100-point one — so totals are never labelled "/ 10" by rote.
+  function getMaxTotal() {
+    const criteria = event?.criteria || [];
+    const max = criteria.reduce((sum, c) => sum + getRangeMax(c.scoringRange) * (c.weight / 100), 0);
+    return Number.isInteger(max) ? String(max) : max.toFixed(2);
   }
 
   function getWeightedTotal(contestantId) {
@@ -352,6 +445,12 @@ export default function JudgeLiveScoring() {
           event_id: event.id,
           judge_id: judge.judgeId,
           contestant_id: contestantId,
+          // Saved with the row so leaderboards and reports can show who was
+          // scored, and by whom, without looking the ids up again.
+          contestant_name: event.contestants?.find((contestant) => String(contestant.id) === String(contestantId))?.name || null,
+          judge_name: judge.judgeName || null,
+          event_title: event.title || null,
+          round_name: getCurrentRoundKey(event) || null,
           criteria_scores: criteria.reduce((acc, criterion) => {
             acc[criterion.id] = Number(s[criterion.id] || 0);
             return acc;
@@ -473,6 +572,14 @@ export default function JudgeLiveScoring() {
   return (
     <div style={{ minHeight: '100vh', background: '#eef4ff', position: 'relative' }}>
       <AnimatedBackground />
+      {roundNotice && (
+        <div role="status" style={{ position: 'relative', zIndex: 21, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, flexWrap: 'wrap', padding: '10px 16px', background: '#1d4ed8', color: '#ffffff', fontSize: 14, fontWeight: 600 }}>
+          <span><i className="bi bi-arrow-right-circle-fill" style={{ marginRight: 8 }} />{roundNotice}</span>
+          <button type="button" onClick={() => setRoundNotice('')} style={{ border: '1px solid rgba(255,255,255,0.5)', background: 'transparent', color: '#ffffff', borderRadius: 8, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+            OK
+          </button>
+        </div>
+      )}
       {/* Top bar */}
       <div style={{
         background: '#ffffff',
@@ -611,14 +718,14 @@ export default function JudgeLiveScoring() {
                   Scores Submitted
                 </div>
                 <div style={{ fontSize: 15, color: '#64748b', marginBottom: 20 }}>
-                  Weighted total: <strong style={{ color: '#2563eb' }}>{getWeightedTotal(activeContestant.id)} / 10</strong>
+                  Weighted total: <strong style={{ color: '#2563eb' }}>{getWeightedTotal(activeContestant.id)} / {getMaxTotal()}</strong>
                 </div>
                 {/* Summary of submitted scores */}
                 <div style={{ display: 'grid', gap: 8, textAlign: 'left', marginBottom: 20 }}>
                   {criteria.map((c) => (
                     <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 14px', borderRadius: 10, background: '#f8fafc' }}>
                       <span style={{ fontSize: 13, color: '#475569' }}>{c.name}</span>
-                      <span style={{ fontWeight: 700, color: '#0f172a' }}>{scores[activeContestant.id]?.[c.id]}/10</span>
+                      <span style={{ fontWeight: 700, color: '#0f172a' }}>{scores[activeContestant.id]?.[c.id]}/{getRangeMax(c.scoringRange)}</span>
                     </div>
                   ))}
                 </div>
@@ -662,7 +769,7 @@ export default function JudgeLiveScoring() {
                   }}>
                     <span style={{ fontWeight: 700, color: '#1d4ed8' }}>Weighted Total</span>
                     <span style={{ fontWeight: 800, fontSize: 24, color: '#2563eb' }}>
-                      {getWeightedTotal(activeContestant.id)} / 10
+                      {getWeightedTotal(activeContestant.id)} / {getMaxTotal()}
                     </span>
                   </div>
                 )}

@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import EventPicker from '../../components/common/EventPicker';
+import useRememberedEvent from '../../hooks/useRememberedEvent';
 import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
@@ -11,9 +13,22 @@ import useTeamStore from '../../store/teamStore';
 import useRegistrationStore from '../../store/registrationStore';
 import useScoreStore from '../../store/scoreStore';
 import { ensureTournamentAutomation } from '../../services/automationService';
-import { buildAppUrl } from '../../utils/appUrl';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
-import { normalizeEntrants } from '../../utils/bracketEngine';
+import {
+  GROUP_KNOCKOUT_MIN_ENTRANTS,
+  calculateBracketPlacements,
+  generateGroupKnockoutBracket,
+  generateSingleEliminationBracket,
+  normalizeEntrants,
+} from '../../utils/bracketEngine';
+import {
+  BRACKET_FORMAT_LABELS,
+  describeBracketSchedule,
+  hasEventStarted,
+  isBracketEvent,
+  isBracketPublic,
+  isEventOver,
+} from '../../utils/bracketRules';
 
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -149,33 +164,48 @@ function buildEntrants({ event, teams, registrations }) {
 export default function OrganizerBracket() {
   const { user } = useAuthStore();
   const {
-    tournaments,
+    tournaments: allTournaments,
     fetchTournaments,
     updateMatchDraft,
     saveMatchResult,
     generateBracket,
-    publishTournament,
-    lockTournament,
     undoLastResult,
     replaceEntrants,
+    finalizeTournament,
   } = useTournamentStore();
   const { events, fetchEvents, updateEvent, loading } = useEventStore();
+  // Brackets are public, so the store holds every organizer's. This page only
+  // ever works with the brackets of this organizer's own events.
+  const [eventsLoaded, setEventsLoaded] = useState(false);
+  const tournaments = useMemo(() => {
+    const owned = new Set(events.map((event) => String(event.id)));
+    return allTournaments.filter((tournament) => owned.has(String(tournament.eventId)));
+  }, [allTournaments, events]);
   const { teams, fetchTeams } = useTeamStore();
   const { registrations, fetchRegistrations } = useRegistrationStore();
   const { scores, fetchScores, calculateLeaderboard, getScoresForEvent } = useScoreStore();
-  const { success, error, info } = useNotificationStore();
+  const { success, error, info, notifyBracketPublished } = useNotificationStore();
   const [searchParams] = useSearchParams();
-  const [selectedEvent, setSelectedEvent] = useState(searchParams.get('eventId') || '');
+  const eventIdFromUrl = searchParams.get('eventId') || '';
+  const [selectedEvent, setSelectedEvent] = useRememberedEvent(eventIdFromUrl);
   const [bracketType, setBracketType] = useState('single');
   const [tournamentId, setTournamentId] = useState(null);
   const [seedEntrants, setSeedEntrants] = useState([]);
   const [manualEntrantName, setManualEntrantName] = useState('');
   const [pendingRegenerate, setPendingRegenerate] = useState(null);
+  const [seedsOpen, setSeedsOpen] = useState(true);
+  const [confirmingUndo, setConfirmingUndo] = useState(false);
+  const [confirmingFinalize, setConfirmingFinalize] = useState(false);
+  const [confirmingGenerate, setConfirmingGenerate] = useState(false);
+  const [busyAction, setBusyAction] = useState('');
+  const [drag, setDrag] = useState(null); // { from, over } while a row is being dragged
+  const rowRefs = useRef([]);
 
   useEffect(() => {
     if (!user?.id) return undefined;
 
-    fetchEvents(user.id);
+    setEventsLoaded(false);
+    Promise.resolve(fetchEvents(user.id)).finally(() => setEventsLoaded(true));
     fetchTeams();
     fetchRegistrations();
     fetchTournaments();
@@ -200,20 +230,32 @@ export default function OrganizerBracket() {
   }, [fetchEvents, fetchTeams, fetchRegistrations, fetchTournaments, user?.id]);
 
   const eligibleEvents = useMemo(() => {
-    const byId = new Map(events.map((event) => [String(event.id), event]));
-    tournaments.forEach((tournament) => {
-      const eventId = String(tournament.eventId || '');
-      if (!eventId || byId.has(eventId)) return;
-      byId.set(eventId, {
-        id: tournament.eventId,
-        title: tournament.title || tournament.name || `Event ${eventId}`,
-        eventType: 'tournament',
-        type: 'tournament',
-        contestants: tournament.entrantSnapshot || tournament.teams || [],
-      });
-    });
-    return Array.from(byId.values());
-  }, [events, tournaments]);
+    // Only events that are actually decided by a bracket. Judged contests
+    // have their own pages; listing them here just adds noise. The event the
+    // page was opened for stays listed either way.
+    const withBracket = new Set(tournaments.map((tournament) => String(tournament.eventId || '')));
+    return events.filter((event) => (
+      isBracketEvent(event) || withBracket.has(String(event.id)) || String(event.id) === String(selectedEvent)
+    ));
+  }, [events, selectedEvent, tournaments]);
+
+  useEffect(() => {
+    if (!selectedEvent || !eventsLoaded) return;
+    const remembered = events.find((event) => String(event.id) === String(selectedEvent));
+    // Not one of this organizer's events (an old link, or left over from another account).
+    if (!remembered) {
+      const firstBracketEvent = events.find((event) => isBracketEvent(event));
+      setSelectedEvent(firstBracketEvent ? String(firstBracketEvent.id) : '');
+      return;
+    }
+    if (eventIdFromUrl) return;
+    const hasBracketHere = tournaments.some((tournament) => String(tournament.eventId) === String(selectedEvent));
+    if (remembered && !isBracketEvent(remembered) && !hasBracketHere) {
+      const firstBracketEvent = events.find((event) => isBracketEvent(event));
+      setSelectedEvent(firstBracketEvent ? String(firstBracketEvent.id) : '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events, tournaments, selectedEvent, eventIdFromUrl, eventsLoaded]);
 
   const selectedEventTournaments = useMemo(
     () => uniqueTournaments(tournaments.filter((tournament) => String(tournament.eventId) === String(selectedEvent))),
@@ -268,6 +310,22 @@ export default function OrganizerBracket() {
     }
   }, [selectedEvent, selectedEventTournaments, tournamentId]);
 
+  // The seed list is only re-read from saved data when that data actually
+  // changes. The page refetches in the background every few seconds, and
+  // re-reading on every refetch would throw away a shuffle the organizer
+  // hasn't rebuilt the bracket with yet.
+  const idsOf = (list) => (Array.isArray(list) ? list.map((entry) => String(entry?.id)).join(',') : '');
+  const seedSourceKey = [
+    currentTournament?.id || '',
+    currentTournament?.bracketType || '',
+    idsOf(currentTournament?.entrantSnapshot),
+    idsOf(currentTournament?.teams),
+    currentEvent?.id || '',
+    idsOf(currentEvent?.contestants),
+    idsOf(teams.filter((team) => String(team.eventId) === String(currentEvent?.id))),
+    idsOf(registrations.filter((registration) => String(registration.eventId) === String(currentEvent?.id))),
+  ].join('|');
+
   useEffect(() => {
     if (currentTournament?.entrantSnapshot?.length > 0) {
       setSeedEntrants(normalizeEntrants(currentTournament.entrantSnapshot));
@@ -296,7 +354,8 @@ export default function OrganizerBracket() {
 
     setSeedEntrants(nextEntrants);
     setBracketType(currentEvent.bracketType || currentEvent.tournamentFormat || 'single');
-  }, [currentEvent, currentTournament?.bracketType, currentTournament?.entrantSnapshot, currentTournament?.id, currentTournament?.teams, registrations, teams]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedSourceKey]);
 
   const seedSummary = useMemo(
     () =>
@@ -307,7 +366,8 @@ export default function OrganizerBracket() {
     [seedEntrants]
   );
 
-  const canGenerate = seedSummary.length >= 2;
+  // Group Stage + Knockout needs enough entrants for two groups.
+  const canGenerate = seedSummary.length >= (bracketType === 'group-knockout' ? 4 : 2);
   const performanceScores = useMemo(
     () => (currentEvent ? getScoresForEvent(currentEvent.id) : []),
     [currentEvent, getScoresForEvent, scores]
@@ -334,6 +394,51 @@ export default function OrganizerBracket() {
     });
   };
 
+  // Drop a row onto another position.
+  const reorderEntrant = (from, to) => {
+    setSeedEntrants((current) => {
+      if (from === to || to < 0 || to >= current.length) return current;
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return normalizeEntrants(next.map((entrant, position) => ({ ...entrant, seed: position + 1 })));
+    });
+  };
+
+  // Pointer events rather than HTML drag-and-drop, so it works by touch on a
+  // phone as well as with a mouse. The grip also takes the arrow keys.
+  const rowIndexAt = (clientY) => {
+    let found = null;
+    rowRefs.current.forEach((node, index) => {
+      if (!node) return;
+      const box = node.getBoundingClientRect();
+      if (clientY >= box.top && clientY <= box.bottom) found = index;
+    });
+    return found;
+  };
+  const gripProps = (index) => ({
+    onPointerDown: (event) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDrag({ from: index, over: index });
+    },
+    onPointerMove: (event) => {
+      if (!drag) return;
+      const over = rowIndexAt(event.clientY);
+      if (over !== null && over !== drag.over) setDrag({ ...drag, over });
+    },
+    onPointerUp: () => {
+      if (!drag) return;
+      reorderEntrant(drag.from, drag.over);
+      setDrag(null);
+    },
+    onPointerCancel: () => setDrag(null),
+    onKeyDown: (event) => {
+      if (event.key === 'ArrowUp') { event.preventDefault(); moveEntrant(index, -1); }
+      if (event.key === 'ArrowDown') { event.preventDefault(); moveEntrant(index, 1); }
+    },
+  });
+
   const randomizeSeeds = () => {
     setSeedEntrants((current) => {
       const next = [...current];
@@ -343,13 +448,13 @@ export default function OrganizerBracket() {
       }
       return normalizeEntrants(next.map((entrant, position) => ({ ...entrant, seed: position + 1 })));
     });
-    info('Seeds randomized.');
+    info('Order shuffled.');
   };
 
   const resetSeeds = () => {
     if (!currentEvent) return;
     setSeedEntrants(buildEntrants({ event: currentEvent, teams, registrations }));
-    info('Seeds reset from the latest event data.');
+    info('Order reset from the latest event data.');
   };
 
   const addManualEntrant = () => {
@@ -414,8 +519,10 @@ export default function OrganizerBracket() {
       return;
     }
 
+    // A bye is filled in by the bracket itself, not a recorded result, so it
+    // doesn't count as something the organizer would lose.
     const tournamentHasResults = (existingTournament.matches || []).some((match) =>
-      ['completed', 'in-progress', 'bye'].includes(match.status)
+      ['completed', 'in-progress'].includes(match.status)
     );
 
     if (tournamentHasResults && !force) {
@@ -423,24 +530,46 @@ export default function OrganizerBracket() {
       return;
     }
 
-    await commitGenerate(existingTournament, force);
+    await commitGenerate(existingTournament);
   };
 
-  const commitGenerate = async (existingTournament, force) => {
-    await replaceEntrants(existingTournament.id, seedSummary);
-    const generated = await generateBracket(existingTournament.id, {
-      entrants: seedSummary,
-      force,
-    });
-
-    if (!generated) {
-      error('Bracket generation failed.');
+  // Every (re)build of the bracket goes through one confirmation first.
+  const requestGenerate = () => {
+    if (!selectedEvent || !currentEvent) {
+      error('Select an event first.');
       return;
     }
+    if (!canGenerate) {
+      error(`At least ${minimumEntrants} entrants are required for this format.`);
+      return;
+    }
+    setConfirmingGenerate(true);
+  };
 
-    setTournamentId(existingTournament.id);
-    await fetchTournaments(currentEvent.id);
-    success('Bracket generated successfully.');
+  const commitGenerate = async (existingTournament) => {
+    try {
+      await replaceEntrants(existingTournament.id, seedSummary);
+      const generated = await generateBracket(existingTournament.id, {
+        entrants: seedSummary,
+        force: true,
+      });
+
+      if (!generated) {
+        error('The bracket could not be built.');
+        return;
+      }
+
+      setTournamentId(existingTournament.id);
+      await fetchTournaments(currentEvent.id);
+      success(isBracketPublic(currentEvent)
+        ? 'Bracket built. Participants and the public can see it now.'
+        : 'Bracket built. It becomes visible to the public once the event is approved.');
+      if (isBracketPublic(currentEvent)) {
+        notifyBracketPublished(generated, currentEvent).catch(() => {});
+      }
+    } catch (generateError) {
+      error(String(generateError?.message || 'The bracket could not be built.'));
+    }
   };
 
   const handleSaveMatch = async (match) => {
@@ -486,54 +615,300 @@ export default function OrganizerBracket() {
     }
   };
 
-  const copyPublicLink = async () => {
-    if (!currentTournament?.eventId) return;
-    const link = buildAppUrl(`/events/${currentTournament.eventId}/brackets`);
+  const playableMatches = (currentTournament?.matches || []).filter((match) => match.status !== 'bye');
+  const completedMatches = playableMatches.filter((match) => match.status === 'completed').length;
+  const hasBracket = Boolean(currentTournament) && (currentTournament.matches || []).length > 0;
+  const isFinalized = Boolean(currentTournament?.isFinalized);
+  const eventStarted = hasEventStarted(currentEvent);
+  const eventOver = isEventOver(currentEvent);
+  const bracketPublic = isBracketPublic(currentEvent);
+  const hasResults = playableMatches.some((match) => ['completed', 'in-progress'].includes(match.status));
+  // Seeds can be reshuffled and the bracket rebuilt right up until the event starts.
+  const seedsLocked = isFinalized || (eventStarted && hasBracket);
+  const scoresEditable = hasBracket && !isFinalized && !eventOver;
+  const bracketStage = isFinalized ? 'final' : eventOver ? 'over' : eventStarted || hasResults ? 'live' : 'seeding';
+  const canUndo = scoresEditable && (currentTournament.historyLog || []).length > 0;
+
+  // Whether the list on screen differs from the order the bracket was built from.
+  const builtOrder = normalizeEntrants(currentTournament?.entrantSnapshot || []).map((entrant) => String(entrant.id)).join('|');
+  const seedsDirty = hasBracket && !seedsLocked && builtOrder !== seedSummary.map((entrant) => String(entrant.id)).join('|');
+
+  // First-round pairings the current order would produce, so the organizer
+  // sees who plays whom before building anything.
+  const previewMatchups = useMemo(() => {
+    if (bracketType !== 'single' || seedSummary.length < 2) return [];
+    return generateSingleEliminationBracket(seedSummary).matches
+      .filter((match) => Number(match.round) === 1)
+      .map((match) => ({ id: match.id, team1: match.team1, team2: match.team2 }));
+  }, [bracketType, seedSummary]);
+
+  // The groups the current order would be drawn into.
+  const previewGroups = useMemo(() => {
+    if (bracketType !== 'group-knockout' || seedSummary.length < GROUP_KNOCKOUT_MIN_ENTRANTS) return [];
+    const groups = new Map();
+    generateGroupKnockoutBracket(seedSummary).matches
+      .filter((match) => match.stage === 'group')
+      .forEach((match) => {
+        if (!groups.has(match.group)) groups.set(match.group, new Map());
+        [match.team1, match.team2].forEach((team) => groups.get(match.group).set(String(team.id), team));
+      });
+    return Array.from(groups.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([label, members]) => ({ label, teams: Array.from(members.values()).sort((left, right) => left.seed - right.seed) }));
+  }, [bracketType, seedSummary]);
+  const minimumEntrants = bracketType === 'group-knockout' ? GROUP_KNOCKOUT_MIN_ENTRANTS : 2;
+  const canFinalize = hasBracket && !isFinalized && playableMatches.length > 0 && completedMatches === playableMatches.length;
+  const championName = currentTournament?.champion?.name || '';
+  const schedule = describeBracketSchedule(currentEvent, currentTournament);
+  const formatLabel = BRACKET_FORMAT_LABELS[currentTournament?.bracketType || bracketType] || 'Single elimination';
+
+  // Once a bracket exists the seeds are settled, so the list starts folded
+  // away and the bracket itself gets the space.
+  useEffect(() => {
+    setSeedsOpen(!hasBracket);
+  }, [currentTournament?.id, hasBracket]);
+
+  const runBracketAction = async (key, action, doneMessage) => {
+    setBusyAction(key);
     try {
-      await navigator.clipboard.writeText(link);
-      success('Public bracket link copied.');
-    } catch {
-      error('Unable to copy the public bracket link.');
+      await action();
+      if (doneMessage) success(doneMessage);
+    } catch (actionError) {
+      error(String(actionError?.message || 'That action could not be completed.'));
+    } finally {
+      setBusyAction('');
     }
   };
 
-  const handlePerformanceScoringModeChange = async (nextMode) => {
-    if (!currentEvent) return;
-    const nextBracketType = currentEvent.bracketType || currentEvent.tournamentFormat || bracketType || 'single';
-    const updates = nextMode === 'head-to-head-bracket'
-      ? {
-          performanceScoringMode: nextMode,
-          championRule: 'bracket-winner',
-          bracketType: nextBracketType,
-          tournamentFormat: nextBracketType,
-          pointScale: null,
-        }
-      : {
-          performanceScoringMode: nextMode,
-          championRule: nextMode === 'ranked-leaderboard' ? 'lowest-rank-total' : 'highest-average-score',
-          pointScale: currentEvent.pointScale || '100',
-        };
-
-    const updated = await updateEvent(currentEvent.id, updates);
-    if (!updated) {
-      error('Unable to update scoring system.');
-      return;
-    }
-
-    if (nextMode === 'head-to-head-bracket') {
-      setBracketType(nextBracketType);
-      info('Switched to head-to-head bracket. You can generate the bracket now.');
-    } else {
-      info('Switched to points leaderboard.');
-    }
+  const handleUndo = () => {
+    setConfirmingUndo(false);
+    runBracketAction('undo', () => undoLastResult(currentTournament.id), 'Last result undone.');
   };
 
-  const guideStep = !selectedEvent ? 1 : !currentTournament ? 2 : !currentTournament.isPublished ? 3 : 4;
+  const handleFinalize = () => {
+    setConfirmingFinalize(false);
+    runBracketAction('finalize', async () => {
+      const finalized = await finalizeTournament(currentTournament.id);
+      // When this was the event's last open bracket, the event itself is done.
+      const eventBrackets = useTournamentStore.getState().tournaments.filter(
+        (tournament) => String(tournament.eventId) === String(finalized.eventId)
+      );
+      if (eventBrackets.every((tournament) => tournament.isFinalized) && events.some((event) => String(event.id) === String(finalized.eventId))) {
+        await updateEvent(finalized.eventId, { status: 'completed', scoringActive: false });
+      }
+    }, 'Scores finalized. This bracket can no longer be changed.');
+  };
+
+  const guideStep = !selectedEvent ? 1 : !hasBracket ? 2 : isFinalized ? 5 : canFinalize ? 4 : 3;
+
+  const seedsCollapsible = !performanceMode && hasBracket;
+  const seedsEditable = performanceMode || !seedsLocked;
+  const seedPanel = (
+    <div style={panelStyle}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={() => seedsCollapsible && setSeedsOpen((open) => !open)}
+          aria-expanded={seedsOpen}
+          disabled={!seedsCollapsible}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: seedsCollapsible ? 'pointer' : 'default', minWidth: 0 }}
+        >
+          {seedsCollapsible && (
+            <span style={{ width: 32, height: 32, borderRadius: 10, display: 'grid', placeItems: 'center', background: '#eff6ff', color: '#1d4ed8', flexShrink: 0 }}>
+              <i className={seedsOpen ? 'bi bi-chevron-down' : 'bi bi-chevron-right'} />
+            </span>
+          )}
+          <span>
+            <span style={{ display: 'block', color: '#0f172a', fontSize: 16, fontWeight: 800, marginBottom: 2 }}>
+              {performanceMode ? 'Contestant Pool' : 'Matchup Order'}
+              <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 700, color: '#1d4ed8', background: '#eff6ff', borderRadius: 999, padding: '2px 9px' }}>{seedSummary.length}</span>
+            </span>
+            <span style={{ display: 'block', color: '#64748b', fontSize: 13 }}>
+              {performanceMode
+                ? 'Contestants come from approved registrations and event contestants.'
+                : isFinalized
+                  ? 'The order the bracket was built from. It is final.'
+                  : seedsLocked
+                    ? 'The order the bracket was built from. It closed when the event started.'
+                    : hasBracket
+                      ? 'Drag a team to change who plays whom, then rebuild the bracket. Open until the event starts.'
+                      : 'This order decides who plays whom in the first round. Drag a team to move it, or shuffle them all.'}
+            </span>
+          </span>
+        </button>
+        {/* Always shown, so it is clear where shuffling happens — it is just
+            switched off once the order can no longer change. */}
+        {!performanceMode && seedsOpen && !seedsEditable && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              {isFinalized ? 'Scores are finalized' : eventOver ? 'Event is completed' : 'Event has started'}
+            </span>
+            <button
+              disabled
+              title={isFinalized ? 'The scores are finalized, so the order can no longer change' : 'Shuffling is only available before the event starts'}
+              style={{ ...secondaryButtonStyle, opacity: 0.5, cursor: 'not-allowed' }}
+            >
+              <i className="bi bi-shuffle" /> Shuffle
+            </button>
+          </div>
+        )}
+        {!performanceMode && seedsOpen && seedsEditable && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button onClick={randomizeSeeds} disabled={seedSummary.length < 2} style={{ ...secondaryButtonStyle, opacity: seedSummary.length < 2 ? 0.5 : 1 }}>
+              <i className="bi bi-shuffle" /> Shuffle
+            </button>
+            <button onClick={resetSeeds} style={{ ...secondaryButtonStyle, background: '#ffffff', borderColor: '#e2e8f0', color: '#475569' }}>
+              <i className="bi bi-arrow-counterclockwise" /> Reset
+            </button>
+          </div>
+        )}
+      </div>
+
+      {seedsOpen && (
+        <>
+          {seedSummary.length === 0 ? (
+            <div style={{ ...emptyStateStyle, marginTop: 16 }}>
+              {loading ? 'Loading entrants...' : 'No entrants yet. Add teams or registrations to the event, or add one manually below.'}
+            </div>
+          ) : !seedsEditable ? (
+            // Read-only once the event is under way: a compact grid, not a long list.
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8, marginTop: 16 }}>
+              {seedSummary.map((entrant, index) => (
+                <div key={entrant.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', minWidth: 0 }}>
+                  <span style={{ ...seedBadgeStyle, width: 26, height: 26, fontSize: 12 }}>{index + 1}</span>
+                  <span style={{ fontWeight: 700, color: '#0f172a', fontSize: 13, overflowWrap: 'anywhere' }}>{entrant.name}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gap: 8, marginTop: 16 }}>
+              {seedSummary.map((entrant, index) => {
+                const dragging = drag?.from === index;
+                const dropTarget = drag && drag.over === index && drag.from !== index;
+                return (
+                  <div
+                    key={entrant.id}
+                    ref={(node) => { rowRefs.current[index] = node; }}
+                    style={{
+                      ...entrantRowStyle,
+                      opacity: dragging ? 0.45 : 1,
+                      background: dropTarget ? '#eff6ff' : entrantRowStyle.background,
+                      borderColor: dropTarget ? '#60a5fa' : '#e2e8f0',
+                      boxShadow: dropTarget ? `inset 0 ${drag.over < drag.from ? 3 : -3}px 0 #2563eb` : 'none',
+                    }}
+                  >
+                    {!performanceMode && (
+                      <button
+                        type="button"
+                        {...gripProps(index)}
+                        aria-label={`Move ${entrant.name}. Drag, or use the up and down arrow keys.`}
+                        title="Drag to move"
+                        style={{ width: 28, height: 36, border: 'none', background: 'transparent', color: '#94a3b8', cursor: drag ? 'grabbing' : 'grab', touchAction: 'none', fontSize: 18, flexShrink: 0, padding: 0 }}
+                      >
+                        <i className="bi bi-grip-vertical" />
+                      </button>
+                    )}
+                    <span style={seedBadgeStyle}>{index + 1}</span>
+                    <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, color: '#0f172a', overflowWrap: 'anywhere' }}>{entrant.name}</div>
+                      <div style={{ color: '#64748b', fontSize: 12 }}>
+                        <span style={{ textTransform: 'capitalize' }}>{entrant.type}</span> · {ENTRANT_SOURCE_LABELS[entrant.source] || entrant.source}
+                      </div>
+                    </div>
+                    <button onClick={() => removeEntrant(entrant.id)} aria-label={`Remove ${entrant.name}`} title="Remove" style={{ ...iconButtonStyle, border: '1px solid #fecaca', background: '#fef2f2', color: '#dc2626', flexShrink: 0 }}>
+                      <i className="bi bi-trash3" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {seedsEditable && (
+            <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+              <input
+                value={manualEntrantName}
+                onChange={(event) => setManualEntrantName(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') addManualEntrant(); }}
+                placeholder="Add a team or participant by name"
+                aria-label="Name to add"
+                style={{ ...controlStyle, flex: 1, minWidth: 220 }}
+              />
+              <button onClick={addManualEntrant} style={secondaryButtonStyle}>
+                <i className="bi bi-plus-lg" /> Add
+              </button>
+            </div>
+          )}
+
+          {!performanceMode && seedsEditable && previewGroups.length > 0 && (
+            <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 12, background: '#f8fbff', border: '1px solid #dbeafe' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                Groups with this order
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginBottom: 10 }}>
+                Everyone plays everyone in their group. The top two of each group go through to the knockout.
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 8 }}>
+                {previewGroups.map((group) => (
+                  <div key={group.label} style={{ padding: '10px 12px', borderRadius: 10, background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: '#1d4ed8', marginBottom: 6 }}>Group {group.label}</div>
+                    {group.teams.map((team) => (
+                      <div key={team.id} style={{ fontSize: 13, color: '#0f172a', padding: '2px 0', overflowWrap: 'anywhere' }}>{team.name}</div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!performanceMode && seedsEditable && previewMatchups.length > 0 && (
+            <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 12, background: '#f8fbff', border: '1px solid #dbeafe' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+                Who plays whom in the first round
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+                {previewMatchups.map((match, index) => (
+                  <div key={match.id} style={{ padding: '9px 12px', borderRadius: 10, background: '#ffffff', border: '1px solid #e2e8f0', fontSize: 13, color: '#0f172a' }}>
+                    <span style={{ color: '#94a3b8', fontWeight: 700, marginRight: 8 }}>Game {index + 1}</span>
+                    {match.team1 && match.team2
+                      ? <><strong>{match.team1.name}</strong> <span style={{ color: '#94a3b8' }}>vs</span> <strong>{match.team2.name}</strong></>
+                      : <><strong>{(match.team1 || match.team2)?.name}</strong> <span style={{ color: '#64748b' }}>— no game, goes straight to the next round</span></>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!performanceMode && seedsEditable && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 16, padding: '12px 14px', borderRadius: 12, background: seedsDirty || hasResults ? '#fffbeb' : '#f8fafc', border: `1px solid ${seedsDirty || hasResults ? '#fde68a' : '#e2e8f0'}` }}>
+              <span style={{ fontSize: 13, color: seedsDirty || hasResults ? '#92400e' : '#475569', lineHeight: 1.5 }}>
+                {hasResults
+                  ? <><i className="bi bi-exclamation-triangle" style={{ marginRight: 6 }} />Rebuilding clears the match scores already recorded.</>
+                  : seedsDirty
+                    ? <><i className="bi bi-info-circle" style={{ marginRight: 6 }} />You changed the order. Rebuild the bracket to apply it.</>
+                    : hasBracket
+                      ? 'The bracket matches this order. You can reshuffle and rebuild until the event starts.'
+                      : 'Happy with the matchups? Build the bracket. You can still change it until the event starts.'}
+              </span>
+              <button
+                onClick={requestGenerate}
+                disabled={!canGenerate}
+                style={{ ...(seedsDirty || !hasBracket ? primaryButtonStyle : secondaryButtonStyle), opacity: canGenerate ? 1 : 0.5, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
+              >
+                <i className={hasBracket ? 'bi bi-arrow-repeat' : 'bi bi-diagram-3'} style={{ marginRight: 8 }} />
+                {hasBracket ? 'Rebuild Bracket' : 'Build Bracket'}
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   return (
     <DashboardLayout
       title={performanceMode ? 'Points Leaderboard Management' : 'Tournament Bracket Management'}
-      subtitle={performanceMode ? 'Track judge scores and rank contestants by total points' : 'Generate brackets, manage seeds, and push live tournament updates'}
+      subtitle={performanceMode ? 'Track judge scores and rank contestants by total points' : 'Set who plays whom, build the bracket, and record match results'}
     >
       <ConfirmDialog
         open={Boolean(pendingRegenerate)}
@@ -544,8 +919,36 @@ export default function OrganizerBracket() {
         onConfirm={() => {
           const target = pendingRegenerate;
           setPendingRegenerate(null);
-          commitGenerate(target, true);
+          commitGenerate(target);
         }}
+      />
+      <ConfirmDialog
+        open={confirmingGenerate}
+        danger={false}
+        title={hasBracket ? 'Rebuild the bracket with this order?' : 'Build the bracket with this order?'}
+        message={`${previewMatchups.length > 0
+          ? `First round: ${previewMatchups.map((match) => (match.team1 && match.team2 ? `${match.team1.name} vs ${match.team2.name}` : `${(match.team1 || match.team2)?.name} gets a bye`)).join(' · ')}. `
+          : ''}You can still reshuffle and rebuild it any time before the event starts.`}
+        confirmLabel={hasBracket ? 'Rebuild Bracket' : 'Build Bracket'}
+        onCancel={() => setConfirmingGenerate(false)}
+        onConfirm={() => { setConfirmingGenerate(false); handleGenerate(false); }}
+      />
+      <ConfirmDialog
+        open={confirmingFinalize}
+        title="Finalize the scores for good?"
+        message={`This permanently freezes every match score and the champion of "${currentTournament ? getTournamentLabel(currentTournament, currentEvent) : ''}". After this nobody can edit, undo, rebuild or delete it — not you, not an admin. This cannot be undone.`}
+        confirmLabel="Finalize Scores"
+        requireText="FINALIZE"
+        onCancel={() => setConfirmingFinalize(false)}
+        onConfirm={handleFinalize}
+      />
+      <ConfirmDialog
+        open={confirmingUndo}
+        title="Undo the last result?"
+        message="The most recently saved match score will be removed and that match reopened. Any team it advanced goes back a round."
+        confirmLabel="Undo Result"
+        onCancel={() => setConfirmingUndo(false)}
+        onConfirm={handleUndo}
       />
       <div style={{ display: 'grid', gap: 20 }}>
         {!performanceMode && (
@@ -553,47 +956,26 @@ export default function OrganizerBracket() {
             step={guideStep}
             steps={[
               'Pick the event you want a bracket for',
-              'Arrange the seed order below, then click "Generate Bracket"',
-              'Click "Publish" so participants and the public can view it',
-              'Enter match scores in the bracket below as games finish',
+              'Shuffle or drag the teams into order, then build the bracket',
+              'Enter match scores as games finish',
+              'Finalize the scores once every game is done',
             ]}
           />
         )}
 
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <LabeledControl label="Event">
-            <select
+            <EventPicker
+              events={eligibleEvents}
               value={selectedEvent}
-              onChange={(event) => {
-                const nextEventId = event.target.value;
+              onChange={(nextEventId) => {
                 const firstTournament = uniqueTournaments(tournaments).find((tournament) => String(tournament.eventId) === String(nextEventId));
                 setSelectedEvent(nextEventId);
                 setTournamentId(firstTournament?.id || null);
                 setBracketType(firstTournament?.bracketType || 'single');
               }}
-              style={{ ...controlStyle, width: 260 }}
-            >
-              <option value="">Select Event</option>
-              {eligibleEvents.map((event) => (
-                <option key={event.id} value={event.id}>
-                  {event.title}
-                </option>
-              ))}
-            </select>
+            />
           </LabeledControl>
-          {performanceCapable && (
-            <LabeledControl label="Scoring system">
-              <select
-                value={currentEvent?.performanceScoringMode || 'points-leaderboard'}
-                onChange={(event) => handlePerformanceScoringModeChange(event.target.value)}
-                style={{ ...controlStyle, width: 240 }}
-              >
-                <option value="points-leaderboard">Points leaderboard</option>
-                <option value="ranked-leaderboard">Judge ranking</option>
-                <option value="head-to-head-bracket">Head-to-head bracket</option>
-              </select>
-            </LabeledControl>
-          )}
           {!performanceMode && selectedEventTournaments.length > 1 && (
             <LabeledControl label="Bracket (this event has more than one)">
               <select
@@ -615,31 +997,17 @@ export default function OrganizerBracket() {
           )}
           {!performanceMode ? (
             <>
-              <LabeledControl label="Format">
-                <select
-                  value={bracketType}
-                  onChange={(event) => setBracketType(event.target.value)}
-                  style={{ ...controlStyle, width: 220 }}
-                >
-                  <option value="single">Single Elimination</option>
-                  <option value="round-robin">Round Robin</option>
-                  <option value="double" disabled>Double Elimination (Coming Soon)</option>
-                </select>
-              </LabeledControl>
-              <button
-                onClick={() => handleGenerate(false)}
-                style={primaryButtonStyle}
-              >
-                Generate Bracket
-              </button>
-              {currentTournament ? (
+              {!hasBracket && (
                 <button
-                  onClick={() => handleGenerate(true)}
-                  style={secondaryButtonStyle}
+                  onClick={requestGenerate}
+                  disabled={!canGenerate || seedsLocked}
+                  title={seedsLocked ? 'The event has already started' : canGenerate ? undefined : 'Add at least two entrants first'}
+                  style={{ ...primaryButtonStyle, opacity: canGenerate && !seedsLocked ? 1 : 0.5, cursor: canGenerate && !seedsLocked ? 'pointer' : 'not-allowed' }}
                 >
-                  Regenerate
+                  <i className="bi bi-diagram-3" style={{ marginRight: 8 }} />
+                  Build Bracket
                 </button>
-              ) : null}
+              )}
             </>
           ) : performanceCapable ? null : (
             <div style={modeBadgeStyle}>
@@ -700,97 +1068,28 @@ export default function OrganizerBracket() {
           </div>
         ) : null}
 
-        <div style={panelStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-            <div>
-              <h3 style={{ color: '#0f172a', fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{performanceMode ? 'Contestant Pool' : 'Seed Manager'}</h3>
-              <p style={{ color: '#64748b', fontSize: 13, margin: 0 }}>
-                {performanceMode ? 'Contestants come from approved registrations and event contestants.' : 'Entrants come from teams, approved registrations, then event contestants.'}
-              </p>
-            </div>
-            {!performanceMode && <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={randomizeSeeds} style={secondaryButtonStyle}>
-                <i className="bi bi-shuffle" /> Randomize
-              </button>
-              <button onClick={resetSeeds} style={secondaryButtonStyle}>
-                <i className="bi bi-arrow-counterclockwise" /> Reset
-              </button>
-            </div>}
-          </div>
-
-          <div style={{ display: 'grid', gap: 10 }}>
-            {seedSummary.length === 0 ? (
-              <div style={emptyStateStyle}>
-                {loading ? 'Loading entrants...' : 'No real entrants found yet. Add teams or registrations first.'}
-              </div>
-            ) : seedSummary.map((entrant, index) => (
-              <div key={entrant.id} style={performanceMode ? contestantRowStyle : entrantRowStyle}>
-                <div style={{ fontWeight: 800, color: '#2563eb' }}>{performanceMode ? `#${index + 1}` : `Seed ${index + 1}`}</div>
-                <div>
-                  <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {entrant.name}
-                  </div>
-                  <div style={{ color: '#64748b', fontSize: 12 }}>{entrant.type}</div>
-                </div>
-                <div style={{ color: '#475569', fontSize: 13 }}>{ENTRANT_SOURCE_LABELS[entrant.source] || entrant.source}</div>
-                {!performanceMode && <div style={{ display: 'flex', gap: 6 }}>
-                  <button onClick={() => moveEntrant(index, -1)} disabled={index === 0} style={iconButtonStyle}>
-                    <i className="bi bi-arrow-up" />
-                  </button>
-                  <button onClick={() => moveEntrant(index, 1)} disabled={index === seedSummary.length - 1} style={iconButtonStyle}>
-                    <i className="bi bi-arrow-down" />
-                  </button>
-                </div>}
-                <button onClick={() => removeEntrant(entrant.id)} style={{ padding: '8px 12px', borderRadius: 10, border: '1px solid rgba(239,68,68,0.18)', background: 'rgba(239,68,68,0.08)', color: '#f87171', cursor: 'pointer' }}>
-                  <i className="bi bi-trash3" /> Remove
-                </button>
-              </div>
-            ))}
-          </div>
-
-          <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-            <input
-              value={manualEntrantName}
-              onChange={(event) => setManualEntrantName(event.target.value)}
-              placeholder="Add manual entrant"
-              style={{ ...controlStyle, flex: 1, minWidth: 220 }}
-            />
-            <button onClick={addManualEntrant} style={secondaryButtonStyle}>
-              <i className="bi bi-plus-lg" /> Add Entrant
-            </button>
-          </div>
-        </div>
+        {performanceMode && seedPanel}
 
         {!performanceMode && currentTournament ? (
-          <div style={panelStyle}>
-            <h3 style={{ color: '#0f172a', fontSize: 16, fontWeight: 800, marginBottom: 14 }}>Bracket Actions</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-              <ActionButton
-                icon={currentTournament.isPublished ? 'bi-eye-slash' : 'bi-broadcast-pin'}
-                label={currentTournament.isPublished ? 'Unpublish' : 'Publish'}
-                caption={currentTournament.isPublished ? 'Currently visible to participants and the public. Click to hide it again.' : 'Makes this bracket visible to participants and the public.'}
-                onClick={() => publishTournament(currentTournament.id, !currentTournament.isPublished)}
-              />
-              <ActionButton
-                icon="bi-link-45deg"
-                label="Copy Public Link"
-                caption="Copies the link anyone can open to view this bracket (works once published)."
-                onClick={copyPublicLink}
-              />
-              <ActionButton
-                icon={currentTournament.isLocked ? 'bi-unlock' : 'bi-lock'}
-                label={currentTournament.isLocked ? 'Unlock Bracket' : 'Lock Bracket'}
-                caption={currentTournament.isLocked ? 'Editing is currently disabled. Click to allow score changes again.' : 'Prevents any further match score changes — use once results are final.'}
-                onClick={() => lockTournament(currentTournament.id, !currentTournament.isLocked)}
-              />
-              <ActionButton
-                icon="bi-arrow-counterclockwise"
-                label="Undo Last Result"
-                caption="Reverses the most recently saved match score, in case of a mistake."
-                onClick={() => undoLastResult(currentTournament.id).then(() => success('Last result undone.')).catch((undoError) => error(String(undoError?.message || 'Unable to undo the last result.')))}
-              />
-            </div>
-          </div>
+          <BracketStatusBar
+            title={getTournamentLabel(currentTournament, currentEvent)}
+            hasBracket={hasBracket}
+            stage={bracketStage}
+            isPublic={bracketPublic}
+            eventStatus={currentEvent?.status || 'draft'}
+            formatLabel={formatLabel}
+            schedule={schedule}
+            finalizedAt={currentTournament.finalizedAt}
+            teams={seedSummary.length}
+            completed={completedMatches}
+            total={playableMatches.length}
+            champion={championName}
+            canUndo={canUndo}
+            canFinalize={canFinalize}
+            busyAction={busyAction}
+            onUndo={() => setConfirmingUndo(true)}
+            onFinalize={() => setConfirmingFinalize(true)}
+          />
         ) : null}
 
         {performanceMode ? (
@@ -846,20 +1145,32 @@ export default function OrganizerBracket() {
               </div>
             )}
           </div>
-        ) : currentTournament ? (
+        ) : hasBracket ? (
           <LiveBracket
             tournament={currentTournament}
-            editable={!currentTournament.isLocked}
+            editable={scoresEditable}
             onScoreChange={handleScoreFieldChange}
             onSaveMatch={handleSaveMatch}
             onAutoAdvanceMatch={handleAutoAdvanceMatch}
             onPickWinner={handlePickWinner}
           />
         ) : (
-          <div style={emptyPanelStyle}>
-            Generate a bracket to begin entering tournament match scores.
+          <div style={{ ...emptyPanelStyle, textAlign: 'center', padding: '36px 24px' }}>
+            <div style={{ fontSize: 30, color: '#93c5fd', marginBottom: 8 }}><i className="bi bi-diagram-3" /></div>
+            <div style={{ fontWeight: 800, color: '#0f172a', marginBottom: 4 }}>No bracket yet</div>
+            <div style={{ fontSize: 13 }}>
+              {!selectedEvent
+                ? 'Pick an event above to get started.'
+                : canGenerate
+                  ? 'Check the matchup order below, then click "Build Bracket".'
+                  : 'Add at least two entrants below, then generate the bracket.'}
+            </div>
           </div>
         )}
+
+        {!performanceMode && hasBracket && <BracketStandings rows={calculateBracketPlacements(currentTournament)} roundRobin={currentTournament.bracketType === 'round-robin'} />}
+
+        {!performanceMode && seedPanel}
 
       </div>
     </DashboardLayout>
@@ -920,26 +1231,204 @@ function GuideBanner({ step, steps }) {
   );
 }
 
-function ActionButton({ icon, label, caption, onClick }) {
+function StatusChip({ icon, label, tone }) {
+  const tones = {
+    green: { color: '#047857', background: '#ecfdf5', border: '#a7f3d0' },
+    amber: { color: '#b45309', background: '#fffbeb', border: '#fde68a' },
+    slate: { color: '#334155', background: '#f1f5f9', border: '#cbd5e1' },
+    blue: { color: '#1d4ed8', background: '#eff6ff', border: '#bfdbfe' },
+  }[tone];
   return (
-    <button
-      onClick={onClick}
-      style={{
-        textAlign: 'left',
-        padding: '14px 16px',
-        borderRadius: 14,
-        border: '1px solid #bfdbfe',
-        background: '#eff6ff',
-        cursor: 'pointer',
-        display: 'grid',
-        gap: 6,
-      }}
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 11px', borderRadius: 999, fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap', color: tones.color, background: tones.background, border: `1px solid ${tones.border}` }}>
+      <i className={`bi ${icon}`} />
+      {label}
+    </span>
+  );
+}
+
+const EVENT_STATUS_LABELS = {
+  draft: 'a draft',
+  pending: 'awaiting approval',
+  rejected: 'not approved',
+  upcoming: 'upcoming',
+  approved: 'approved',
+  published: 'published',
+  active: 'in progress',
+  completed: 'completed',
+};
+
+const STAGE_CHIPS = {
+  seeding: { icon: 'bi-shuffle', label: 'Matchups open · can still be reshuffled', tone: 'blue' },
+  live: { icon: 'bi-pencil-square', label: 'In progress · enter scores as games finish', tone: 'blue' },
+  over: { icon: 'bi-flag-fill', label: 'Event completed · scores are read-only', tone: 'slate' },
+  final: { icon: 'bi-shield-lock-fill', label: 'Finalized · scores are permanent', tone: 'green' },
+};
+
+// The bracket's state at a glance. Who can see it and whether it can still be
+// edited both follow the event's status, so there are no publish or lock
+// switches here — only the two actions that are about the results themselves.
+function BracketStatusBar({
+  title, hasBracket, stage, isPublic, eventStatus, formatLabel, schedule, finalizedAt, teams, completed, total, champion,
+  canUndo, canFinalize, busyAction, onUndo, onFinalize,
+}) {
+  const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const finished = total > 0 && completed === total;
+  const busy = Boolean(busyAction);
+  const statusText = EVENT_STATUS_LABELS[eventStatus] || eventStatus;
+  const stageChip = STAGE_CHIPS[stage];
+
+  return (
+    <section
+      aria-label="Bracket status and actions"
+      style={{ background: '#ffffff', border: '1px solid #bfdbfe', borderLeft: `5px solid ${stage === 'final' ? '#10b981' : stage === 'over' ? '#64748b' : '#2563eb'}`, borderRadius: 16, padding: 20, boxShadow: '0 14px 36px rgba(37, 99, 235, 0.10)' }}
     >
-      <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#1d4ed8', fontWeight: 800, fontSize: 13 }}>
-        <i className={`bi ${icon}`} /> {label}
-      </span>
-      <span style={{ color: '#64748b', fontSize: 12, fontWeight: 500, lineHeight: 1.4 }}>{caption}</span>
-    </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0, flex: '1 1 280px' }}>
+          <div style={{ color: '#64748b', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Current bracket</div>
+          <h3 style={{ margin: '0 0 8px', color: '#0f172a', fontSize: 18, fontWeight: 800, overflowWrap: 'anywhere' }}>{title}</h3>
+          <div style={{ display: 'flex', gap: '6px 16px', flexWrap: 'wrap', color: '#475569', fontSize: 13, marginBottom: 12 }}>
+            <span><i className="bi bi-diagram-3" style={{ marginRight: 6, color: '#64748b' }} />{formatLabel}</span>
+            {schedule.dates && <span><i className="bi bi-calendar-event" style={{ marginRight: 6, color: '#64748b' }} />{schedule.dates}</span>}
+            {schedule.times && <span><i className="bi bi-clock" style={{ marginRight: 6, color: '#64748b' }} />{schedule.times}</span>}
+            {schedule.venue && <span><i className="bi bi-geo-alt" style={{ marginRight: 6, color: '#64748b' }} />{schedule.venue}</span>}
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <StatusChip icon={stageChip.icon} label={stageChip.label} tone={stageChip.tone} />
+            <StatusChip
+              icon={isPublic ? 'bi-broadcast' : 'bi-eye-slash'}
+              label={isPublic ? `Public · event is ${statusText}` : `Hidden · event is ${statusText}`}
+              tone={isPublic ? 'green' : 'amber'}
+            />
+          </div>
+        </div>
+
+        {stage !== 'final' && hasBracket && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button
+              onClick={onUndo}
+              disabled={busy || !canUndo}
+              title={canUndo ? 'Reverse the most recently saved match score' : stage === 'over' ? 'The event is completed' : 'No saved result to undo yet'}
+              style={{ ...toolbarButtonStyle, background: '#ffffff', borderColor: '#e2e8f0', color: '#475569', opacity: busy || !canUndo ? 0.5 : 1, cursor: busy || !canUndo ? 'not-allowed' : 'pointer' }}
+            >
+              <i className={busyAction === 'undo' ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-arrow-counterclockwise'} />
+              Undo Last Result
+            </button>
+            <button
+              onClick={onFinalize}
+              disabled={busy || !canFinalize}
+              title={canFinalize ? 'Permanently freeze these results' : 'Every match needs a saved result first'}
+              style={{ ...toolbarButtonStyle, background: '#0f172a', border: '1px solid #0f172a', color: '#ffffff', opacity: busy || !canFinalize ? 0.45 : 1, cursor: busy || !canFinalize ? 'not-allowed' : 'pointer' }}
+            >
+              <i className={busyAction === 'finalize' ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-shield-lock-fill'} />
+              Finalize Scores
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginTop: 18, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+        <div>
+          <div style={statLabelStyle}>Entrants</div>
+          <div style={statValueStyle}>{teams}</div>
+        </div>
+        <div style={{ gridColumn: 'span 2', minWidth: 0 }}>
+          <div style={statLabelStyle}>Matches played</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={statValueStyle}>{completed} <span style={{ color: '#94a3b8', fontWeight: 700 }}>/ {total}</span></div>
+            <div role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100} aria-label="Matches played" style={{ flex: 1, height: 8, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden', minWidth: 60 }}>
+              <div style={{ width: `${progress}%`, height: '100%', background: finished ? '#10b981' : '#2563eb' }} />
+            </div>
+          </div>
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={statLabelStyle}>Champion</div>
+          <div style={{ ...statValueStyle, display: 'flex', alignItems: 'center', gap: 8, overflowWrap: 'anywhere' }}>
+            {champion ? <><i className="bi bi-trophy-fill" style={{ color: '#f59e0b', fontSize: 16 }} />{champion}</> : <span style={{ color: '#94a3b8', fontWeight: 700 }}>To be decided</span>}
+          </div>
+        </div>
+      </div>
+
+      {stage === 'final' ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#065f46', fontSize: 13 }}>
+          <i className="bi bi-shield-lock-fill" />
+          <span>
+            These results were finalized{finalizedAt ? ` on ${new Date(finalizedAt).toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''} and are permanent. Scores can no longer be edited by anyone.
+          </span>
+        </div>
+      ) : canFinalize ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#eff6ff', color: '#1e3a8a', fontSize: 13 }}>
+          <i className="bi bi-info-circle" />
+          Every match has a result. Check the scores, then click "Finalize Scores" to make them permanent.
+        </div>
+      ) : stage === 'over' ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#f1f5f9', color: '#334155', fontSize: 13 }}>
+          <i className="bi bi-flag-fill" />
+          The event is completed, so match scores are read-only.
+        </div>
+      ) : !isPublic ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#fffbeb', color: '#92400e', fontSize: 13 }}>
+          <i className="bi bi-eye-slash" />
+          Participants and the public will see this bracket automatically once the event is approved.
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// First to last, for every entrant — not just the finalists.
+function BracketStandings({ rows, roundRobin }) {
+  if (rows.length === 0) return null;
+  const final = rows[0].final;
+  return (
+    <div style={panelStyle}>
+      <h3 style={{ color: '#0f172a', fontSize: 16, fontWeight: 800, margin: '0 0 4px' }}>{final ? 'Final Standings' : 'Standings So Far'}</h3>
+      <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 14px' }}>
+        {roundRobin
+          ? 'Ordered by wins, then score difference.'
+          : final
+            ? 'Placement follows how far each team went. Teams knocked out in the same round are ordered by how close their last game was.'
+            : 'Teams still playing are listed first. Placements are final once every match has been played.'}
+      </p>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 460, fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <th style={{ padding: '10px 12px', borderBottom: '1px solid #dbeafe', width: 80 }}>Place</th>
+              <th style={{ padding: '10px 12px', borderBottom: '1px solid #dbeafe' }}>Team</th>
+              <th style={{ padding: '10px 12px', borderBottom: '1px solid #dbeafe', textAlign: 'right' }}>Win–loss</th>
+              <th style={{ padding: '10px 12px', borderBottom: '1px solid #dbeafe' }}>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const top = final && row.placement <= 3;
+              return (
+                <tr key={row.id} style={{ background: top ? '#f8fbff' : undefined }}>
+                  <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff' }}>
+                    <span style={{ ...seedBadgeStyle, display: 'inline-grid', background: final && row.placement === 1 ? '#1d4ed8' : '#dbeafe', color: final && row.placement === 1 ? '#ffffff' : '#1d4ed8' }}>
+                      {final ? row.placement : '–'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', fontWeight: 700, color: '#0f172a' }}>{row.name}</td>
+                  <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#334155' }}>{row.wins}–{row.losses}</td>
+                  <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', color: '#475569' }}>
+                    {!final && row.eliminatedRound === null
+                      ? 'Still playing'
+                      : final && row.placement === 1
+                        ? 'Champion'
+                        : row.eliminatedRound
+                          ? `Eliminated in round ${row.eliminatedRound}`
+                          : final && row.group
+                            ? `Out in the group stage (Group ${row.group})`
+                          : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -1051,28 +1540,62 @@ const scoreStatStyle = {
   border: '1px solid #bfdbfe',
 };
 
+// Wraps instead of using fixed columns, so the row stays usable on a phone.
 const entrantRowStyle = {
-  display: 'grid',
-  gridTemplateColumns: '72px 1fr 120px 110px 140px',
+  display: 'flex',
+  flexWrap: 'wrap',
   gap: 12,
   alignItems: 'center',
-  padding: '12px 14px',
+  padding: '10px 14px',
   borderRadius: 12,
   background: '#f8fafc',
   border: '1px solid #e2e8f0',
   color: '#0f172a',
 };
 
-const contestantRowStyle = {
+const seedBadgeStyle = {
+  width: 32,
+  height: 32,
+  borderRadius: 10,
   display: 'grid',
-  gridTemplateColumns: '72px 1fr 120px 140px',
-  gap: 12,
+  placeItems: 'center',
+  flexShrink: 0,
+  background: '#dbeafe',
+  color: '#1d4ed8',
+  fontWeight: 800,
+  fontSize: 13,
+  fontVariantNumeric: 'tabular-nums',
+};
+
+const toolbarButtonStyle = {
+  display: 'inline-flex',
   alignItems: 'center',
-  padding: '12px 14px',
+  gap: 8,
+  padding: '11px 16px',
   borderRadius: 12,
-  background: '#f8fafc',
-  border: '1px solid #e2e8f0',
+  border: '1px solid #bfdbfe',
+  background: '#eff6ff',
+  color: '#1d4ed8',
+  fontWeight: 800,
+  fontSize: 13,
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
+
+const statLabelStyle = {
+  color: '#64748b',
+  fontSize: 11,
+  fontWeight: 700,
+  textTransform: 'uppercase',
+  letterSpacing: '0.06em',
+  marginBottom: 4,
+};
+
+const statValueStyle = {
   color: '#0f172a',
+  fontSize: 18,
+  fontWeight: 800,
+  fontVariantNumeric: 'tabular-nums',
 };
 
 const statusBadgeStyle = {

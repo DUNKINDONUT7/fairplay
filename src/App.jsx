@@ -4,6 +4,7 @@ import useAuthStore from './store/authStore';
 import ToastContainer from './components/ui/Toast';
 import GlobalAuthModal from './components/auth/GlobalAuthModal';
 import AIChatbot from './components/AIChatbot';
+import OrganizerTour from './components/onboarding/OrganizerTour';
 import MaintenanceScreen from './components/common/MaintenanceScreen';
 import usePlatformSettingsStore from './store/platformSettingsStore';
 import { startLiveSync } from './utils/supabaseClient';
@@ -59,9 +60,10 @@ const OrganizerEvents = lazy(() => import('./pages/organizer/OrganizerEvents'));
 const OrganizerContestants = lazy(() => import('./pages/organizer/OrganizerContestants'));
 const OrganizerAttendance = lazy(() => import('./pages/organizer/OrganizerAttendance'));
 const OrganizerJudges = lazy(() => import('./pages/organizer/OrganizerJudges'));
-const OrganizerSchedule = lazy(() => import('./pages/organizer/OrganizerSchedule'));
 const OrganizerVenues = lazy(() => import('./pages/organizer/OrganizerVenues'));
 const OrganizerReports = lazy(() => import('./pages/organizer/OrganizerReports'));
+const OrganizerEventReport = lazy(() => import('./pages/organizer/OrganizerEventReport'));
+const OrganizerRanking = lazy(() => import('./pages/organizer/OrganizerRanking'));
 const OrganizerSettings = lazy(() => import('./pages/organizer/OrganizerSettings'));
 const OrganizerBracket = lazy(() => import('./pages/organizer/OrganizerBracket'));
 const OrganizerScoring = lazy(() => import('./pages/organizer/OrganizerScoring'));
@@ -412,6 +414,7 @@ export default function App() {
   return (
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <GlobalAuthModal />
+      <OrganizerTour />
       <AppErrorBoundary>
         <MaintenanceGate>
         <Suspense fallback={<LoadingFallback />}>
@@ -455,14 +458,15 @@ export default function App() {
           <Route path="/organizer/contestants" element={<ProtectedRoute role="organizer"><OrganizerContestants /></ProtectedRoute>} />
           <Route path="/organizer/attendance" element={<ProtectedRoute role="organizer"><OrganizerAttendance /></ProtectedRoute>} />
           <Route path="/organizer/judges" element={<ProtectedRoute role="organizer"><OrganizerJudges /></ProtectedRoute>} />
-          <Route path="/organizer/schedule" element={<ProtectedRoute role="organizer"><OrganizerSchedule /></ProtectedRoute>} />
           <Route path="/organizer/venues" element={<ProtectedRoute role="organizer"><OrganizerVenues /></ProtectedRoute>} />
           <Route path="/organizer/reports" element={<ProtectedRoute role="organizer"><OrganizerReports /></ProtectedRoute>} />
+          <Route path="/organizer/reports/:id" element={<ProtectedRoute role="organizer"><OrganizerEventReport /></ProtectedRoute>} />
           <Route path="/organizer/settings" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />
           <Route path="/organizer/brackets" element={<ProtectedRoute role="organizer"><OrganizerBracket /></ProtectedRoute>} />
           <Route path="/organizer/scoring" element={<ProtectedRoute role="organizer"><OrganizerScoring /></ProtectedRoute>} />
           <Route path="/organizer/events/:id" element={<ProtectedRoute role="organizer"><OrganizerEventDetail /></ProtectedRoute>} />
           <Route path="/organizer/events/:id/edit" element={<ProtectedRoute role="organizer"><EditEventDetails /></ProtectedRoute>} />
+          <Route path="/organizer/events/:id/ranking" element={<ProtectedRoute role="organizer"><OrganizerRanking /></ProtectedRoute>} />
           <Route path="/organizer/verify/:token" element={<ProtectedRoute role="organizer"><OrganizerVerification /></ProtectedRoute>} />
           <Route path="/organizer/certificates" element={<ProtectedRoute role="organizer"><OrganizerCertificates /></ProtectedRoute>} />
           <Route path="/organizer/profile" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />

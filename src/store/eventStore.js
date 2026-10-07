@@ -99,6 +99,14 @@ function buildEventMetadata(event) {
     rounds: event.rounds,
     scorerAssignments: event.scorerAssignments,
     scoringActive: event.scoringActive,
+    // Who is out of the running (cut after a round, or marked a no-show).
+    // Judges' sheets on other devices read this from the database, so it has
+    // to be saved, not just kept in the organizer's browser.
+    eliminatedContestantIds: Array.isArray(event.eliminatedContestantIds) ? event.eliminatedContestantIds : [],
+    // Progress through the rounds set in Create Event, and each finished
+    // round's results.
+    currentRoundIndex: Number(event.currentRoundIndex) || 0,
+    roundResults: Array.isArray(event.roundResults) ? event.roundResults : [],
   };
 }
 
@@ -295,6 +303,18 @@ const useEventStore = create(
           set({ loading: true, error: null });
         }
         const organizerBusinessId = getBusinessActorId(organizerId);
+
+        // An organizer's pages must never show someone else's events, not even
+        // for the moment before this load finishes (the list may still hold
+        // what a public page or another account loaded).
+        if (organizerId && isSupabaseConfigured) {
+          const owned = get().events.filter((event) =>
+            String(event.organizer_id) === String(organizerBusinessId) ||
+            matchesActorIdentity(event.organizerAuthProfileId, organizerId) ||
+            matchesActorIdentity(event.organizerEmail, organizerId)
+          );
+          if (owned.length !== get().events.length) set({ events: owned });
+        }
 
         if (!isSupabaseConfigured) {
           const localEvents = get().events;

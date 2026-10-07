@@ -4,6 +4,7 @@ import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useRegistrationStore from '../../store/registrationStore';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
+import { getEventCapacity, getEventFullMessage } from '../../utils/systemSelectors';
 import {
   getParticipantLimitMessage,
   inferTeamLimitConfig,
@@ -123,6 +124,10 @@ export default function PublicParticipantRegister() {
         setPhase('already');
         return;
       }
+      if (getEventCapacity(ev).isFull) {
+        setPhase('full');
+        return;
+      }
       setPhase('form');
     }
     init();
@@ -139,6 +144,11 @@ export default function PublicParticipantRegister() {
       const currentEvent = useEventStore.getState().getEventById(eventId);
       if (isRegistrationClosed(currentEvent)) {
         setErrorMsg('Registration is closed because this event is already ongoing.');
+        setSubmitting(false);
+        return;
+      }
+      if (getEventCapacity(currentEvent).isFull) {
+        setErrorMsg(getEventFullMessage(currentEvent));
         setSubmitting(false);
         return;
       }
@@ -366,6 +376,26 @@ export default function PublicParticipantRegister() {
             <h1 style={{ fontSize: 22, fontWeight: 900, color: '#0f172a', marginBottom: 8 }}>Registration Closed</h1>
             <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>
               {event?.title || 'This event'} is already ongoing, so new registrations are no longer accepted.
+            </p>
+            <button type="button" onClick={() => navigate('/participant')} style={secondaryActionButton}>
+              <i className="bi bi-arrow-left" />
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'full') {
+    return (
+      <div style={fullPage}>
+        <div style={card}>
+          <div style={{ textAlign: 'center' }}>
+            <i className="bi bi-people-fill" style={{ fontSize: 48, color: '#f59e0b', marginBottom: 16 }} />
+            <h1 style={{ fontSize: 22, fontWeight: 900, color: '#0f172a', marginBottom: 8 }}>Registration Full</h1>
+            <p style={{ color: '#64748b', fontSize: 14, lineHeight: 1.7, marginBottom: 18 }}>
+              {event?.title || 'This event'} has reached its maximum of {getEventCapacity(event).max} participants, so new registrations are no longer accepted.
             </p>
             <button type="button" onClick={() => navigate('/participant')} style={secondaryActionButton}>
               <i className="bi bi-arrow-left" />

@@ -1,7 +1,7 @@
 import useCertificateStore from '../store/certificateStore';
 import useScoreStore from '../store/scoreStore';
 import useTournamentStore from '../store/tournamentStore';
-import { normalizeEntrants } from '../utils/bracketEngine';
+import { GROUP_KNOCKOUT_MIN_ENTRANTS, normalizeEntrants } from '../utils/bracketEngine';
 
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -82,6 +82,13 @@ export async function ensureTournamentAutomation(event, contestants = [], option
   const subEventName = getSubEventName(subEvent);
   const bracketType = options.bracketType || subEvent?.tournamentFormat || subEvent?.bracketType || event.bracketType || event.tournamentFormat || 'single';
   let tournament = findTournamentForEvent(tournamentStore.tournaments, event, subEvent);
+
+  // Scorers open the bracket the organizer built — seeding, matchups and all.
+  // Without this, simply opening a scorer link would re-read the roster and
+  // could overwrite the organizer's seeding, or rebuild the bracket outright.
+  if (options.preserveExisting && tournament && (tournament.matches || []).length > 0) {
+    return tournament;
+  }
   const entrants = normalizeEntrants(
     contestants.map((contestant, index) => ({
       id: contestant.id,
@@ -113,7 +120,10 @@ export async function ensureTournamentAutomation(event, contestants = [], option
     tournament = tournamentStore.getTournamentById(tournament.id);
   }
 
-  if (entrants.length >= 2) {
+  // A group stage needs enough entrants for two groups; until then the
+  // bracket simply waits rather than failing a registration.
+  const minimumEntrants = (tournament.bracketType || bracketType) === 'group-knockout' ? GROUP_KNOCKOUT_MIN_ENTRANTS : 2;
+  if (entrants.length >= minimumEntrants) {
     const shouldGenerate =
       (tournament.matches || []).length === 0 ||
       (!hasStartedResults(tournament.matches) && entrantsChanged(tournament.entrantSnapshot || tournament.teams || [], entrants));
@@ -127,7 +137,7 @@ export async function ensureTournamentAutomation(event, contestants = [], option
   return tournament;
 }
 
-export async function ensureEventTournamentAutomation(event, contestants = []) {
+export async function ensureEventTournamentAutomation(event, contestants = [], options = {}) {
   if (!event || !TOURNAMENT_TYPES.includes(event.eventType || event.type)) return [];
 
   const subEvents = Array.isArray(event.subEvents)
@@ -138,11 +148,11 @@ export async function ensureEventTournamentAutomation(event, contestants = []) {
     const tournaments = [];
     for (const subEvent of subEvents) {
       const subEventContestants = filterContestantsForSubEvent(contestants, subEvent);
-      tournaments.push(await ensureTournamentAutomation(event, subEventContestants, { subEvent }));
+      tournaments.push(await ensureTournamentAutomation(event, subEventContestants, { ...options, subEvent }));
     }
     return tournaments.filter(Boolean);
   }
 
-  const tournament = await ensureTournamentAutomation(event, contestants);
+  const tournament = await ensureTournamentAutomation(event, contestants, options);
   return tournament ? [tournament] : [];
 }

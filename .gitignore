@@ -19,3 +19,6 @@ supabase/.temp/
 
 .vercel
 .env*
+
+# Local database backups (contain personal data)
+.backups/

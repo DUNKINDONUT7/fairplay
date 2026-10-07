@@ -1,4 +1,6 @@
+import EventPicker from '../../components/common/EventPicker';
 import { useEffect, useState } from 'react';
+import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
@@ -136,19 +138,14 @@ export default function JudgeScoring() {
 
           <div style={{ marginBottom: '20px' }}>
             <label style={{ display: 'block', color: '#64748b', fontSize: '12px', marginBottom: '8px' }}>Select Event</label>
-            <select
+            <EventPicker
+              events={scoringEvents.length > 0 ? scoringEvents : events}
               value={selectedEventId}
-              onChange={(e) => handleEventChange(e.target.value)}
-              style={{ width: '100%', padding: '12px 14px', borderRadius: '12px', background: '#f8fafc', border: `1px solid ${selectedEventId ? '#93c5fd' : '#fca5a5'}`, color: selectedEventId ? '#0f172a' : '#64748b', fontSize: '14px' }}
-            >
-              <option value="">— Select an event to score —</option>
-              {scoringEvents.map((e) => (
-                <option key={e.id} value={e.id}>{e.title}</option>
-              ))}
-              {scoringEvents.length === 0 && events.map((e) => (
-                <option key={e.id} value={e.id}>{e.title}</option>
-              ))}
-            </select>
+              onChange={handleEventChange}
+              placeholder="Select an event to score"
+              ariaLabel="Event to score"
+              style={{ width: '100%' }}
+            />
           </div>
 
           {resolvedEvent && (
@@ -210,9 +207,10 @@ export default function JudgeScoring() {
             <>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 {criteria.map((criterion) => {
-                  const rangeMax = Number(String(criterion.scoringRange || '10').split('-').pop()) || 10;
+                  const rangeMax = getRangeMax(criterion.scoringRange);
                   const score = scores[criterion.id] ?? 0;
-                  const buttons = Array.from({ length: rangeMax + 1 }, (_, i) => i);
+                  const longScale = rangeMax >= LONG_SCALE_FROM;
+                  const buttons = longScale ? [] : Array.from({ length: rangeMax + 1 }, (_, i) => i);
                   return (
                     <div key={criterion.id} style={{ backgroundColor: '#ffffff', padding: '20px', borderRadius: '18px', border: '1px solid #dbeafe', boxShadow: '0 10px 30px rgba(37,99,235,0.06)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '12px', flexWrap: 'wrap' }}>
@@ -229,7 +227,10 @@ export default function JudgeScoring() {
                           </div>
                         </div>
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {longScale && (
+                        <LargeScoreInput value={score} max={rangeMax} label={criterion.name} onChange={(n) => handleScoreChange(criterion.id, n)} />
+                      )}
+                      <div style={{ display: longScale ? 'none' : 'flex', flexWrap: 'wrap', gap: 8 }}>
                         {buttons.map((n) => {
                           const isSelected = score === n;
                           return (

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isLeagueMatch } from '../../utils/bracketEngine';
 import './LiveBracket.css';
 
 function getMatchStatusClass(status) {
@@ -32,7 +33,13 @@ export default function LiveBracket({
   const championName = tournament.champion?.name || null;
   const [editedFields, setEditedFields] = useState({});
 
-  const isRoundRobin = tournament.bracketType === 'round-robin';
+  // League-style matches (round robin, or the group stage of Group Stage +
+  // Knockout) are saved with a button and may be drawn.
+  const isLeague = (match) => isLeagueMatch(tournament, match);
+  const isGroupKnockout = tournament.bracketType === 'group-knockout';
+  const groupLabels = isGroupKnockout
+    ? Array.from(new Set((tournament.standings || []).map((entry) => entry.group).filter(Boolean))).sort()
+    : [];
   const isFinalMatch = (match) => Number(match.round || 0) === Number(tournament.totalRounds || 0);
 
   return (
@@ -43,7 +50,6 @@ export default function LiveBracket({
           { label: 'Match Progress', value: tournament.liveStatus || tournament.status || 'waiting' },
           { label: 'Rounds', value: tournament.totalRounds || rounds.length || 0 },
           { label: 'Teams', value: (tournament.teams || []).length },
-          { label: 'Public Visibility', value: tournament.isPublished ? 'published' : 'not published' },
         ].map((item) => (
           <div key={item.label} className="live-bracket-stat">
             <div className="live-bracket-stat-label">{item.label}</div>
@@ -83,12 +89,14 @@ export default function LiveBracket({
                   const slots = [
                     {
                       key: 'score1',
+                      placeholder: match.placeholder1,
                       team: match.team1,
                       value: match.score1,
                       winner: match.winner?.id === match.team1?.id,
                     },
                     {
                       key: 'score2',
+                      placeholder: match.placeholder2,
                       team: match.team2,
                       value: match.score2,
                       winner: match.winner?.id === match.team2?.id,
@@ -102,7 +110,7 @@ export default function LiveBracket({
                           <span className={`live-bracket-pill ${getMatchStatusClass(match.status)}`}>
                             {getMatchStatusLabel(match.status)}
                           </span>
-                          <span className="live-bracket-match-id">{match.id}</span>
+                          <span className="live-bracket-match-id">{match.group ? `Group ${match.group} · ` : ''}{match.id}</span>
                         </div>
 
                         {slots.map((slot) => (
@@ -113,7 +121,7 @@ export default function LiveBracket({
                             <div className="live-bracket-slot-main">
                               <div className="live-bracket-slot-name">{slot.team?.name || 'TBD'}</div>
                               <div className="live-bracket-slot-subtitle">
-                                {slot.team ? `Seed ${slot.team.seed || '-'}` : 'Waiting for prior result'}
+                                {slot.team ? `No. ${slot.team.seed || '-'}` : (slot.placeholder || 'Waiting for prior result')}
                               </div>
                             </div>
 
@@ -138,7 +146,7 @@ export default function LiveBracket({
 
                                   await onScoreChange?.(match.id, slot.key, nextValue);
 
-                                  if (isRoundRobin || isFinalMatch(match) || !match.team1 || !match.team2) {
+                                  if (isLeague(match) || isFinalMatch(match) || !match.team1 || !match.team2) {
                                     return;
                                   }
 
@@ -163,7 +171,7 @@ export default function LiveBracket({
                           </div>
                         ))}
 
-                        {editable && onPickWinner && match.team1 && match.team2 && !['completed', 'bye'].includes(match.status) && (
+                        {editable && onPickWinner && !isLeague(match) && match.team1 && match.team2 && !['completed', 'bye'].includes(match.status) && (
                           <div className="live-bracket-pick-row">
                             <button
                               type="button"
@@ -188,11 +196,11 @@ export default function LiveBracket({
                               ? `${match.winner.name} advances`
                               : match.status === 'bye'
                                 ? 'Automatic advance'
-                                : editable && !isRoundRobin && !isFinalMatch(match)
+                                : editable && !isLeague(match) && !isFinalMatch(match)
                                   ? 'Pick a winner above, or enter exact scores below'
                                 : 'Waiting for result'}
                           </div>
-                          {editable && (isRoundRobin || isFinalMatch(match)) && (
+                          {editable && (isLeague(match) || isFinalMatch(match)) && (
                             <button
                               className="live-bracket-action"
                               type="button"
@@ -212,6 +220,38 @@ export default function LiveBracket({
           ))}
         </div>
       </div>
+
+      {groupLabels.map((group) => (
+        <div key={group} className="live-bracket-banner">
+          <div className="live-bracket-banner-title">Group {group} Standings</div>
+          <div className="live-bracket-banner-copy">The top two go through to the knockout.</div>
+          <div style={{ marginTop: 14, overflowX: 'auto' }}>
+            <table className="live-bracket-standings">
+              <thead>
+                <tr>
+                  {['Rank', 'Team', 'P', 'W', 'L', 'D', 'Pts', 'Diff'].map((header) => (
+                    <th key={header}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tournament.standings.filter((entry) => entry.group === group).map((entry) => (
+                  <tr key={entry.teamId}>
+                    <td>{entry.rank}</td>
+                    <td className="live-bracket-standings-team">{entry.teamName}</td>
+                    <td>{entry.played}</td>
+                    <td>{entry.wins}</td>
+                    <td>{entry.losses}</td>
+                    <td>{entry.draws}</td>
+                    <td className="live-bracket-standings-points">{entry.points}</td>
+                    <td>{entry.scoreDifference}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
 
       {tournament.bracketType === 'round-robin' && Array.isArray(tournament.standings) && tournament.standings.length > 0 ? (
         <div className="live-bracket-banner">
