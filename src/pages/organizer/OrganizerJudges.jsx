@@ -8,121 +8,200 @@ import useScoreStore from '../../store/scoreStore';
 import useAuthStore from '../../store/authStore';
 
 // ─── Score Detail Modal ───────────────────────────────────────────────────────
+// One event at a time, as a table: contestants down the side, criteria across.
+// Only the table scrolls — the header, the event tabs and the page behind stay put.
 function JudgeScoreModal({ judge, allScores, events, onClose }) {
-  // A score names its judge by id or by email; `keys` holds every form this judge goes by.
-  const judgeScores = allScores.filter((s) => judge.keys.includes(String(s.judgeId).toLowerCase()));
+  const [activeEventId, setActiveEventId] = useState('');
 
-  // Group by event
-  const byEvent = {};
-  judgeScores.forEach((s) => {
-    const key = String(s.eventId);
-    if (!byEvent[key]) byEvent[key] = { title: s.eventTitle || `Event ${key}`, scores: [] };
-    byEvent[key].scores.push(s);
-  });
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [onClose]);
 
-  const eventGroups = Object.values(byEvent);
+  const eventGroups = useMemo(() => {
+    // A score names its judge by id or by email; `keys` holds every form this judge goes by.
+    const judgeScores = allScores.filter((s) => judge.keys.includes(String(s.judgeId).toLowerCase()));
+    const byEvent = new Map();
+    judgeScores.forEach((score) => {
+      const key = String(score.eventId);
+      if (!byEvent.has(key)) {
+        const event = events.find((entry) => String(entry.id) === key);
+        byEvent.set(key, { id: key, title: event?.title || score.eventTitle || `Event ${key}`, criteria: event?.criteria || [], rows: [] });
+      }
+      const group = byEvent.get(key);
+      const values = score.criteriaScores || {};
+      const entered = Object.values(values).map(Number).filter((value) => Number.isFinite(value));
+      // The same weighted total the leaderboard uses; a plain average only when the event has no criteria.
+      const total = group.criteria.length
+        ? useScoreStore.getState().calculateWeightedTotal(group.criteria, values).totalScore
+        : entered.length ? entered.reduce((sum, value) => sum + value, 0) / entered.length : null;
+      group.rows.push({ id: score.id, name: score.contestantName || `Contestant ${score.contestantId}`, values, total, remarks: score.remarks || '', timestamp: score.timestamp });
+    });
+    byEvent.forEach((group) => {
+      // Criteria the event no longer lists still get a column, so no score is hidden.
+      const known = new Set(group.criteria.map((criterion) => String(criterion.id)));
+      const extra = [...new Set(group.rows.flatMap((row) => Object.keys(row.values)))].filter((id) => !known.has(id));
+      group.columns = [
+        ...group.criteria.map((criterion) => ({ id: String(criterion.id), name: criterion.name, weight: criterion.weight, max: Number(String(criterion.scoringRange || '').split('-').pop()) || 10 })),
+        ...extra.map((id) => ({ id, name: id, weight: null, max: 10 })),
+      ];
+      group.rows.sort((left, right) => (right.total ?? -1) - (left.total ?? -1));
+      const totals = group.rows.map((row) => row.total).filter((value) => value !== null);
+      group.average = totals.length ? totals.reduce((sum, value) => sum + value, 0) / totals.length : null;
+    });
+    return [...byEvent.values()];
+  }, [allScores, events, judge]);
+
+  const active = eventGroups.find((group) => group.id === activeEventId) || eventGroups[0] || null;
+  const fmt = (value) => (value === null || value === undefined ? '—' : Number(value).toFixed(2));
 
   return (
     <div
       onClick={onClose}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 2000, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '40px 16px', overflowY: 'auto' }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', backdropFilter: 'blur(4px)', zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Scores given by ${judge.name}`}
         onClick={(e) => e.stopPropagation()}
-        style={{ background: '#fff', borderRadius: 20, width: '100%', maxWidth: 680, boxShadow: '0 24px 60px rgba(0,0,0,0.18)', overflow: 'hidden' }}
+        style={{ background: '#fff', borderRadius: 20, width: '100%', maxWidth: 860, maxHeight: 'calc(100vh - 32px)', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 60px rgba(0,0,0,0.18)', overflow: 'hidden' }}
       >
         {/* Header */}
-        <div style={{ padding: '24px 28px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Score Details</p>
-            <h2 style={{ margin: '4px 0 2px', fontSize: 20, fontWeight: 800, color: '#0f172a' }}>{judge.name}</h2>
-            {judge.email && <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>{judge.email}</p>}
+        <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+            <span style={{ width: 46, height: 46, borderRadius: 14, flexShrink: 0, display: 'grid', placeItems: 'center', background: '#eff6ff', color: '#1d4ed8', fontWeight: 800, fontSize: 18 }}>
+              {String(judge.name || 'J').replace(/^(judge|prof\.|ms\.|mr\.|mrs\.|dr\.)\s+/i, '').charAt(0).toUpperCase()}
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Scores given</p>
+              <h2 style={{ margin: '2px 0', fontSize: 19, fontWeight: 800, color: '#0f172a', overflowWrap: 'anywhere' }}>{judge.name}</h2>
+              <p style={{ margin: 0, fontSize: 13, color: '#64748b', overflowWrap: 'anywhere' }}>{[judge.specialty, judge.email].filter(Boolean).join(' · ')}</p>
+            </div>
           </div>
-          <button onClick={onClose} style={{ background: '#f1f5f9', border: 'none', borderRadius: 10, padding: '8px 12px', cursor: 'pointer', color: '#64748b', fontSize: 13, fontWeight: 700 }}>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: '#f1f5f9', border: 'none', borderRadius: 10, width: 36, height: 36, cursor: 'pointer', color: '#64748b', fontSize: 13, flexShrink: 0 }}>
             <i className="bi bi-x-lg" />
           </button>
         </div>
 
-        {/* Body */}
-        <div style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {eventGroups.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '32px 0', color: '#94a3b8' }}>
-              <i className="bi bi-inbox" style={{ fontSize: 40, display: 'block', marginBottom: 10 }} />
-              This judge has not submitted any scores yet.
-            </div>
-          ) : eventGroups.map((group) => (
-            <div key={group.title}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                <i className="bi bi-trophy-fill" style={{ color: '#f59e0b' }} />
-                <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#0f172a' }}>{group.title}</h3>
-                <span style={{ marginLeft: 'auto', fontSize: 12, background: '#eff6ff', color: '#2563eb', border: '1px solid #bfdbfe', padding: '3px 10px', borderRadius: 999, fontWeight: 700 }}>
-                  {group.scores.length} contestant{group.scores.length !== 1 ? 's' : ''}
-                </span>
+        {!active ? (
+          <div style={{ textAlign: 'center', padding: '48px 24px', color: '#94a3b8' }}>
+            <i className="bi bi-inbox" style={{ fontSize: 40, display: 'block', marginBottom: 10 }} />
+            This judge has not submitted any scores yet.
+          </div>
+        ) : (
+          <>
+            {/* Event tabs + summary */}
+            <div style={{ padding: '14px 24px', borderBottom: '1px solid #eef2f7', display: 'grid', gap: 12, flexShrink: 0 }}>
+              {eventGroups.length > 1 && (
+                <div role="tablist" aria-label="Event" style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 2 }}>
+                  {eventGroups.map((group) => {
+                    const selected = group.id === active.id;
+                    return (
+                      <button
+                        key={group.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={selected}
+                        onClick={() => setActiveEventId(group.id)}
+                        title={group.title}
+                        style={{ flexShrink: 0, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '8px 14px', borderRadius: 999, border: selected ? '1px solid #2563eb' : '1px solid #e2e8f0', background: selected ? '#eff6ff' : '#ffffff', color: selected ? '#1d4ed8' : '#475569', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+                      >
+                        {group.title}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <i className="bi bi-trophy-fill" style={{ color: '#f59e0b' }} />
+                  <span style={{ overflowWrap: 'anywhere' }}>{active.title}</span>
+                </h3>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 12, fontWeight: 700 }}>
+                  <span style={{ padding: '4px 10px', borderRadius: 999, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+                    {active.rows.length} contestant{active.rows.length === 1 ? '' : 's'} scored
+                  </span>
+                  <span style={{ padding: '4px 10px', borderRadius: 999, background: '#f8fafc', color: '#334155', border: '1px solid #e2e8f0' }}>
+                    Average given {fmt(active.average)}
+                  </span>
+                </div>
               </div>
+            </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {group.scores.map((score) => {
-                  const criteriaEntries = Object.entries(score.criteriaScores || {});
-                  const total = criteriaEntries.reduce((sum, [, v]) => sum + Number(v), 0);
-                  const avg = criteriaEntries.length > 0 ? (total / criteriaEntries.length).toFixed(1) : '—';
-
-                  // Find criteria names from event
-                  const event = events.find((e) => String(e.id) === String(score.eventId));
-                  const criteriaList = event?.criteria || [];
-
-                  return (
-                    <div key={score.id} style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 14, padding: '14px 18px' }}>
-                      {/* Contestant header */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: criteriaEntries.length > 0 ? 12 : 0 }}>
-                        <div style={{ fontWeight: 700, color: '#0f172a', fontSize: 14, display: 'flex', alignItems: 'center', gap: 7 }}>
-                          <i className="bi bi-person-fill" style={{ color: '#6366f1' }} />
-                          {score.contestantName || `Contestant ${score.contestantId}`}
+            {/* The only part that scrolls */}
+            <div style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+              <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    <th style={{ ...modalThStyle, textAlign: 'left', left: 0, zIndex: 3, minWidth: 190 }}>Contestant</th>
+                    {active.columns.map((column) => (
+                      <th key={column.id} style={{ ...modalThStyle, minWidth: 96 }} title={column.name}>
+                        <div style={{ maxWidth: 130, margin: '0 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{column.name}</div>
+                        <div style={{ fontWeight: 600, color: '#94a3b8', textTransform: 'none', letterSpacing: 0 }}>
+                          {column.weight !== null && column.weight !== undefined ? `${column.weight}% · ` : ''}max {column.max}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                            {score.timestamp ? new Date(score.timestamp).toLocaleDateString('en-PH', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
-                          </span>
-                          <span style={{ background: '#1d4ed8', color: '#fff', fontWeight: 800, fontSize: 15, padding: '4px 12px', borderRadius: 8, fontFamily: 'monospace' }}>
-                            {avg}
-                          </span>
+                      </th>
+                    ))}
+                    <th style={{ ...modalThStyle, right: 0, zIndex: 3, minWidth: 84 }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {active.rows.map((row, rowIndex) => (
+                    <tr key={row.id}>
+                      <td style={{ ...modalTdStyle, textAlign: 'left', position: 'sticky', left: 0, background: '#ffffff', zIndex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ width: 24, height: 24, borderRadius: 8, flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 800, background: rowIndex === 0 ? '#fef3c7' : '#f1f5f9', color: rowIndex === 0 ? '#b45309' : '#64748b' }}>{rowIndex + 1}</span>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, color: '#0f172a' }}>{row.name}</div>
+                            {row.remarks && <div style={{ fontSize: 12, color: '#64748b', fontWeight: 400, maxWidth: 260 }}>“{row.remarks}”</div>}
+                          </div>
                         </div>
-                      </div>
-
-                      {/* Criteria breakdown */}
-                      {criteriaEntries.length > 0 && (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 8 }}>
-                          {criteriaEntries.map(([criterionId, val]) => {
-                            const criterion = criteriaList.find((c) => String(c.id) === String(criterionId));
-                            const label = criterion?.name || criterionId;
-                            const max = criterion?.scoringRange
-                              ? Number(String(criterion.scoringRange).split('-').pop()) || 10
-                              : 10;
-                            const pct = max > 0 ? (Number(val) / max) * 100 : 0;
-                            return (
-                              <div key={criterionId} style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 10, padding: '8px 12px' }}>
-                                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 600, marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                  <div style={{ flex: 1, height: 5, background: '#e2e8f0', borderRadius: 999 }}>
-                                    <div style={{ height: '100%', width: `${pct}%`, background: pct >= 80 ? '#22c55e' : pct >= 50 ? '#3b82f6' : '#f59e0b', borderRadius: 999 }} />
-                                  </div>
-                                  <span style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', minWidth: 24, textAlign: 'right' }}>{val}</span>
+                      </td>
+                      {active.columns.map((column) => {
+                        const value = row.values[column.id];
+                        const number = Number(value);
+                        const has = value !== undefined && value !== null && value !== '' && Number.isFinite(number);
+                        return (
+                          <td key={column.id} style={modalTdStyle}>
+                            {has ? (
+                              <>
+                                <div style={{ fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{number}</div>
+                                <div aria-hidden="true" style={{ height: 4, borderRadius: 999, background: '#e2e8f0', margin: '5px auto 0', width: 56, overflow: 'hidden' }}>
+                                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, (number / column.max) * 100))}%`, background: '#2563eb', borderRadius: 999 }} />
                                 </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                              </>
+                            ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                          </td>
+                        );
+                      })}
+                      <td style={{ ...modalTdStyle, position: 'sticky', right: 0, background: '#f8fbff', zIndex: 1 }}>
+                        <span style={{ fontWeight: 800, fontSize: 15, color: '#1d4ed8', fontVariantNumeric: 'tabular-nums' }}>{fmt(row.total)}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
+
+            <div style={{ padding: '12px 24px', borderTop: '1px solid #e2e8f0', fontSize: 12, color: '#64748b', flexShrink: 0 }}>
+              Highest total first. Total is this judge’s weighted score for the contestant, using each criterion’s weight.
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
+
+const modalThStyle = { position: 'sticky', top: 0, zIndex: 2, background: '#f8fafc', padding: '10px 12px', textAlign: 'center', fontSize: 11, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e2e8f0', verticalAlign: 'bottom' };
+const modalTdStyle = { padding: '12px', textAlign: 'center', borderBottom: '1px solid #f1f5f9', verticalAlign: 'middle' };
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const PAGE_SIZES = [5, 10, 20];
