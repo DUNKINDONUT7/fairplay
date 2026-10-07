@@ -9,7 +9,8 @@ import useAuthStore from '../../store/authStore';
 
 // ─── Score Detail Modal ───────────────────────────────────────────────────────
 function JudgeScoreModal({ judge, allScores, events, onClose }) {
-  const judgeScores = allScores.filter((s) => String(s.judgeId).toLowerCase() === judge.id);
+  // A score names its judge by id or by email; `keys` holds every form this judge goes by.
+  const judgeScores = allScores.filter((s) => judge.keys.includes(String(s.judgeId).toLowerCase()));
 
   // Group by event
   const byEvent = {};
@@ -181,7 +182,7 @@ export default function OrganizerJudges() {
 
     judges.filter((j) => myJudgeIds.has(String(j.id))).forEach((j) => {
       const id = j.email?.toLowerCase() || String(j.id);
-      map[id] = { id, name: j.name || 'Judge', email: j.email || '', specialty: j.specialty || 'General', scoredEvents: {}, lastScoredAt: null };
+      map[id] = { id, keys: [...new Set([id, String(j.id).toLowerCase()])], name: j.name || 'Judge', email: j.email || '', specialty: j.specialty || 'General', scoredEvents: {}, lastScoredAt: null };
       aliases[String(j.id).toLowerCase()] = id;
       if (j.email) aliases[j.email.toLowerCase()] = id;
     });
@@ -190,7 +191,7 @@ export default function OrganizerJudges() {
       const rawId = String(score.judgeId).toLowerCase();
       const id = aliases[rawId] || rawId;
       if (!map[id]) {
-        map[id] = { id, name: score.judgeName || 'Judge', email: id.includes('@') ? id : '', specialty: 'General', scoredEvents: {}, lastScoredAt: null };
+        map[id] = { id, keys: [id], name: score.judgeName || 'Judge', email: id.includes('@') ? id : '', specialty: 'General', scoredEvents: {}, lastScoredAt: null };
       } else if ((map[id].name === 'Judge' || !map[id].name) && score.judgeName && score.judgeName !== 'Judge') {
         map[id].name = score.judgeName;
       }
