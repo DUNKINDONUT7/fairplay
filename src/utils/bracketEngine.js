@@ -34,7 +34,7 @@ export function normalizeEntrants(entrants = []) {
 }
 
 export function buildRounds(matches = [], totalRounds = 0, bracketType = 'single') {
-  if (bracketType === 'group-knockout') {
+  if (bracketType === 'group-knockout' || bracketType === 'league-playoff') {
     return buildGroupKnockoutRounds(matches);
   }
 
@@ -490,7 +490,7 @@ export function calculateBracketPlacements(tournament) {
     }));
   }
 
-  if (tournament.bracketType === 'group-knockout') {
+  if (tournament.bracketType === 'group-knockout' || tournament.bracketType === 'league-playoff') {
     return calculateGroupKnockoutPlacements(tournament, teams, matches, final);
   }
 
@@ -590,17 +590,29 @@ export function calculateGroupStandings(matches = [], teams = []) {
   );
 }
 
+// The stage everyone plays before the knockout: the groups of Group Stage +
+// Knockout, or the single league table of League + Playoffs.
+const isFirstStageMatch = (match) => match.stage === 'group' || match.stage === 'league';
+
+function calculateFirstStageStandings(matches = [], teams = []) {
+  const leagueMatches = matches.filter((match) => match.stage === 'league');
+  return leagueMatches.length > 0
+    ? calculateRoundRobinStandings(leagueMatches, teams)
+    : calculateGroupStandings(matches, teams);
+}
+
 function buildGroupKnockoutRounds(matches) {
-  const groupRounds = matches.filter((match) => match.stage === 'group').reduce((max, match) => Math.max(max, Number(match.round) || 0), 0);
+  const stageLabel = matches.some((match) => match.stage === 'league') ? 'League Games' : 'Group Stage';
+  const groupRounds = matches.filter(isFirstStageMatch).reduce((max, match) => Math.max(max, Number(match.round) || 0), 0);
   const knockoutRounds = matches.filter((match) => match.stage === 'knockout').reduce((max, match) => Math.max(max, (Number(match.round) || 0) - groupRounds), 0);
   const rounds = [];
 
   for (let round = 1; round <= groupRounds; round += 1) {
     rounds.push({
       round,
-      label: `Group Stage · Round ${round}`,
+      label: `${stageLabel} · Round ${round}`,
       matches: matches
-        .filter((match) => match.stage === 'group' && Number(match.round) === round)
+        .filter((match) => isFirstStageMatch(match) && Number(match.round) === round)
         .sort((left, right) => String(left.group).localeCompare(String(right.group)) || left.position - right.position),
     });
   }
@@ -617,25 +629,23 @@ function buildGroupKnockoutRounds(matches) {
   return rounds;
 }
 
-// Puts the group winners and runners-up into the first knockout round once
-// every group match has a result; empties those slots again if one does not.
+// Fills every knockout slot that is fed by a first-stage rank (group winners
+// and runners-up, or the league's top teams) once every first-stage match has
+// a result; empties those slots again if one does not.
 function seedKnockoutFromGroups(matches, standings) {
-  const groupMatches = matches.filter((match) => match.stage === 'group');
-  const groupStageDone = groupMatches.length > 0 && groupMatches.every((match) => match.status === 'completed');
-  const firstKnockoutRound = matches
-    .filter((match) => match.stage === 'knockout')
-    .reduce((min, match) => Math.min(min, Number(match.round)), Infinity);
+  const firstStageMatches = matches.filter(isFirstStageMatch);
+  const firstStageDone = firstStageMatches.length > 0 && firstStageMatches.every((match) => match.status === 'completed');
 
   matches
-    .filter((match) => match.stage === 'knockout' && Number(match.round) === firstKnockoutRound)
+    .filter((match) => match.stage === 'knockout' && (match.source1 || match.source2))
     .forEach((match) => {
       const pick = (source) => {
-        if (!groupStageDone || !source) return null;
-        const row = standings.find((entry) => entry.group === source.group && entry.rank === source.rank);
+        if (!firstStageDone) return null;
+        const row = standings.find((entry) => entry.rank === source.rank && (!source.group || entry.group === source.group));
         return row ? { id: row.teamId, name: row.teamName, seed: row.seed } : null;
       };
-      match.team1 = pick(match.source1);
-      match.team2 = pick(match.source2);
+      if (match.source1) match.team1 = pick(match.source1);
+      if (match.source2) match.team2 = pick(match.source2);
       match.status = match.team1 && match.team2 ? 'scheduled' : 'pending';
     });
 }
@@ -718,9 +728,11 @@ export function updateGroupKnockoutMatch(tournament, matchId, updates = {}, opti
   if (!current) return tournament;
   const totalRounds = Number(tournament.totalRounds || 0);
 
-  if (current.stage === 'group') {
+  if (isFirstStageMatch(current)) {
     if (matches.some((match) => match.stage === 'knockout' && match.status === 'completed')) {
-      throw new Error('Group stage results can no longer change once the knockout has started.');
+      throw new Error(current.stage === 'league'
+        ? 'League scores can no longer change once the playoffs have started.'
+        : 'Group stage results can no longer change once the knockout has started.');
     }
     if (finalize) {
       const score1 = Number(current.score1 || 0);
@@ -755,19 +767,133 @@ export function updateGroupKnockoutMatch(tournament, matchId, updates = {}, opti
     }
   }
 
-  const standings = calculateGroupStandings(matches, tournament.teams || []);
-  if (current.stage === 'group') seedKnockoutFromGroups(matches, standings);
+  const standings = calculateFirstStageStandings(matches, tournament.teams || []);
+  if (isFirstStageMatch(current)) seedKnockoutFromGroups(matches, standings);
 
   const nextTournament = { ...tournament, matches, standings, rounds: buildGroupKnockoutRounds(matches) };
   return { ...nextTournament, champion: finalize ? calculateChampion(nextTournament) : tournament.champion };
 }
 
-// Placements for Group Stage + Knockout: knockout teams first, by how far they
-// went (same tie-breaks as single elimination); then everyone who did not get
-// out of their group, by group rank, points and score difference.
+// ============================================================================
+// League + Playoffs
+//
+// Everyone plays everyone once in a single table. The teams at the bottom are
+// out, and the rest go into a seeded knockout: 1st against the lowest-ranked
+// team still in, and so on. How many go through follows from the number of
+// entrants, so a small league gets real league games first instead of opening
+// on a quarterfinal padded out with byes.
+//
+// League matches carry stage: 'league'; the knockout works exactly like the
+// one in Group Stage + Knockout, and is filled in the moment the last league
+// match is saved.
+// ============================================================================
+
+export const LEAGUE_PLAYOFF_MIN_ENTRANTS = 3;
+
+// 3-4 entrants: top 2 play the final. 5-6: top 4 play semifinals. 7-8: top 6,
+// with 1st and 2nd going straight to the semifinals. 9 or more: top 8.
+export function leaguePlayoffTeamCount(entrantCount) {
+  if (entrantCount >= 9) return 8;
+  if (entrantCount >= 7) return 6;
+  if (entrantCount >= 5) return 4;
+  return 2;
+}
+
+// Read back from the bracket itself, so it stays right for a tournament that
+// was generated under a different rule.
+export function countPlayoffTeams(matches = []) {
+  return matches
+    .filter((match) => match.stage === 'knockout')
+    .reduce((count, match) => count + (match.source1 ? 1 : 0) + (match.source2 ? 1 : 0), 0);
+}
+
+function ordinal(rank) {
+  const tens = rank % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][rank % 10] || 'th';
+  return `${rank}${suffix}`;
+}
+
+export function generateLeaguePlayoffBracket(entrants = []) {
+  const teams = normalizeEntrants(entrants);
+  if (teams.length < LEAGUE_PLAYOFF_MIN_ENTRANTS) {
+    throw new Error(`League + Playoffs needs at least ${LEAGUE_PLAYOFF_MIN_ENTRANTS} entrants.`);
+  }
+
+  const league = generateRoundRobinBracket(teams);
+  const leagueRounds = league.totalRounds;
+  const matches = league.matches.map((match) => ({
+    ...match,
+    id: `LG-R${match.round}-M${match.position + 1}`,
+    bracket: 'league',
+    stage: 'league',
+  }));
+
+  const playoffTeams = leaguePlayoffTeamCount(teams.length);
+  const slots = nextPowerOfTwo(playoffTeams);
+  const seedOrder = standardSeedOrder(slots);
+  const knockoutRounds = Math.log2(slots);
+  const knockoutMatch = (step, position, source1 = null, source2 = null) => ({
+    id: `KO-R${step}-M${position + 1}`,
+    bracket: 'knockout',
+    stage: 'knockout',
+    round: leagueRounds + step,
+    position,
+    team1: null,
+    team2: null,
+    source1,
+    source2,
+    placeholder1: source1 ? `${ordinal(source1.rank)} place` : 'Winner of previous match',
+    placeholder2: source2 ? `${ordinal(source2.rank)} place` : 'Winner of previous match',
+    score1: 0,
+    score2: 0,
+    winner: null,
+    status: 'pending',
+    scheduledDate: null,
+    completedDate: null,
+  });
+
+  // A top team with nobody to play in the opening round goes straight into
+  // the round after it; its opening match is simply not created.
+  const directEntries = new Map();
+  for (let position = 0; position < slots / 2; position += 1) {
+    const high = seedOrder[position * 2];
+    const low = seedOrder[position * 2 + 1];
+    if (low <= playoffTeams) {
+      matches.push(knockoutMatch(1, position, { rank: high }, { rank: low }));
+    } else {
+      directEntries.set(`${Math.floor(position / 2)}-${position % 2}`, { rank: high });
+    }
+  }
+  for (let step = 2; step <= knockoutRounds; step += 1) {
+    for (let position = 0; position < slots / (2 ** step); position += 1) {
+      matches.push(step === 2
+        ? knockoutMatch(step, position, directEntries.get(`${position}-0`) || null, directEntries.get(`${position}-1`) || null)
+        : knockoutMatch(step, position));
+    }
+  }
+
+  return {
+    teams,
+    matches,
+    rounds: buildGroupKnockoutRounds(matches),
+    standings: calculateFirstStageStandings(matches, teams),
+    totalRounds: leagueRounds + knockoutRounds,
+    totalSlots: teams.length,
+    byes: slots - playoffTeams,
+    currentRound: 1,
+    champion: null,
+  };
+}
+
+// Placements for Group Stage + Knockout and League + Playoffs: knockout teams
+// first, by how far they went (same tie-breaks as single elimination); then
+// everyone who did not get out of the first stage, by rank, points and score
+// difference.
 function calculateGroupKnockoutPlacements(tournament, teams, matches, final) {
   const totalRounds = Number(tournament.totalRounds || 0);
-  const groupRow = new Map(calculateGroupStandings(matches, teams).map((row) => [String(row.teamId), row]));
+  const groupRow = new Map(calculateFirstStageStandings(matches, teams).map((row) => [String(row.teamId), row]));
+  const isLeague = matches.some((match) => match.stage === 'league');
+  const knockoutSeeded = matches.some((match) => match.stage === 'knockout' && (match.team1 || match.team2));
   const table = new Map(teams.map((team) => [String(team.id), {
     id: String(team.id), name: team.name, seed: team.seed,
     wins: 0, losses: 0, scoreFor: 0, scoreAgainst: 0,
@@ -818,6 +944,8 @@ function calculateGroupKnockoutPlacements(tournament, teams, matches, final) {
       // "Out in round N" only makes sense for a knockout exit.
       eliminatedRound: inKnockout ? row.eliminatedRound : null,
       group: groupRow.get(row.id)?.group || null,
+      // Missed the playoffs: known as soon as the league games are done.
+      outInLeague: isLeague && knockoutSeeded && !inKnockout,
       placement: index + 1,
       final,
     }));
@@ -827,17 +955,26 @@ function calculateGroupKnockoutPlacements(tournament, teams, matches, final) {
 export function generateBracketFor(bracketType, entrants = []) {
   if (bracketType === 'round-robin') return generateRoundRobinBracket(entrants);
   if (bracketType === 'group-knockout') return generateGroupKnockoutBracket(entrants);
+  if (bracketType === 'league-playoff') return generateLeaguePlayoffBracket(entrants);
   return generateSingleEliminationBracket(entrants);
 }
 
 export function updateBracketMatch(tournament, matchId, updates = {}, options = {}) {
   if (tournament.bracketType === 'round-robin') return updateRoundRobinMatch(tournament, matchId, updates, options);
-  if (tournament.bracketType === 'group-knockout') return updateGroupKnockoutMatch(tournament, matchId, updates, options);
+  if (tournament.bracketType === 'group-knockout' || tournament.bracketType === 'league-playoff') {
+    return updateGroupKnockoutMatch(tournament, matchId, updates, options);
+  }
   return updateSingleEliminationMatch(tournament, matchId, updates, options);
 }
 
 // League-style matches are saved with a button and may be drawn; knockout
 // matches need a winner.
 export function isLeagueMatch(tournament, match) {
-  return tournament?.bracketType === 'round-robin' || match?.stage === 'group';
+  return tournament?.bracketType === 'round-robin' || match?.stage === 'group' || match?.stage === 'league';
+}
+
+export function minimumEntrantsFor(bracketType) {
+  if (bracketType === 'group-knockout') return GROUP_KNOCKOUT_MIN_ENTRANTS;
+  if (bracketType === 'league-playoff') return LEAGUE_PLAYOFF_MIN_ENTRANTS;
+  return 2;
 }

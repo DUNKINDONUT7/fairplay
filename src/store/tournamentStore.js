@@ -426,7 +426,9 @@ const useTournamentStore = create(
             ? 'Round robin bracket generated and standings are ready.'
             : tournament.bracketType === 'group-knockout'
               ? 'Groups drawn. The knockout fills in once every group match is played.'
-              : 'Bracket generated and BYE slots were auto-advanced.',
+              : tournament.bracketType === 'league-playoff'
+                ? 'League games are set. The playoffs fill in once every league game is played.'
+              :'Bracket generated and BYE slots were auto-advanced.',
         });
       },
 

@@ -16,6 +16,8 @@ import { ensureTournamentAutomation } from '../../services/automationService';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
 import {
   GROUP_KNOCKOUT_MIN_ENTRANTS,
+  leaguePlayoffTeamCount,
+  minimumEntrantsFor,
   calculateBracketPlacements,
   generateGroupKnockoutBracket,
   generateSingleEliminationBracket,
@@ -355,7 +357,8 @@ export default function OrganizerBracket() {
     });
 
     setSeedEntrants(nextEntrants);
-    setBracketType(currentEvent.bracketType || currentEvent.tournamentFormat || 'single');
+    // A sub-event's bracket has its own format, which may differ from the event's.
+    setBracketType(currentTournament?.bracketType || currentEvent.bracketType || currentEvent.tournamentFormat || 'single');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedSourceKey]);
 
@@ -369,7 +372,7 @@ export default function OrganizerBracket() {
   );
 
   // Group Stage + Knockout needs enough entrants for two groups.
-  const canGenerate = seedSummary.length >= (bracketType === 'group-knockout' ? 4 : 2);
+  const canGenerate = seedSummary.length >= minimumEntrantsFor(bracketType);
   const performanceScores = useMemo(
     () => (currentEvent ? getScoresForEvent(currentEvent.id) : []),
     [currentEvent, getScoresForEvent, scores]
@@ -662,7 +665,7 @@ export default function OrganizerBracket() {
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([label, members]) => ({ label, teams: Array.from(members.values()).sort((left, right) => left.seed - right.seed) }));
   }, [bracketType, seedSummary]);
-  const minimumEntrants = bracketType === 'group-knockout' ? GROUP_KNOCKOUT_MIN_ENTRANTS : 2;
+  const minimumEntrants = minimumEntrantsFor(bracketType);
   const canFinalize = hasBracket && !isFinalized && playableMatches.length > 0 && completedMatches === playableMatches.length;
   const championName = currentTournament?.champion?.name || '';
   const schedule = describeBracketSchedule(currentEvent, currentTournament);
@@ -885,6 +888,17 @@ export default function OrganizerBracket() {
                     ))}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {!performanceMode && seedsEditable && bracketType === 'league-playoff' && seedSummary.length >= minimumEntrants && (
+            <div style={{ marginTop: 16, padding: '14px 16px', borderRadius: 12, background: '#f8fbff', border: '1px solid #dbeafe' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>
+                How this league will run
+              </div>
+              <div style={{ fontSize: 13, color: '#0f172a', lineHeight: 1.6 }}>
+                All {seedSummary.length} teams play each other once. The top {leaguePlayoffTeamCount(seedSummary.length)} move on to the playoffs; the rest are out.
               </div>
             </div>
           )}
@@ -1472,7 +1486,9 @@ function BracketStandings({ rows, roundRobin }) {
                   <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', fontWeight: 700, color: '#0f172a' }}>{row.name}</td>
                   <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#334155' }}>{row.wins}–{row.losses}</td>
                   <td style={{ padding: '11px 12px', borderBottom: '1px solid #eff6ff', color: '#475569' }}>
-                    {!final && row.eliminatedRound === null
+                    {row.outInLeague
+                      ? 'Out after the league games'
+                      : !final && row.eliminatedRound === null
                       ? 'Still playing'
                       : final && row.placement === 1
                         ? 'Champion'

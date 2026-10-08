@@ -117,7 +117,7 @@ const STEPS = [
       'Judged events: write the criteria yourself or let the AI draft them from your description, then download them as a formal PDF',
       'Criteria weights add up to 100%, and the point scale you pick becomes the range judges score in',
       'Multi-round events: set each round and how many advance — the system cuts the field for you',
-      'Bracket events: choose Single Elimination, Round Robin, or Group Stage + Knockout',
+      'Bracket events: choose Single Elimination, Round Robin, Group Stage + Knockout, or League + Playoffs',
     ],
   },
   {

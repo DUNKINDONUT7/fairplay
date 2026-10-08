@@ -13,6 +13,7 @@ const shortTitle = (bracket, eventTitle) => String(bracket.title || '').replace(
 // mislabelled as a quarterfinal just because of its round number.
 function roundLabel(round, totalRounds, match = null) {
   if (match?.stage === 'group') return `Group ${match.group} · Round ${round}`;
+  if (match?.stage === 'league') return `League Games · Round ${round}`;
   if (!totalRounds) return `Round ${round}`;
   if (round === totalRounds) return 'Finals';
   if (round === totalRounds - 1) return 'Semifinals';
@@ -261,7 +262,7 @@ export function BracketLeaderboard({ report, onOpenBracket }) {
                   <td style={{ ...s.td, fontWeight: 700, color: '#0f172a' }}>{row.name}</td>
                   <td style={{ ...s.td, ...s.num }}>{row.wins}–{row.losses}</td>
                   <td style={s.td}>
-                    {!final && row.eliminatedRound === null ? 'Still playing' : final && row.placement === 1 ? 'Champion' : row.eliminatedRound ? `Out in ${roundLabel(row.eliminatedRound, active.totalRounds).toLowerCase()}` : final && row.group ? `Out in the group stage (Group ${row.group})` : '—'}
+                    {row.outInLeague ? 'Out after the league games' : !final && row.eliminatedRound === null ? 'Still playing' : final && row.placement === 1 ? 'Champion' : row.eliminatedRound ? `Out in ${roundLabel(row.eliminatedRound, active.totalRounds).toLowerCase()}` : final && row.group ? `Out in the group stage (Group ${row.group})` : '—'}
                   </td>
                 </tr>
               ))}

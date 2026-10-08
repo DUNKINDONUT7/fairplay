@@ -37,6 +37,7 @@ export const BRACKET_FORMAT_LABELS = {
   single: 'Single elimination',
   'round-robin': 'Round robin',
   'group-knockout': 'Group stage + knockout',
+  'league-playoff': 'League + playoffs',
   double: 'Double elimination',
 };
 

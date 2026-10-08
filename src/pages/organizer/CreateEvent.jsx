@@ -86,6 +86,12 @@ const BRACKET_TYPES = [
     best: 'Balanced',
     how: 'Teams are drawn into 2 groups (4 groups for 12 or more teams) and play everyone in their group. The top 2 of each group then play a knockout to decide the champion. Needs at least 4 teams. 8 teams need 15 games.',
   },
+  {
+    value: 'league-playoff', label: 'League + Playoffs', icon: 'bi-list-ol',
+    desc: 'Everyone plays first. The top teams move on to the playoffs.',
+    best: 'Rewards the best record',
+    how: 'Every team plays every other team once and is ranked by wins. The teams at the bottom are out; the rest go to the playoffs, where 1st place faces the lowest-ranked team left. With 7 or 8 teams the top 6 move on, and 1st and 2nd skip straight to the semifinals. With 9 or more, the top 8 play quarterfinals. Needs at least 3 teams. 7 teams need 26 games.',
+  },
 ];
 
 function BracketFormatExplainer({ value }) {
@@ -1407,6 +1413,7 @@ export default function CreateEvent() {
                                     <option value="single">Single elimination</option>
                                     <option value="round-robin">Round robin</option>
                                     <option value="group-knockout">Group + Knockout</option>
+                                    <option value="league-playoff">League + Playoffs</option>
                                   </select>
                                 </Field>
                                 <Field label="Max participants">

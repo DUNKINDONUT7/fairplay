@@ -1,7 +1,7 @@
 import useCertificateStore from '../store/certificateStore';
 import useScoreStore from '../store/scoreStore';
 import useTournamentStore from '../store/tournamentStore';
-import { GROUP_KNOCKOUT_MIN_ENTRANTS, normalizeEntrants } from '../utils/bracketEngine';
+import { minimumEntrantsFor, normalizeEntrants } from '../utils/bracketEngine';
 
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -122,7 +122,7 @@ export async function ensureTournamentAutomation(event, contestants = [], option
 
   // A group stage needs enough entrants for two groups; until then the
   // bracket simply waits rather than failing a registration.
-  const minimumEntrants = (tournament.bracketType || bracketType) === 'group-knockout' ? GROUP_KNOCKOUT_MIN_ENTRANTS : 2;
+  const minimumEntrants = minimumEntrantsFor(tournament.bracketType || bracketType);
   if (entrants.length >= minimumEntrants) {
     const shouldGenerate =
       (tournament.matches || []).length === 0 ||

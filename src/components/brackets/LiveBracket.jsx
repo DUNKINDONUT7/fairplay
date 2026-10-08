@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { isLeagueMatch } from '../../utils/bracketEngine';
+import { countPlayoffTeams, isLeagueMatch } from '../../utils/bracketEngine';
 import './LiveBracket.css';
 
 function getMatchStatusClass(status) {
@@ -40,6 +40,9 @@ export default function LiveBracket({
   const groupLabels = isGroupKnockout
     ? Array.from(new Set((tournament.standings || []).map((entry) => entry.group).filter(Boolean))).sort()
     : [];
+  const isLeaguePlayoff = tournament.bracketType === 'league-playoff';
+  const playoffTeams = isLeaguePlayoff ? countPlayoffTeams(tournament.matches) : 0;
+  const leagueDone = isLeaguePlayoff && (tournament.matches || []).filter((match) => match.stage === 'league').every((match) => match.status === 'completed');
   const isFinalMatch = (match) => Number(match.round || 0) === Number(tournament.totalRounds || 0);
 
   return (
@@ -252,6 +255,46 @@ export default function LiveBracket({
           </div>
         </div>
       ))}
+
+      {isLeaguePlayoff && Array.isArray(tournament.standings) && tournament.standings.length > 0 ? (
+        <div className="live-bracket-banner">
+          <div className="live-bracket-banner-title">League Standings</div>
+          <div className="live-bracket-banner-copy">
+            {leagueDone
+              ? `League games are done. The top ${playoffTeams} are in the playoffs.`
+              : `The top ${playoffTeams} move on to the playoffs. Ranks can still change until all league games are played.`}
+          </div>
+          <div style={{ marginTop: 14, overflowX: 'auto' }}>
+            <table className="live-bracket-standings">
+              <thead>
+                <tr>
+                  {['Rank', 'Team', 'P', 'W', 'L', 'D', 'Pts', 'Diff'].map((header) => (
+                    <th key={header}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tournament.standings.map((entry) => {
+                  // The playoff line: everyone below it is out.
+                  const cell = entry.rank === playoffTeams + 1 ? { borderTop: '2px dashed #2563eb' } : undefined;
+                  return (
+                    <tr key={entry.teamId} style={entry.rank > playoffTeams ? { opacity: 0.6 } : undefined}>
+                      <td style={cell}>{entry.rank}</td>
+                      <td style={cell} className="live-bracket-standings-team">{entry.teamName}</td>
+                      <td style={cell}>{entry.played}</td>
+                      <td style={cell}>{entry.wins}</td>
+                      <td style={cell}>{entry.losses}</td>
+                      <td style={cell}>{entry.draws}</td>
+                      <td style={cell} className="live-bracket-standings-points">{entry.points}</td>
+                      <td style={cell}>{entry.scoreDifference}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
 
       {tournament.bracketType === 'round-robin' && Array.isArray(tournament.standings) && tournament.standings.length > 0 ? (
         <div className="live-bracket-banner">
