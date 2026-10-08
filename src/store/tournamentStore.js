@@ -16,6 +16,22 @@ import useEventStore from './eventStore';
 import useNotificationStore from './notificationStore';
 
 function normalizeTournament(tournament) {
+  const bracketType = tournament.bracketType || tournament.bracket_type || 'single';
+  const matches = Array.isArray(tournament.matches) ? tournament.matches : [];
+  const standings = Array.isArray(tournament.standings) ? tournament.standings : [];
+  const storedChampion = tournament.champion || null;
+  // Round-robin tournaments saved before the "champion only once every
+  // match is played" fix can still have a premature champion sitting in
+  // the database. Re-derive it from the actual matches on every load so a
+  // stale record self-heals without needing a manual data fix.
+  const champion = bracketType === 'round-robin'
+    ? calculateChampion({ bracketType, matches, standings })
+    : storedChampion;
+  const storedLiveStatus = tournament.liveStatus || tournament.live_status || 'waiting';
+  const liveStatus = bracketType === 'round-robin' && !champion && storedLiveStatus === 'completed'
+    ? 'live'
+    : storedLiveStatus;
+
   return {
     id: tournament.id || Date.now(),
     title: tournament.title || tournament.name || 'Tournament',
@@ -24,19 +40,19 @@ function normalizeTournament(tournament) {
     subEventId: tournament.subEventId || tournament.sub_event_id || null,
     subEventName: tournament.subEventName || tournament.sub_event_name || '',
     status: tournament.status || 'draft',
-    bracketType: tournament.bracketType || tournament.bracket_type || 'single',
+    bracketType,
     teams: Array.isArray(tournament.teams) ? normalizeEntrants(tournament.teams) : [],
-    matches: Array.isArray(tournament.matches) ? tournament.matches : [],
+    matches,
     rounds: Array.isArray(tournament.rounds) ? tournament.rounds : [],
-    standings: Array.isArray(tournament.standings) ? tournament.standings : [],
+    standings,
     historyLog: Array.isArray(tournament.historyLog || tournament.history_log) ? (tournament.historyLog || tournament.history_log) : [],
     entrantSnapshot: Array.isArray(tournament.entrantSnapshot || tournament.entrant_snapshot) ? (tournament.entrantSnapshot || tournament.entrant_snapshot) : [],
     currentRound: Number(tournament.currentRound || tournament.current_round || 0),
     totalRounds: Number(tournament.totalRounds || tournament.total_rounds || 0),
     totalSlots: Number(tournament.totalSlots || tournament.total_slots || 0),
     byes: Number(tournament.byes || 0),
-    liveStatus: tournament.liveStatus || tournament.live_status || 'waiting',
-    champion: tournament.champion || null,
+    liveStatus,
+    champion,
     streamTitle: tournament.streamTitle || tournament.stream_title || '',
     streamMessage: tournament.streamMessage || tournament.stream_message || '',
     isLocked: Boolean(tournament.isLocked ?? tournament.is_locked),
