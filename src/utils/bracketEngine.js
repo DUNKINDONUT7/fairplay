@@ -343,6 +343,13 @@ export function calculateChampion(tournament) {
   if (!tournament) return null;
 
   if (tournament.bracketType === 'round-robin') {
+    // The standings leader only becomes the champion once every match has
+    // actually been played — otherwise whoever is ahead after game one gets
+    // crowned champion with 20 games still left to go.
+    const playable = (tournament.matches || []).filter((match) => match.status !== 'bye');
+    const allCompleted = playable.length > 0 && playable.every((match) => match.status === 'completed');
+    if (!allCompleted) return null;
+
     return tournament.standings?.[0]
       ? {
           id: tournament.standings[0].teamId,
