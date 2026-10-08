@@ -5,12 +5,20 @@ import { AnimatePresence, motion } from 'framer-motion';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useTourStore from '../../store/tourStore';
+import useSidebarUiStore from '../../store/sidebarUiStore';
 import { TOUR_CHAPTERS, buildTourSteps } from './organizerTourSteps';
 
 const CARD_WIDTH = 380;
 const GAP = 16;
 const EDGE = 12;
 const NAVBAR_HEIGHT = 72;
+
+// A step's target may point at a link tucked inside a collapsed sidebar
+// group — pull its path back out so the sidebar can be told to reveal it.
+function sidebarNavPath(target) {
+  const match = /^\[data-tour="sidebar"\] a\[href="([^"]+)"\]$/.exec(target || '');
+  return match ? match[1] : null;
+}
 
 // Where the highlighted element is on screen, trimmed to what is visible.
 function measure(selector) {
@@ -78,6 +86,17 @@ export default function OrganizerTour() {
   useEffect(() => {
     if (active && role && role !== 'organizer') stop();
   }, [active, role, stop]);
+
+  // A step that points at a sidebar link forces the sidebar open and
+  // expands its group, so the link is actually on screen to spotlight —
+  // otherwise a collapsed sidebar (the default for a new account) would
+  // leave the step with nothing to highlight.
+  useEffect(() => {
+    const path = running ? sidebarNavPath(step?.target) : null;
+    if (path) useSidebarUiStore.getState().reveal(path);
+    else useSidebarUiStore.getState().release();
+    return () => useSidebarUiStore.getState().release();
+  }, [running, step]);
 
   // Open the step's page, then find and follow its element.
   useEffect(() => {
@@ -167,23 +186,33 @@ export default function OrganizerTour() {
 
   return createPortal(
     <div style={{ position: 'fixed', inset: 0, zIndex: 5000 }}>
-      {/* Blocks the page while the tour is talking; the dark area is drawn by the spotlight's shadow. */}
-      <div style={{ position: 'absolute', inset: 0, background: spot ? 'transparent' : 'rgba(8,15,35,0.66)', backdropFilter: spot ? 'none' : 'blur(3px)' }} />
+      {/* Blocks the page while the tour is talking; when a spotlight is up, its
+          own giant box-shadow does the darkening, so this layer fades out. */}
+      <motion.div
+        initial={false}
+        animate={{ opacity: spot ? 0 : 1 }}
+        transition={{ duration: 0.3, ease: 'easeInOut' }}
+        style={{ position: 'absolute', inset: 0, background: 'rgba(8,15,35,0.66)', backdropFilter: 'blur(3px)' }}
+      />
 
-      {spot && (
-        <motion.div
-          initial={false}
-          animate={{ top: spot.top, left: spot.left, width: spot.width, height: spot.height }}
-          transition={{ type: 'spring', stiffness: 260, damping: 30 }}
-          style={{ position: 'absolute', borderRadius: 16, boxShadow: '0 0 0 9999px rgba(8,15,35,0.66)', pointerEvents: 'none' }}
-        >
+      <AnimatePresence>
+        {spot && (
           <motion.div
-            animate={{ opacity: [0.9, 0.35, 0.9], scale: [1, 1.012, 1] }}
-            transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
-            style={{ position: 'absolute', inset: 0, borderRadius: 16, border: '2px solid #38bdf8', boxShadow: '0 0 0 4px rgba(56,189,248,0.25), 0 0 28px rgba(56,189,248,0.55)' }}
-          />
-        </motion.div>
-      )}
+            key="spotlight"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, top: spot.top, left: spot.left, width: spot.width, height: spot.height }}
+            exit={{ opacity: 0 }}
+            transition={{ default: { type: 'spring', stiffness: 260, damping: 30 }, opacity: { duration: 0.25, ease: 'easeInOut' } }}
+            style={{ position: 'absolute', borderRadius: 16, boxShadow: '0 0 0 9999px rgba(8,15,35,0.66)', pointerEvents: 'none' }}
+          >
+            <motion.div
+              animate={{ opacity: [0.9, 0.35, 0.9], scale: [1, 1.012, 1] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: 'easeInOut' }}
+              style={{ position: 'absolute', inset: 0, borderRadius: 16, border: '2px solid #38bdf8', boxShadow: '0 0 0 4px rgba(56,189,248,0.25), 0 0 28px rgba(56,189,248,0.55)' }}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <motion.div
         ref={cardRef}
@@ -193,7 +222,7 @@ export default function OrganizerTour() {
         aria-labelledby="organizer-tour-title"
         initial={false}
         animate={{ top: position.top, left: position.left, opacity: searching ? 0 : 1 }}
-        transition={{ type: 'spring', stiffness: 260, damping: 30 }}
+        transition={{ default: { type: 'spring', stiffness: 260, damping: 30 }, opacity: { duration: 0.3, ease: 'easeInOut' } }}
         style={{ position: 'absolute', width: position.width, maxHeight: `calc(100vh - ${EDGE * 2}px)`, overflowY: 'auto', background: '#ffffff', borderRadius: 20, boxShadow: '0 30px 80px rgba(2,6,23,0.45)', outline: 'none' }}
       >
         {/* Chapter + progress */}

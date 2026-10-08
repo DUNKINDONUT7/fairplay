@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import useAuthStore from '../../store/authStore';
+import useSidebarUiStore from '../../store/sidebarUiStore';
 
 const SIDEBAR_WIDTH = 250;
 const RAIL_WIDTH = 76;
@@ -243,6 +244,7 @@ export default function Sidebar({ isOpen, isMobile, onToggle }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, userRole } = useAuthStore();
+  const revealPath = useSidebarUiStore((state) => state.revealPath);
   const role = user?.role || userRole || 'participant';
   const menu = NAV_GROUPS[role] || NAV_GROUPS.participant;
   const mobile = typeof isMobile === 'boolean' ? isMobile : typeof window !== 'undefined' ? window.innerWidth < 1024 : false;
@@ -356,7 +358,8 @@ export default function Sidebar({ isOpen, isMobile, onToggle }) {
 
         <nav data-tour="sidebar" style={{ flex: 1, overflowY: expanded ? 'auto' : 'visible', overflowX: 'visible', paddingTop: expanded ? 10 : 52 }}>
           {groups.map((group) => {
-            const groupOpen = expanded && (openGroups[group.label] ?? group.active);
+            const reveal = Boolean(revealPath) && group.items.some((item) => item.path === revealPath);
+            const groupOpen = expanded && (reveal || (openGroups[group.label] ?? group.active));
             const singleItem = group.items.length === 1;
             const showFlyout = !expanded && hoveredGroup === group.label;
 

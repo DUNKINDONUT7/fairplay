@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
+import useSidebarUiStore from '../../store/sidebarUiStore';
 
 const SIDEBAR_STATE_KEY = 'fairplay_sidebar_open';
 
@@ -13,7 +14,9 @@ function getInitialSidebarState() {
 
 export default function DashboardLayout({ children, title, subtitle }) {
   const location = useLocation();
-  const [sidebarOpen, setSidebarOpen] = useState(getInitialSidebarState);
+  const [sidebarOpenPref, setSidebarOpenPref] = useState(getInitialSidebarState);
+  const forcedOpen = useSidebarUiStore((state) => state.forcedOpen);
+  const sidebarOpen = forcedOpen || sidebarOpenPref;
   const [isMobile, setIsMobile] = useState(false);
   const sidebarWidth = isMobile ? 0 : sidebarOpen ? 250 : 76;
 
@@ -31,13 +34,13 @@ export default function DashboardLayout({ children, title, subtitle }) {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
     if (isMobile) {
-      setSidebarOpen(false);
+      setSidebarOpenPref(false);
     }
   }, [location.pathname, isMobile]);
 
   useEffect(() => {
-    window.localStorage.setItem(SIDEBAR_STATE_KEY, String(sidebarOpen));
-  }, [sidebarOpen]);
+    window.localStorage.setItem(SIDEBAR_STATE_KEY, String(sidebarOpenPref));
+  }, [sidebarOpenPref]);
 
   useEffect(() => {
     const prevBodyBackground = document.body.style.background;
@@ -66,11 +69,11 @@ export default function DashboardLayout({ children, title, subtitle }) {
     <div
       style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f8fbff 0%, #e0f2fe 100%)' }}
     >
-      <Navbar isMobile={isMobile} onMenuToggle={() => setSidebarOpen((current) => !current)} />
+      <Navbar isMobile={isMobile} onMenuToggle={() => setSidebarOpenPref((current) => !current)} />
       <Sidebar
         isOpen={sidebarOpen}
         isMobile={isMobile}
-        onToggle={() => setSidebarOpen((current) => !current)}
+        onToggle={() => setSidebarOpenPref((current) => !current)}
       />
 
       <motion.main
