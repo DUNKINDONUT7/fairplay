@@ -1,4 +1,6 @@
 import { Link } from 'react-router-dom';
+import useAuthStore from '../../store/authStore';
+import { roleHomePath } from '../../utils/navigation';
 
 const THEMES = {
   light: {
@@ -29,6 +31,7 @@ export default function PublicEventNav({
   fixed = false,
 }) {
   const t = THEMES[theme] || THEMES.light;
+  const { user } = useAuthStore();
 
   const tabs = [
     { key: 'preview', label: 'Event Preview', icon: 'bi-eye', to: `/events/${eventId}` },
@@ -116,7 +119,7 @@ export default function PublicEventNav({
             <i className="bi bi-collection" /> All Events
           </Link>
 
-          {showRegister && (
+          {showRegister && !user && (
             <Link
               to={`/participant/register?eventId=${eventId}`}
               style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 900, fontSize: 13, textDecoration: 'none', ...t.register }}
@@ -125,9 +128,18 @@ export default function PublicEventNav({
             </Link>
           )}
 
-          <Link to="/?modal=login" style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.signIn }}>
-            Sign In
-          </Link>
+          {/* Already signed in (reached this public page from inside a
+              dashboard) — offer the way back instead of asking to sign in
+              again, which would be confusing since the session is still live. */}
+          {user ? (
+            <Link to={roleHomePath(user.role)} style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.signIn }}>
+              <i className="bi bi-grid-fill" /> My Dashboard
+            </Link>
+          ) : (
+            <Link to="/?modal=login" style={{ flexShrink: 0, padding: '9px 16px', borderRadius: 10, fontWeight: 800, fontSize: 13, textDecoration: 'none', ...t.signIn }}>
+              Sign In
+            </Link>
+          )}
         </nav>
       </header>
     </>
