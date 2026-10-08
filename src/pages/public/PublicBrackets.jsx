@@ -5,7 +5,7 @@ import useEventStore from '../../store/eventStore';
 import useTournamentStore from '../../store/tournamentStore';
 import { isSupabaseConfigured, subscribeToTable } from '../../utils/supabaseClient';
 import PublicEventNav from '../../components/public/PublicEventNav';
-import { describeBracketSchedule, isBracketPublic } from '../../utils/bracketRules';
+import { describeBracketSchedule, isBracketPublic, isScoringOpen } from '../../utils/bracketRules';
 
 export default function PublicBrackets() {
   const { id } = useParams();
@@ -40,6 +40,7 @@ export default function PublicBrackets() {
   const tournament = tournaments.find((entry) => String(entry.eventId) === String(id)) || null;
   // Shown whenever the event itself is public; there is no separate publish step.
   const canViewBracket = tournament && (tournament.matches || []).length > 0 && isBracketPublic(event);
+  const scoringLive = isScoringOpen(event);
 
   const schedule = describeBracketSchedule(event, tournament);
   const scheduleLine = [schedule.dates, schedule.times, schedule.venue].filter(Boolean).join('  ·  ');
@@ -71,6 +72,15 @@ export default function PublicBrackets() {
               </p>
             )}
           </div>
+
+          {canViewBracket && !tournament.isFinalized && (
+            <div style={{ ...styles.statusLine, ...(scoringLive ? styles.statusLive : null) }}>
+              <i className={scoringLive ? 'bi bi-broadcast' : 'bi bi-clock'} />
+              {scoringLive
+                ? 'Live scoring: results update here as each game finishes.'
+                : 'Scoring has not started yet. The matchups may still change until it does.'}
+            </div>
+          )}
 
           {canViewBracket ? (
             <LiveBracket tournament={tournament} />
@@ -126,6 +136,20 @@ const styles = {
     color: '#0f172a',
   },
   subtitle: { color: '#64748b', fontSize: 'clamp(13px, 2vw, 15px)', margin: 0 },
+  statusLine: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '10px 14px',
+    marginBottom: 16,
+    borderRadius: 12,
+    background: '#f1f5f9',
+    border: '1px solid #e2e8f0',
+    color: '#475569',
+    fontSize: 13,
+    fontWeight: 700,
+  },
+  statusLive: { background: '#ecfdf5', border: '1px solid #a7f3d0', color: '#047857' },
   emptyCard: {
     background: '#ffffff',
     border: '1px solid #dbeafe',

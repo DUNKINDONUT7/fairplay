@@ -18,6 +18,12 @@ export function isEventOver(event) {
   return event?.status === 'completed';
 }
 
+// Match scores can be entered only while this is true: the event is approved
+// and the organizer has opened scoring, which is what starts the event.
+export function isScoringOpen(event) {
+  return isBracketPublic(event) && hasEventStarted(event) && !isEventOver(event);
+}
+
 // Events that are decided by a bracket (as opposed to judge scores).
 const BRACKET_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 export function isBracketEvent(event) {

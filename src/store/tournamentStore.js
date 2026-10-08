@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { hasEventStarted, isEventOver } from '../utils/bracketRules';
+import { hasEventStarted, isBracketPublic, isEventOver, isScoringOpen } from '../utils/bracketRules';
 import { persist } from 'zustand/middleware';
 import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supabaseClient';
 import { bindDataCacheReset } from '../utils/dataCache';
@@ -122,6 +122,17 @@ function assertBracketEditable(tournament) {
   if (isEventOver(useEventStore.getState().getEventById(tournament.eventId))) {
     throw new Error('This event is completed, so its bracket can no longer be changed.');
   }
+}
+
+// Entering scores also needs the event approved and scoring opened. An event
+// that isn't loaded can't be judged either way, so it is left to the caller.
+function assertScoringOpen(tournament) {
+  assertBracketEditable(tournament);
+  const event = useEventStore.getState().getEventById(tournament.eventId);
+  if (!event || isScoringOpen(event)) return;
+  throw new Error(isBracketPublic(event)
+    ? 'Scoring is not open yet. The organizer needs to open scoring for this bracket first.'
+    : 'Scores can only be entered once the event is approved.');
 }
 
 let tournamentsRealtimeBound = false;
@@ -406,7 +417,7 @@ const useTournamentStore = create(
       updateMatchDraft: async (tournamentId, matchId, field, value) => {
         const tournament = get().getTournamentById(tournamentId);
         if (!tournament) return null;
-        assertBracketEditable(tournament);
+        assertScoringOpen(tournament);
 
         const updates = {
           [field]: Number(value || 0),
@@ -421,7 +432,7 @@ const useTournamentStore = create(
       saveMatchResult: async (tournamentId, matchId) => {
         const tournament = get().getTournamentById(tournamentId);
         if (!tournament) return null;
-        assertBracketEditable(tournament);
+        assertScoringOpen(tournament);
 
         const historyEntry = createHistoryEntry(tournament, `Saved ${matchId}`);
         const nextTournament = updateBracketMatch(tournament, matchId, {}, { finalize: true });

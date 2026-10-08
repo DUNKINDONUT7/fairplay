@@ -403,8 +403,8 @@ export default function OrganizerEventReport() {
         <div style={{ display: 'grid', gap: 16 }}>
           <Section title={info.isCompleted ? 'Event completed' : 'Event summary'} subtitle={info.isCompleted ? 'Final results as locked when the event was finalized.' : 'Current standing based on the scores submitted so far.'}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-              <StatTile label="Total participants" value={stats.totalParticipants} hint={stats.totalTeams ? `${stats.totalTeams} team${stats.totalTeams === 1 ? '' : 's'}` : undefined} />
-              <StatTile label="Total judges" value={stats.totalJudges} />
+              <StatTile label="Registered participants" value={stats.totalParticipants} hint={stats.totalTeams ? `${stats.totalTeams} team${stats.totalTeams === 1 ? '' : 's'}` : undefined} />
+              <StatTile label="Judges in this event" value={stats.totalJudges} />
               {report.isJudged ? (
                 <>
                   <StatTile label="Evaluations completed" value={`${stats.completedEvaluations} / ${stats.expectedEvaluations}`} hint={stats.pendingEvaluations ? `${stats.pendingEvaluations} pending` : stats.expectedEvaluations ? 'All submitted' : undefined} />
@@ -513,12 +513,12 @@ export default function OrganizerEventReport() {
           )}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-            <Section title="Attendance">
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10 }}>
-                <StatTile label="Total check-ins" value={report.attendance?.total || 0} />
-                <StatTile label="Participants" value={report.attendance?.participants || 0} />
-                <StatTile label="Audience" value={report.attendance?.audience || 0} />
-                <StatTile label="Judges" value={report.attendance?.judges || 0} />
+            <Section title="Attendance" subtitle={report.attendance?.total ? 'People who checked in at the venue by scanning their QR code.' : 'No one has checked in yet. These numbers go up as people scan their QR code at the venue.'}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                <StatTile label="Everyone checked in" value={report.attendance?.total || 0} />
+                <StatTile label="Participants checked in" value={report.attendance?.participants || 0} />
+                <StatTile label="Audience checked in" value={report.attendance?.audience || 0} />
+                <StatTile label="Judges checked in" value={report.attendance?.judges || 0} />
               </div>
             </Section>
             <Section title="Approval workflow">

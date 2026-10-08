@@ -16,6 +16,7 @@ import Breadcrumbs from '../../components/common/Breadcrumbs';
 import useEventReport from '../../hooks/useEventReport';
 import { formatScore } from '../../utils/eventReport';
 import { EMAIL_PATTERN, sendParticipantAddedEmail } from '../../services/participantEmailService';
+import { isBracketEvent, isBracketPublic } from '../../utils/bracketRules';
 
 const TOURNAMENT_EVENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
 
@@ -551,8 +552,19 @@ export default function OrganizerEventDetail() {
   }
 
   async function handleToggleScoringStatus() {
-    setStatusUpdating(true);
     const next = event.scoringActive ? false : true;
+    if (next && !isBracketPublic(event)) {
+      notifyError('Scoring can start once this event is approved.');
+      return;
+    }
+    // Ending with a bracket still undecided would close the event with no champion.
+    const undecided = (report?.tournament?.brackets || []).filter((bracket) => !bracket.champion);
+    if (!next && undecided.length > 0) {
+      setConfirmingEndSession(false);
+      notifyError(`${undecided.map((bracket) => bracket.title).join(', ')} has no champion yet. Finish and finalize the bracket on the Brackets page before ending the event.`);
+      return;
+    }
+    setStatusUpdating(true);
     await updateEvent(id, { scoringActive: next, status: next ? 'active' : 'completed' });
     setStatusUpdating(false);
     setConfirmingEndSession(false);
@@ -578,6 +590,11 @@ export default function OrganizerEventDetail() {
   // already scored the old roster would silently invalidate the locked
   // scores' meaning.
   const isFinalized = event.status === 'completed';
+  // Same test the Scoring page uses to tell a bracket event from a judged one.
+  const bracketScored = report ? !report.isJudged && report.isTournament : isBracketEvent(event);
+  const eventApproved = isBracketPublic(event);
+  const scoringLive = Boolean(event.scoringActive);
+  const scoresSubmitted = report?.stats?.scoresSubmitted || 0;
   const capacity = getEventCapacity(event);
 
   const judgeQRValue = buildAppUrl(`/judge/open/${event.id}`);
@@ -677,7 +694,7 @@ export default function OrganizerEventDetail() {
     <ConfirmDialog
       open={confirmingEndSession}
       title="End the scoring session?"
-      message="This marks the event as completed and removes it from active/upcoming lists. Judges will no longer be able to submit new scores. You can still finalize scores from the Scoring page afterward."
+      message={`${scoresSubmitted === 0 ? 'No scores have been submitted yet, so this event would end with no winner. ' : ''}This marks the event as completed and removes it from active/upcoming lists. Judges will no longer be able to submit new scores. You can still finalize scores from the Scoring page afterward.`}
       confirmLabel="End Session"
       onCancel={() => setConfirmingEndSession(false)}
       onConfirm={handleToggleScoringStatus}
@@ -815,32 +832,54 @@ export default function OrganizerEventDetail() {
           <div>
             <div style={eyebrow}>Scoring Session</div>
             <h2 style={{ ...panelTitle, marginBottom: 4 }}>
-              {event.scoringActive ? 'Session is Live' : 'Session is Closed'}
+              {scoringLive ? 'Session is Live' : 'Session is Closed'}
             </h2>
             <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
-              {event.scoringActive
-                ? 'Judges can currently score participants.'
-                : 'Start the session to allow judges to submit scores.'}
+              {bracketScored
+                ? scoringLive
+                  ? 'Match scores are being entered on the Brackets page. The event ends there too, when you finalize the scores.'
+                  : 'This event is decided by its bracket. Open scoring and finalize the scores from the Brackets page.'
+                : !eventApproved
+                  ? 'Scoring can start once this event is approved.'
+                  : scoringLive
+                    ? 'Judges can currently score participants.'
+                    : 'Start the session to allow judges to submit scores.'}
             </p>
           </div>
-          <button
-            onClick={() => (event.scoringActive ? setConfirmingEndSession(true) : handleToggleScoringStatus())}
-            disabled={statusUpdating}
-            style={{
-              padding: '12px 24px', borderRadius: 14, border: 'none', fontWeight: 800, fontSize: 14, cursor: statusUpdating ? 'not-allowed' : 'pointer',
-              background: event.scoringActive ? 'linear-gradient(135deg,#ef4444,#f97316)' : 'linear-gradient(135deg,#2563eb,#0ea5e9)',
-              color: '#fff', display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
-              boxShadow: event.scoringActive ? '0 6px 20px rgba(239,68,68,0.25)' : '0 6px 20px rgba(37,99,235,0.25)',
-              opacity: statusUpdating ? 0.7 : 1,
-            }}
-          >
-            {statusUpdating
-              ? <><i className="bi bi-arrow-repeat animate-spin" /> Updating...</>
-              : event.scoringActive
-                ? <><i className="bi bi-stop-circle" /> End Scoring Session</>
-                : <><i className="bi bi-play-circle" /> Start Scoring Session</>
-            }
-          </button>
+          {bracketScored ? (
+            // A bracket event starts and ends on the Brackets page, so it can
+            // never be closed here with games still unplayed and no champion.
+            <button
+              onClick={() => navigate(`/organizer/brackets?eventId=${event.id}`)}
+              style={{
+                padding: '12px 24px', borderRadius: 14, border: 'none', fontWeight: 800, fontSize: 14, cursor: 'pointer',
+                background: 'linear-gradient(135deg,#2563eb,#0ea5e9)', color: '#fff', display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
+                boxShadow: '0 6px 20px rgba(37,99,235,0.25)',
+              }}
+            >
+              <i className="bi bi-diagram-3" /> Go to Brackets
+            </button>
+          ) : (
+            <button
+              onClick={() => (scoringLive ? setConfirmingEndSession(true) : handleToggleScoringStatus())}
+              disabled={statusUpdating || (!scoringLive && !eventApproved)}
+              title={!scoringLive && !eventApproved ? 'The event needs to be approved first' : undefined}
+              style={{
+                padding: '12px 24px', borderRadius: 14, border: 'none', fontWeight: 800, fontSize: 14, cursor: statusUpdating || (!scoringLive && !eventApproved) ? 'not-allowed' : 'pointer',
+                background: scoringLive ? 'linear-gradient(135deg,#ef4444,#f97316)' : 'linear-gradient(135deg,#2563eb,#0ea5e9)',
+                color: '#fff', display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap',
+                boxShadow: scoringLive ? '0 6px 20px rgba(239,68,68,0.25)' : '0 6px 20px rgba(37,99,235,0.25)',
+                opacity: statusUpdating || (!scoringLive && !eventApproved) ? 0.6 : 1,
+              }}
+            >
+              {statusUpdating
+                ? <><i className="bi bi-arrow-repeat animate-spin" /> Updating...</>
+                : scoringLive
+                  ? <><i className="bi bi-stop-circle" /> End Scoring Session</>
+                  : <><i className="bi bi-play-circle" /> Start Scoring Session</>
+              }
+            </button>
+          )}
         </div>
 
         {/* Contestants */}

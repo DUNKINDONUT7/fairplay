@@ -28,6 +28,7 @@ import {
   isBracketEvent,
   isBracketPublic,
   isEventOver,
+  isScoringOpen,
 } from '../../utils/bracketRules';
 
 const TOURNAMENT_TYPES = ['tournament', 'sportsfest', 'esports', 'sports'];
@@ -195,6 +196,7 @@ export default function OrganizerBracket() {
   const [pendingRegenerate, setPendingRegenerate] = useState(null);
   const [seedsOpen, setSeedsOpen] = useState(true);
   const [confirmingUndo, setConfirmingUndo] = useState(false);
+  const [confirmingOpenScoring, setConfirmingOpenScoring] = useState(false);
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
   const [confirmingGenerate, setConfirmingGenerate] = useState(false);
   const [busyAction, setBusyAction] = useState('');
@@ -622,11 +624,12 @@ export default function OrganizerBracket() {
   const eventStarted = hasEventStarted(currentEvent);
   const eventOver = isEventOver(currentEvent);
   const bracketPublic = isBracketPublic(currentEvent);
-  const hasResults = playableMatches.some((match) => ['completed', 'in-progress'].includes(match.status));
-  // Seeds can be reshuffled and the bracket rebuilt right up until the event starts.
+  // Seeds can be reshuffled and the bracket rebuilt right up until scoring opens.
   const seedsLocked = isFinalized || (eventStarted && hasBracket);
-  const scoresEditable = hasBracket && !isFinalized && !eventOver;
-  const bracketStage = isFinalized ? 'final' : eventOver ? 'over' : eventStarted || hasResults ? 'live' : 'seeding';
+  // Scores stay closed until the event is approved and scoring is opened here.
+  const scoringOpen = isScoringOpen(currentEvent);
+  const scoresEditable = hasBracket && !isFinalized && scoringOpen;
+  const bracketStage = isFinalized ? 'final' : eventOver ? 'over' : scoringOpen ? 'live' : bracketPublic ? 'ready' : 'seeding';
   const canUndo = scoresEditable && (currentTournament.historyLog || []).length > 0;
 
   // Whether the list on screen differs from the order the bracket was built from.
@@ -699,7 +702,29 @@ export default function OrganizerBracket() {
     }, 'Scores finalized. This bracket can no longer be changed.');
   };
 
-  const guideStep = !selectedEvent ? 1 : !hasBracket ? 2 : isFinalized ? 5 : canFinalize ? 4 : 3;
+  // Opening scoring starts the event: scores can be entered, the public
+  // bracket turns live, and the matchup order is locked from then on.
+  // An event closed before its bracket was finalized has no champion, so the
+  // same action reopens it instead of leaving it stuck read-only.
+  const canOpenScoring = hasBracket && !isFinalized && !scoringOpen && bracketPublic && !seedsDirty;
+  const openScoringHint = !bracketPublic
+    ? 'The event needs to be approved before scoring can open'
+    : seedsDirty
+      ? 'Rebuild the bracket with the new order (or reset it) before opening scoring'
+      : eventOver
+        ? 'Reopen the event so the remaining games can be scored'
+        : 'Start entering scores and show the bracket as live to the public';
+
+  const handleOpenScoring = () => {
+    setConfirmingOpenScoring(false);
+    runBracketAction(
+      'open',
+      () => updateEvent(currentEvent.id, { scoringActive: true, status: 'active' }),
+      eventOver ? 'Scoring is open again. You can finish the remaining games.' : 'Scoring is open. The bracket is now live for the public.'
+    );
+  };
+
+  const guideStep = !selectedEvent ? 1 : !hasBracket ? 2 : isFinalized ? 6 : canFinalize ? 5 : scoringOpen ? 4 : 3;
 
   const seedsCollapsible = !performanceMode && hasBracket;
   const seedsEditable = performanceMode || !seedsLocked;
@@ -729,9 +754,9 @@ export default function OrganizerBracket() {
                 : isFinalized
                   ? 'The order the bracket was built from. It is final.'
                   : seedsLocked
-                    ? 'The order the bracket was built from. It closed when the event started.'
+                    ? 'The order the bracket was built from. It was locked when scoring opened.'
                     : hasBracket
-                      ? 'Drag a team to change who plays whom, then rebuild the bracket. Open until the event starts.'
+                      ? 'Drag a team to change who plays whom, then rebuild the bracket. Open until you open scoring.'
                       : 'This order decides who plays whom in the first round. Drag a team to move it, or shuffle them all.'}
             </span>
           </span>
@@ -741,11 +766,11 @@ export default function OrganizerBracket() {
         {!performanceMode && seedsOpen && !seedsEditable && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: '#64748b' }}>
-              {isFinalized ? 'Scores are finalized' : eventOver ? 'Event is completed' : 'Event has started'}
+              {isFinalized ? 'Scores are finalized' : eventOver ? 'Event is completed' : 'Scoring is open'}
             </span>
             <button
               disabled
-              title={isFinalized ? 'The scores are finalized, so the order can no longer change' : 'Shuffling is only available before the event starts'}
+              title={isFinalized ? 'The scores are finalized, so the order can no longer change' : 'Shuffling is only available before scoring opens'}
               style={{ ...secondaryButtonStyle, opacity: 0.5, cursor: 'not-allowed' }}
             >
               <i className="bi bi-shuffle" /> Shuffle
@@ -887,8 +912,8 @@ export default function OrganizerBracket() {
                   : seedsDirty
                     ? <><i className="bi bi-info-circle" style={{ marginRight: 6 }} />You changed the order. Rebuild the bracket to apply it.</>
                     : hasBracket
-                      ? 'The bracket matches this order. You can reshuffle and rebuild until the event starts.'
-                      : 'Happy with the matchups? Build the bracket. You can still change it until the event starts.'}
+                      ? 'The bracket matches this order. You can reshuffle and rebuild until you open scoring.'
+                      : 'Happy with the matchups? Build the bracket. You can still change it until you open scoring.'}
               </span>
               <button
                 onClick={requestGenerate}
@@ -928,7 +953,7 @@ export default function OrganizerBracket() {
         title={hasBracket ? 'Rebuild the bracket with this order?' : 'Build the bracket with this order?'}
         message={`${previewMatchups.length > 0
           ? `First round: ${previewMatchups.map((match) => (match.team1 && match.team2 ? `${match.team1.name} vs ${match.team2.name}` : `${(match.team1 || match.team2)?.name} gets a bye`)).join(' · ')}. `
-          : ''}You can still reshuffle and rebuild it any time before the event starts.`}
+          : ''}You can still reshuffle and rebuild it any time before you open scoring.`}
         confirmLabel={hasBracket ? 'Rebuild Bracket' : 'Build Bracket'}
         onCancel={() => setConfirmingGenerate(false)}
         onConfirm={() => { setConfirmingGenerate(false); handleGenerate(false); }}
@@ -941,6 +966,17 @@ export default function OrganizerBracket() {
         requireText="FINALIZE"
         onCancel={() => setConfirmingFinalize(false)}
         onConfirm={handleFinalize}
+      />
+      <ConfirmDialog
+        open={confirmingOpenScoring}
+        danger={false}
+        title={eventOver ? 'Reopen scoring for this event?' : 'Open scoring for this event?'}
+        message={eventOver
+          ? 'The event was closed before this bracket was finished. Reopening sets the event back to in progress so you can enter the remaining scores and finalize a champion.'
+          : 'You can start entering match scores, and the public will see the bracket as live. The matchups are locked from here: you will no longer be able to shuffle the teams or rebuild the bracket.'}
+        confirmLabel={eventOver ? 'Reopen Scoring' : 'Open Scoring'}
+        onCancel={() => setConfirmingOpenScoring(false)}
+        onConfirm={handleOpenScoring}
       />
       <ConfirmDialog
         open={confirmingUndo}
@@ -957,6 +993,7 @@ export default function OrganizerBracket() {
             steps={[
               'Pick the event you want a bracket for',
               'Shuffle or drag the teams into order, then build the bracket',
+              'Open scoring once the event is approved and games are about to start',
               'Enter match scores as games finish',
               'Finalize the scores once every game is done',
             ]}
@@ -1001,7 +1038,7 @@ export default function OrganizerBracket() {
                 <button
                   onClick={requestGenerate}
                   disabled={!canGenerate || seedsLocked}
-                  title={seedsLocked ? 'The event has already started' : canGenerate ? undefined : 'Add at least two entrants first'}
+                  title={seedsLocked ? 'Scoring is already open' : canGenerate ? undefined : 'Add at least two entrants first'}
                   style={{ ...primaryButtonStyle, opacity: canGenerate && !seedsLocked ? 1 : 0.5, cursor: canGenerate && !seedsLocked ? 'pointer' : 'not-allowed' }}
                 >
                   <i className="bi bi-diagram-3" style={{ marginRight: 8 }} />
@@ -1086,6 +1123,10 @@ export default function OrganizerBracket() {
             champion={championName}
             canUndo={canUndo}
             canFinalize={canFinalize}
+            scoringOpen={scoringOpen}
+            canOpenScoring={canOpenScoring}
+            openScoringHint={openScoringHint}
+            onOpenScoring={() => setConfirmingOpenScoring(true)}
             busyAction={busyAction}
             onUndo={() => setConfirmingUndo(true)}
             onFinalize={() => setConfirmingFinalize(true)}
@@ -1258,18 +1299,18 @@ const EVENT_STATUS_LABELS = {
 };
 
 const STAGE_CHIPS = {
-  seeding: { icon: 'bi-shuffle', label: 'Matchups open · can still be reshuffled', tone: 'blue' },
-  live: { icon: 'bi-pencil-square', label: 'In progress · enter scores as games finish', tone: 'blue' },
-  over: { icon: 'bi-flag-fill', label: 'Event completed · scores are read-only', tone: 'slate' },
+  seeding: { icon: 'bi-hourglass-split', label: 'Scoring closed · waiting for approval', tone: 'amber' },
+  ready: { icon: 'bi-shuffle', label: 'Scoring not open yet · matchups can still be reshuffled', tone: 'blue' },
+  live: { icon: 'bi-broadcast', label: 'Scoring is open · enter scores as games finish', tone: 'green' },
+  over: { icon: 'bi-flag-fill', label: 'Event closed · bracket was not finalized', tone: 'amber' },
   final: { icon: 'bi-shield-lock-fill', label: 'Finalized · scores are permanent', tone: 'green' },
 };
 
-// The bracket's state at a glance. Who can see it and whether it can still be
-// edited both follow the event's status, so there are no publish or lock
-// switches here — only the two actions that are about the results themselves.
+// The bracket's state at a glance. Who can see it follows the event's status;
+// scoring is opened by hand here, which also locks the matchup order.
 function BracketStatusBar({
   title, hasBracket, stage, isPublic, eventStatus, formatLabel, schedule, finalizedAt, teams, completed, total, champion,
-  canUndo, canFinalize, busyAction, onUndo, onFinalize,
+  canUndo, canFinalize, scoringOpen, canOpenScoring, openScoringHint, onOpenScoring, busyAction, onUndo, onFinalize,
 }) {
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
   const finished = total > 0 && completed === total;
@@ -1304,6 +1345,17 @@ function BracketStatusBar({
 
         {stage !== 'final' && hasBracket && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            {!scoringOpen && (
+              <button
+                onClick={onOpenScoring}
+                disabled={busy || !canOpenScoring}
+                title={openScoringHint}
+                style={{ ...toolbarButtonStyle, background: '#2563eb', border: '1px solid #2563eb', color: '#ffffff', opacity: busy || !canOpenScoring ? 0.45 : 1, cursor: busy || !canOpenScoring ? 'not-allowed' : 'pointer' }}
+              >
+                <i className={busyAction === 'open' ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-broadcast'} />
+                {stage === 'over' ? 'Reopen Scoring' : 'Open Scoring'}
+              </button>
+            )}
             <button
               onClick={onUndo}
               disabled={busy || !canUndo}
@@ -1363,12 +1415,17 @@ function BracketStatusBar({
       ) : stage === 'over' ? (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#f1f5f9', color: '#334155', fontSize: 13 }}>
           <i className="bi bi-flag-fill" />
-          The event is completed, so match scores are read-only.
+          This event was closed before the bracket was finalized{champion ? '' : ', so there is no champion yet'}. Click "Reopen Scoring" to finish the games.
         </div>
       ) : !isPublic ? (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#fffbeb', color: '#92400e', fontSize: 13 }}>
           <i className="bi bi-eye-slash" />
-          Participants and the public will see this bracket automatically once the event is approved.
+          Scores cannot be entered until the event is approved. Participants and the public will also see this bracket once it is approved.
+        </div>
+      ) : !scoringOpen && hasBracket ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 14, padding: '10px 12px', borderRadius: 10, background: '#eff6ff', color: '#1e3a8a', fontSize: 13 }}>
+          <i className="bi bi-info-circle" />
+          Scoring is not open yet. Click "Open Scoring" when the games are about to start. After that the teams can no longer be shuffled.
         </div>
       ) : null}
     </section>
