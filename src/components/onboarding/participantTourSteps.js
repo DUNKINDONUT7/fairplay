@@ -124,6 +124,15 @@ const STEPS = [
     body: 'Updates about your events and certificates also collect here, in case you miss the notification bell.',
     tips: [],
   },
+  {
+    chapter: 'schedule',
+    icon: 'bi-bell',
+    route: '/participant/announcements',
+    target: PAGE,
+    title: 'Announcements',
+    body: 'Every update lands here as its own card — event approvals, new scores, and certificates becoming available.',
+    tips: ['Unread ones are marked; Mark all as read clears them in one click'],
+  },
 
   // ------------------------------------------------------------ Results & certificates
   {
