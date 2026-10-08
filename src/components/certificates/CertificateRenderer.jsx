@@ -1,4 +1,4 @@
-import { forwardRef } from 'react';
+import { forwardRef, useState } from 'react';
 import btechLogo from '../../../assets/logo/BTECH.jpg';
 
 const CAT = {
@@ -34,10 +34,6 @@ function uploadedTemplatePlaceLabel(cert) {
   return 'Participant';
 }
 
-function fitFontSize(text, baseSize, compactSize, maxLength) {
-  return String(text || '').length > maxLength ? compactSize : baseSize;
-}
-
 function certificateTitleSize(title, isJudgeCertificate) {
   const length = String(title || '').length;
   if (isJudgeCertificate) return length > 24 ? 38 : 42;
@@ -50,13 +46,42 @@ function isImageTemplate(template) {
   return template?.customTemplateDataUrl && String(template.customTemplateType || '').startsWith('image/');
 }
 
+// An uploaded template is drawn this wide; its height follows the template's
+// own shape, so nothing is cropped or stretched.
+export const UPLOADED_TEMPLATE_WIDTH = 900;
+const DEFAULT_UPLOADED_HEIGHT = 636;
+const DEFAULT_NAME_COLOR = '#073047';
+const NAME_FONT_FAMILY = '"Segoe UI", Arial, sans-serif';
+
 const DEFAULT_UPLOADED_FIELDS = {
-  name: { left: 28, top: 48, width: 62, height: 10, cover: false },
+  name: { left: 19, top: 44, width: 62, height: 10, cover: false },
   event: { left: 32, top: 54, width: 54, height: 7, cover: false },
   place: { left: 38, top: 62, width: 42, height: 6, cover: false },
 };
 
+export function uploadedTemplateHeight(aspect) {
+  const ratio = Number(aspect);
+  if (!ratio || !Number.isFinite(ratio)) return DEFAULT_UPLOADED_HEIGHT;
+  return Math.round(UPLOADED_TEMPLATE_WIDTH / Math.min(2.5, Math.max(0.5, ratio)));
+}
+
+// The largest size at which the name still fits its box on one line, so a
+// long name shrinks instead of spilling out of the space the template left.
+let measureContext = null;
+export function fitNameFontSize(text, boxWidth, boxHeight) {
+  const byHeight = boxHeight * 0.72;
+  if (typeof document === 'undefined') return byHeight;
+  if (!measureContext) measureContext = document.createElement('canvas').getContext('2d');
+  if (!measureContext) return byHeight;
+  measureContext.font = `900 100px ${NAME_FONT_FAMILY}`;
+  const widthAt100 = measureContext.measureText(String(text || '').toUpperCase()).width;
+  const byWidth = widthAt100 > 0 ? ((boxWidth * 0.96) / widthAt100) * 100 : byHeight;
+  return Math.max(8, Math.min(byHeight, byWidth, 110));
+}
+
 function normalizeUploadedNameField(field) {
+  // A box the organizer placed by hand is never second-guessed.
+  if (field?.manual) return field;
   const looksLikeOldFallback =
     field &&
     field.top >= 36 &&
@@ -67,6 +92,17 @@ function normalizeUploadedNameField(field) {
     field.width <= 60;
 
   return looksLikeOldFallback ? DEFAULT_UPLOADED_FIELDS.name : field;
+}
+
+// Where the recipient's name goes on an uploaded template, in percent of the
+// template's width and height.
+export function getUploadedNameField(template) {
+  const stored = template?.customTemplateFields?.name;
+  return {
+    ...DEFAULT_UPLOADED_FIELDS.name,
+    ...(normalizeUploadedNameField(stored) || {}),
+    cover: false,
+  };
 }
 
 function percentBoxStyle(field) {
@@ -126,6 +162,7 @@ function Seal({ logoSrc, accent, ribbon }) {
 }
 
 const CertificateRenderer = forwardRef(function CertificateRenderer({ certificate, template }, ref) {
+  const [measuredAspect, setMeasuredAspect] = useState(null);
   const s    = resolveStyle(certificate);
   const tmpl = template || certificate.template || {};
   const placementLabel = awardLabel(certificate);
@@ -148,24 +185,20 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
 
   if (isImageTemplate(tmpl)) {
     const recipientName = certificate.recipientName || 'Recipient Name';
-    const fields = {
-      ...DEFAULT_UPLOADED_FIELDS,
-      ...(tmpl.customTemplateFields || {}),
-    };
-    const nameField = {
-      ...normalizeUploadedNameField(fields.name),
-      cover: false,
-    };
+    const nameField = getUploadedNameField(tmpl);
+    // Templates saved before the shape was recorded are measured as they load.
+    const height = uploadedTemplateHeight(tmpl.customTemplateAspect || measuredAspect);
+    const nameColor = nameField.color || DEFAULT_NAME_COLOR;
 
     return (
       <div
         ref={ref}
         style={{
-          width: 900,
-          height: 636,
+          width: UPLOADED_TEMPLATE_WIDTH,
+          height,
           boxSizing: 'border-box',
           position: 'relative',
-          fontFamily: '"Segoe UI", Arial, sans-serif',
+          fontFamily: NAME_FONT_FAMILY,
           background: '#ffffff',
           overflow: 'hidden',
         }}
@@ -173,18 +206,21 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
         <img
           src={tmpl.customTemplateDataUrl}
           alt={tmpl.customTemplateName || 'Uploaded certificate template'}
-          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+          onLoad={(event) => {
+            const { naturalWidth, naturalHeight } = event.currentTarget;
+            if (!tmpl.customTemplateAspect && naturalWidth && naturalHeight) setMeasuredAspect(naturalWidth / naturalHeight);
+          }}
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill' }}
         />
         <UploadedField
           field={nameField}
           textStyle={{
-            color: '#073047',
-            fontSize: fitFontSize(recipientName, 42, 32, 22),
+            color: nameColor,
+            fontSize: fitNameFontSize(recipientName, (nameField.width / 100) * UPLOADED_TEMPLATE_WIDTH, (nameField.height / 100) * height),
             fontWeight: 900,
             lineHeight: 1.05,
-            wordBreak: 'break-word',
+            whiteSpace: 'nowrap',
             textTransform: 'uppercase',
-            textShadow: '0 1px 0 rgba(255,255,255,0.75)',
           }}
         >
           {recipientName}

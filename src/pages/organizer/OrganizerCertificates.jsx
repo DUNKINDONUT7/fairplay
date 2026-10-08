@@ -5,6 +5,7 @@ import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import CertificateRenderer from '../../components/certificates/CertificateRenderer';
+import NamePlacementEditor from '../../components/certificates/NamePlacementEditor';
 import useCertificateStore from '../../store/certificateStore';
 import useEventStore from '../../store/eventStore';
 import useScoreStore from '../../store/scoreStore';
@@ -19,8 +20,10 @@ import btechLogo from '../../../assets/logo/BTECH.jpg';
 const JUDGE_CATEGORIES = ['judge'];
 const TEMPLATE_UPLOAD_MAX_BYTES = 4 * 1024 * 1024;
 const TEMPLATE_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'];
-const CERTIFICATE_EXPORT_WIDTH = 900;
-const CERTIFICATE_EXPORT_HEIGHT = 636;
+const DEFAULT_EXPORT_WIDTH = 900;
+const DEFAULT_EXPORT_HEIGHT = 636;
+// A PDF template is turned into a picture this wide, sharp enough to print.
+const PDF_TEMPLATE_RENDER_WIDTH = 1800;
 
 // What the category badge reads as. The stored keys stay as they are.
 const CATEGORY_LABELS = {
@@ -43,6 +46,11 @@ export async function exportCertificateToPDF(element, filename) {
   if (document.fonts?.ready) {
     await document.fonts.ready.catch(() => {});
   }
+
+  // An uploaded template keeps its own shape, so the page follows the
+  // certificate rather than a fixed size.
+  const CERTIFICATE_EXPORT_WIDTH = element.offsetWidth || DEFAULT_EXPORT_WIDTH;
+  const CERTIFICATE_EXPORT_HEIGHT = element.offsetHeight || DEFAULT_EXPORT_HEIGHT;
 
   const exportWrapper = document.createElement('div');
   const exportNode = element.cloneNode(true);
@@ -92,7 +100,7 @@ export async function exportCertificateToPDF(element, filename) {
 
     const imgData = canvas.toDataURL('image/png');
     const pdf = new jsPDF({
-      orientation: 'landscape',
+      orientation: CERTIFICATE_EXPORT_WIDTH >= CERTIFICATE_EXPORT_HEIGHT ? 'landscape' : 'portrait',
       unit: 'px',
       format: [CERTIFICATE_EXPORT_WIDTH, CERTIFICATE_EXPORT_HEIGHT],
     });
@@ -111,6 +119,31 @@ function fileToDataUrl(file) {
     reader.onerror = () => reject(new Error('Unable to read file'));
     reader.readAsDataURL(file);
   });
+}
+
+// Draws the first page of a PDF as a picture, so a PDF template goes through
+// the same name placement as an image one. Loaded on demand — most visits to
+// this page never touch a PDF.
+async function pdfFileToTemplateImage(file) {
+  const [pdfjsLib, worker] = await Promise.all([
+    import('pdfjs-dist'),
+    import('pdfjs-dist/build/pdf.worker.mjs?url'),
+  ]);
+  pdfjsLib.GlobalWorkerOptions.workerSrc = worker.default;
+
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const page = await pdf.getPage(1);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: Math.min(4, PDF_TEMPLATE_RENDER_WIDTH / baseViewport.width) });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(viewport.width);
+  canvas.height = Math.round(viewport.height);
+  const context = canvas.getContext('2d');
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: context, viewport, canvas }).promise;
+
+  return { dataUrl: canvas.toDataURL('image/jpeg', 0.92), pageCount: pdf.numPages };
 }
 
 function formatFileSize(bytes) {
@@ -187,7 +220,7 @@ function makeScannedField(band, type, imageData, width, height) {
 
 function fallbackScannedFields() {
   return {
-    name: { left: 28, top: 48, width: 62, height: 10, cover: false },
+    name: { left: 19, top: 44, width: 62, height: 10, cover: false },
     event: { left: 32, top: 54, width: 54, height: 7, cover: false },
     place: { left: 38, top: 62, width: 42, height: 6, cover: false },
   };
@@ -711,23 +744,26 @@ export default function OrganizerCertificates() {
     }
 
     try {
-      const dataUrl = await fileToDataUrl(file);
-      let scanResult = null;
-
-      if (file.type.startsWith('image/')) {
-        setIsScanningTemplate(true);
-        scanResult = await scanCertificateTemplate(dataUrl);
-      }
+      setIsScanningTemplate(true);
+      const isPdf = file.type === 'application/pdf';
+      const converted = isPdf ? await pdfFileToTemplateImage(file) : null;
+      const dataUrl = converted ? converted.dataUrl : await fileToDataUrl(file);
+      const image = await loadTemplateImage(dataUrl);
+      const scanResult = await scanCertificateTemplate(dataUrl);
 
       updateTemplate({
         customTemplateDataUrl: dataUrl,
         customTemplateName: file.name,
-        customTemplateType: file.type,
+        // A PDF is kept as the picture of its first page.
+        customTemplateType: isPdf ? 'image/jpeg' : file.type,
         customTemplateSize: file.size,
+        customTemplateAspect: image.naturalWidth / image.naturalHeight,
         customTemplateFields: scanResult?.fields || null,
-        customTemplateScanStatus: scanResult?.status || '',
+        customTemplateScanStatus: 'We guessed where the name goes. Drag the blue box in the preview if it is not in the right spot.',
       });
-      success(scanResult ? `${file.name} uploaded and scanned.` : `${file.name} uploaded as certificate template.`);
+      success(converted && converted.pageCount > 1
+        ? `${file.name} uploaded. Only its first page is used as the template.`
+        : `${file.name} uploaded. Check the name position in the preview.`);
     } catch {
       error('Failed to read the uploaded template.');
     } finally {
@@ -746,9 +782,9 @@ export default function OrganizerCertificates() {
       const scanResult = await scanCertificateTemplate(template.customTemplateDataUrl);
       updateTemplate({
         customTemplateFields: scanResult.fields,
-        customTemplateScanStatus: scanResult.status,
+        customTemplateScanStatus: 'We guessed where the name goes. Drag the blue box in the preview if it is not in the right spot.',
       });
-      success('Template scan completed.');
+      success('Name position reset to our best guess.');
     } catch {
       error('Failed to scan the uploaded template.');
     } finally {
@@ -762,10 +798,36 @@ export default function OrganizerCertificates() {
       customTemplateName: '',
       customTemplateType: '',
       customTemplateSize: '',
+      customTemplateAspect: null,
       customTemplateFields: null,
       customTemplateScanStatus: '',
     });
   };
+
+  const handleNameFieldChange = (nameField) => {
+    updateTemplate({
+      customTemplateFields: {
+        ...(template.customTemplateFields || {}),
+        name: { ...nameField, cover: false, manual: true },
+      },
+      customTemplateScanStatus: '',
+    });
+  };
+
+  // Templates uploaded before their shape was recorded: measure them once.
+  useEffect(() => {
+    if (!template.customTemplateDataUrl || template.customTemplateAspect) return;
+    if (!String(template.customTemplateType || '').startsWith('image/')) return;
+    let cancelled = false;
+    loadTemplateImage(template.customTemplateDataUrl)
+      .then((image) => {
+        if (!cancelled && image.naturalWidth && image.naturalHeight) {
+          updateTemplate({ customTemplateAspect: image.naturalWidth / image.naturalHeight });
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [template.customTemplateDataUrl, template.customTemplateAspect, template.customTemplateType, updateTemplate]);
 
   // Reloads everything this page is built from — not just scores — and says
   // so, since on an up-to-date page nothing on screen would otherwise change.
@@ -979,7 +1041,7 @@ export default function OrganizerCertificates() {
                       style={{ ...secondaryButtonStyle, opacity: isScanningTemplate ? 0.7 : 1 }}
                     >
                       <i className={isScanningTemplate ? 'bi bi-arrow-repeat' : 'bi bi-magic'} style={{ marginRight: 8 }} />
-                      {isScanningTemplate ? 'Scanning...' : 'Scan Template'}
+                      {isScanningTemplate ? 'Working...' : 'Reset Name Position'}
                     </button>
                   )}
                   {hasUploadedTemplate && (
@@ -1003,14 +1065,14 @@ export default function OrganizerCertificates() {
                   </div>
                 )}
                 <div style={templateUploadNoteStyle}>
-                  Uploaded templates will only receive the recipient name. Keep the event, role, place, and other wording inside the Canva/PDF design.
+                  Only the recipient&apos;s name is added on top of your design, so keep the event, role, place, and other wording inside the design itself. The same template and name position are reused for every certificate.
                 </div>
               </div>
 
               <div style={templatePreviewBoxStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 10 }}>
                   <div style={{ color: '#64748b', fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase' }}>
-                    Uploaded Preview
+                    {hasUploadedTemplate && !uploadedTemplateIsPdf ? 'Where the name goes' : 'Uploaded Preview'}
                   </div>
                 </div>
                 {hasUploadedTemplate ? (
@@ -1021,10 +1083,10 @@ export default function OrganizerCertificates() {
                       style={templatePreviewFrameStyle}
                     />
                   ) : (
-                    <img
-                      src={template.customTemplateDataUrl}
-                      alt={template.customTemplateName || 'Uploaded certificate template preview'}
-                      style={templatePreviewImageStyle}
+                    <NamePlacementEditor
+                      template={template}
+                      sampleName={participantRecipients[0]?.name || judgeRecipients[0]?.name || 'Sample Recipient Name'}
+                      onChange={handleNameFieldChange}
                     />
                   )
                 ) : (
@@ -1035,7 +1097,7 @@ export default function OrganizerCertificates() {
                 )}
                 {uploadedTemplateIsPdf && (
                   <div style={{ color: '#64748b', fontSize: 11, marginTop: 8 }}>
-                    PDF is preview-only here. Export as PNG/JPG if you want the system to place the recipient name on top.
+                    This PDF was uploaded before PDF templates could take a name. Upload it again to place the recipient name on it.
                   </div>
                 )}
               </div>
@@ -1562,15 +1624,6 @@ const templatePreviewFrameStyle = {
   background: '#f8fafc',
 };
 
-const templatePreviewImageStyle = {
-  width: '100%',
-  height: 170,
-  objectFit: 'contain',
-  border: '1px solid #dbeafe',
-  borderRadius: 10,
-  background: '#f8fafc',
-  display: 'block',
-};
 
 const templatePreviewEmptyStyle = {
   height: 170,
