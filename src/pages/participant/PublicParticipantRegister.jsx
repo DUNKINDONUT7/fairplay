@@ -346,6 +346,20 @@ export default function PublicParticipantRegister() {
     setEditingMemberId(member.id);
   }
 
+  // The public /participant/register link works without an account, so only
+  // signed-in participants have an events list to go back to.
+  const isParticipant = user?.role === 'participant';
+  const backButton = (
+    <button
+      type="button"
+      onClick={() => navigate(isParticipant ? '/participant/events' : `/events/${eventId}`)}
+      style={{ ...secondaryActionButton, marginTop: 16 }}
+    >
+      <i className="bi bi-arrow-left" />
+      {isParticipant ? 'Back to Events' : 'Back to Event'}
+    </button>
+  );
+
   /* ─── Loading ─── */
   if (phase === 'loading') {
     return (
@@ -435,6 +449,7 @@ export default function PublicParticipantRegister() {
             <i className="bi bi-calendar-event" style={{ marginRight: 6 }} />
             {formatDate(event?.startDate)} - {registered?.subEventName ? venueText : (event?.location || 'Venue TBD')}
           </div>
+          {backButton}
         </div>
       </div>
     );
@@ -468,6 +483,7 @@ export default function PublicParticipantRegister() {
             <i className="bi bi-calendar-event" style={{ marginRight: 6 }} />
             {formatDate(event?.startDate)} - {registered?.subEventName ? venueText : (event?.location || 'Venue TBD')}
           </div>
+          {backButton}
         </div>
       </div>
     );

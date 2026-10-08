@@ -11,7 +11,7 @@ export default function AuthModal({ onClose }) {
   const initialMode = searchParams.get('modal') === 'register' ? 'register' : 'login';
 
   const store = useAuthStore();
-  const { error: showError } = useNotificationStore();
+  const { error: showError, success: showSuccess } = useNotificationStore();
   const authMode = store.authMode;
   const authModeLabel = authMode === 'disconnected' ? 'Sign In Unavailable' : 'Secure Sign In';
   const [mode, setMode] = useState(initialMode);
@@ -129,8 +129,9 @@ export default function AuthModal({ onClose }) {
     if (result.success) {
       if (result.requiresEmailConfirmation) {
         setMode('login');
-        setNotice(result.message || 'Account created. Check your email to confirm it, then sign in.');
+        setNotice(`A confirmation email has been sent to ${email}. Open the link in it (check your spam folder too), then sign in.`);
         setLoginData({ email, password: '' });
+        showSuccess('Account created — confirmation email sent.');
         return;
       }
       onClose();
@@ -347,7 +348,13 @@ export default function AuthModal({ onClose }) {
 
               <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#cbd5e1', marginBottom: 20 }}>
                 <input type="checkbox" checked={acceptedTerms} onChange={(event) => setAcceptedTerms(event.target.checked)} style={{ width: 16, height: 16, accentColor: '#06b6d4' }} />
-                I agree to the FairPlay terms and privacy policy.
+                {/* Opens in a new tab so the half-filled form isn't lost. */}
+                <span>
+                  I agree to the FairPlay{' '}
+                  <a href="/terms" target="_blank" rel="noopener noreferrer" style={termsLinkStyle}>terms</a>
+                  {' '}and{' '}
+                  <a href="/terms#privacy" target="_blank" rel="noopener noreferrer" style={termsLinkStyle}>privacy policy</a>.
+                </span>
               </label>
 
               <button type="submit" disabled={store.loading} style={primaryButtonStyle}>
@@ -438,6 +445,12 @@ const primaryButtonStyle = {
   fontWeight: 800,
   fontSize: 15,
   cursor: 'pointer',
+};
+
+const termsLinkStyle = {
+  color: '#22d3ee',
+  fontWeight: 700,
+  textDecoration: 'underline',
 };
 
 const rotatingIconStyle = {

@@ -27,7 +27,11 @@ export default function GlobalAuthModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialized, loading, hasModal, signedIn, blockedOrganizer]);
 
-  if (loading || !initialized) {
+  // Only the initial session check hides the modal. `loading` is also true
+  // while a sign-in or sign-up request is in flight, and unmounting AuthModal
+  // for that threw away its state — the form reset to Sign In and the
+  // "confirmation email sent" notice never appeared.
+  if (!initialized) {
     // initAuth() is bounded (worst case a handful of seconds, if a stale
     // browser session lock makes getSession() hang), but this component
     // rendered nothing at all during that wait — someone landing directly

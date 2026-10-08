@@ -41,6 +41,7 @@ const QRInterceptor = lazy(() => import('./pages/public/QRInterceptor'));
 const QRResolver = lazy(() => import('./components/qr/QRResolver'));
 const EmailConfirmed = lazy(() => import('./pages/auth/EmailConfirmed'));
 const ResetPassword = lazy(() => import('./pages/auth/ResetPassword'));
+const Terms = lazy(() => import('./pages/public/Terms'));
 
 const AdminDashboard = lazy(() => import('./pages/admin/AdminDashboard'));
 const AdminAnalytics = lazy(() => import('./pages/admin/AdminAnalytics'));
@@ -432,6 +433,7 @@ export default function App() {
           <Route path="/scan/:token" element={<QRResolver />} />
           <Route path="/auth/confirmed" element={<EmailConfirmed />} />
           <Route path="/auth/reset-password" element={<ResetPassword />} />
+          <Route path="/terms" element={<Terms />} />
 
           {/* Admin Routes */}
           <Route path="/admin" element={<ProtectedRoute role="admin"><AdminDashboard /></ProtectedRoute>} />
