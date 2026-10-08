@@ -556,6 +556,10 @@ export default function CreateEvent() {
     });
   }, []);
 
+  const setFormNumber = useCallback((name, value) => {
+    handleFieldChange({ target: { name, value, type: 'text' } });
+  }, [handleFieldChange]);
+
   const handleEventImageUpload = useCallback((event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -714,6 +718,7 @@ export default function CreateEvent() {
   const validateStep = useCallback((targetStep) => {
     if (targetStep === 1) {
       if (!form.title.trim()) return 'Event title is required.';
+      if (lettersWarning(form.title, 'Event title')) return lettersWarning(form.title, 'Event title');
       if (!form.description.trim()) return 'Event description is required.';
     }
 
@@ -727,10 +732,13 @@ export default function CreateEvent() {
       if (form.registrationDeadline < todayDate) return 'Registration deadline cannot be in the past.';
       if (form.registrationDeadline > form.startDate) return 'Registration deadline must be on or before the start date.';
       if (form.eventType !== 'sportsfest' && !form.location.trim()) return 'Location is required.';
+      if (lettersWarning(form.location, 'Location')) return lettersWarning(form.location, 'Location');
+      if (form.maxParticipants && Number(form.maxParticipants) < 2) return 'Maximum participants must be at least 2.';
       const mode = TOURNAMENT_TYPES.includes(form.eventType) ? 'tournament' : 'performance';
       if (mode === 'tournament') {
         if (!form.maxParticipants) return 'Set the maximum number of teams/participants.';
         if (form.teamEventCategory === 'Other Team Sports' && !form.customSportName.trim()) return 'Type the custom team sport name.';
+        if (lettersWarning(form.customSportName, 'Custom name')) return lettersWarning(form.customSportName, 'Custom name');
         if (form.teamEventCategory === 'Esports' && !form.esportGame) return 'Choose the esports game.';
         if (form.teamEventCategory === 'Esports' && form.esportGame === 'Other' && !form.customSportName.trim()) return 'Type the custom esports game name.';
         if (Number(form.minTeamMembers || 0) < 1 || Number(form.maxTeamMembers || 0) < Number(form.minTeamMembers || 0)) {
@@ -739,6 +747,8 @@ export default function CreateEvent() {
         if (form.eventType === 'sportsfest') {
           const validSubEvents = form.subEvents.filter((subEvent) => subEvent.name.trim());
           if (validSubEvents.length === 0) return 'Add at least one sub-event for a sports fest.';
+          const badSubEventName = validSubEvents.map((subEvent) => lettersWarning(subEvent.name, 'Sub-event name')).find(Boolean);
+          if (badSubEventName) return badSubEventName;
           if (validSubEvents.some((subEvent) => subEvent.category === 'Custom' && !subEvent.customCategory?.trim())) {
             return 'Type a custom category or choose one from the category dropdown.';
           }
@@ -757,6 +767,11 @@ export default function CreateEvent() {
         }
         if (form.performanceScoringMode === 'multi-round' && form.rounds.length < 2) {
           return 'Add at least 2 rounds (e.g. Eliminations and Finals).';
+        }
+        if (form.performanceScoringMode === 'multi-round') {
+          if (form.rounds.some((round) => !String(round.name || '').trim())) return 'Every round needs a name.';
+          const badRoundName = form.rounds.map((round) => lettersWarning(round.name, 'Round name')).find(Boolean);
+          if (badRoundName) return badRoundName;
         }
       }
     }
@@ -1422,7 +1437,7 @@ export default function CreateEvent() {
                   </div>
 
                   <Field label="Event Title">
-                    <input name="title" value={form.title} onChange={handleFieldChange} placeholder="Example: University Week 2026" style={inputStyle} />
+                    <TextInput label="Event title" name="title" value={form.title} onChange={handleFieldChange} placeholder="Example: University Week 2026" maxLength={120} />
                   </Field>
 
                   {/* Visual event type selector */}
@@ -1600,7 +1615,7 @@ export default function CreateEvent() {
                       </div>
                       <BracketFormatExplainer value={form.bracketType} />
                       <Field label="Maximum teams / participants">
-                        <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 8 teams" style={inputStyle} />
+                        <NumberField value={form.maxParticipants} onChange={(value) => setFormNumber('maxParticipants', value)} min={2} max={MAX_ENTRANTS} placeholder="e.g. 8" unit="teams" ariaLabel="Maximum teams or participants" />
                       </Field>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 14 }}>
                         <Field label="Team sport category">
@@ -1622,14 +1637,14 @@ export default function CreateEvent() {
                         )}
                         {(form.teamEventCategory === 'Other Team Sports' || form.esportGame === 'Other') && (
                           <Field label={form.teamEventCategory === 'Esports' ? 'Custom game name' : 'Custom sport name'}>
-                            <input name="customSportName" value={form.customSportName} onChange={handleFieldChange} placeholder="Type custom name" style={inputStyle} />
+                            <TextInput label="Custom name" name="customSportName" value={form.customSportName} onChange={handleFieldChange} placeholder="Type custom name" maxLength={60} />
                           </Field>
                         )}
                         <Field label="Minimum players">
-                          <input name="minTeamMembers" type="number" min="1" value={form.minTeamMembers} onChange={handleFieldChange} style={inputStyle} />
+                          <NumberField value={form.minTeamMembers} onChange={(value) => setFormNumber('minTeamMembers', value)} min={1} max={MAX_TEAM_SIZE} unit="players" ariaLabel="Minimum players" />
                         </Field>
                         <Field label="Maximum players">
-                          <input name="maxTeamMembers" type="number" min="1" value={form.maxTeamMembers} onChange={handleFieldChange} style={inputStyle} />
+                          <NumberField value={form.maxTeamMembers} onChange={(value) => setFormNumber('maxTeamMembers', value)} min={Math.max(Number(form.minTeamMembers) || 1, 1)} max={MAX_TEAM_SIZE} unit="players" ariaLabel="Maximum players" />
                         </Field>
                       </div>
                       <div style={{ ...infoPanelStyle, marginTop: 14, display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -1660,7 +1675,7 @@ export default function CreateEvent() {
                             <div key={subEvent.id} style={nestedPanelStyle}>
                               <div style={subEventGridStyle}>
                                 <Field label={`Sub-event ${index + 1}`}>
-                                  <input value={subEvent.name} onChange={(e) => updateSubEvent(subEvent.id, 'name', e.target.value)} placeholder="e.g. Basketball" style={inputStyle} />
+                                  <TextInput label="Sub-event name" value={subEvent.name} onChange={(e) => updateSubEvent(subEvent.id, 'name', e.target.value)} placeholder="e.g. Basketball" maxLength={80} />
                                 </Field>
                                 <Field label="Category">
                                   <select value={subEvent.category || 'Indoor Sport'} onChange={(e) => updateSubEventCategory(subEvent.id, e.target.value)} style={inputStyle}>
@@ -1682,7 +1697,7 @@ export default function CreateEvent() {
                                   </select>
                                 </Field>
                                 <Field label="Max participants">
-                                  <input type="number" min="1" value={subEvent.maxParticipants || ''} onChange={(e) => updateSubEvent(subEvent.id, 'maxParticipants', e.target.value)} placeholder="e.g. 16" style={inputStyle} />
+                                  <NumberField value={subEvent.maxParticipants} onChange={(value) => updateSubEvent(subEvent.id, 'maxParticipants', value)} min={1} max={MAX_ENTRANTS} placeholder="e.g. 16" ariaLabel="Maximum participants" />
                                 </Field>
                                 {subEvent.format === 'team' && (
                                   <>
@@ -1705,19 +1720,19 @@ export default function CreateEvent() {
                                     )}
                                     {(subEvent.sportType === 'Other Team Sports' || subEvent.esportGame === 'Other') && (
                                       <Field label={subEvent.sportType === 'Esports' ? 'Custom game' : 'Custom sport'}>
-                                        <input value={subEvent.customSportName || ''} onChange={(e) => updateSubEvent(subEvent.id, 'customSportName', e.target.value)} placeholder="Type custom name" style={inputStyle} />
+                                        <TextInput label="Custom name" value={subEvent.customSportName || ''} onChange={(e) => updateSubEvent(subEvent.id, 'customSportName', e.target.value)} placeholder="Type custom name" maxLength={60} />
                                       </Field>
                                     )}
                                     <Field label="Min team members">
-                                      <input type="number" min="1" value={subEvent.minParticipants || ''} onChange={(e) => updateSubEvent(subEvent.id, 'minParticipants', e.target.value)} style={inputStyle} />
+                                      <NumberField value={subEvent.minParticipants} onChange={(value) => updateSubEvent(subEvent.id, 'minParticipants', value)} min={1} max={MAX_TEAM_SIZE} ariaLabel="Minimum players" />
                                     </Field>
                                     <Field label="Max team members">
-                                      <input type="number" min="1" value={subEvent.maxTeamMembers || ''} onChange={(e) => updateSubEvent(subEvent.id, 'maxTeamMembers', e.target.value)} style={inputStyle} />
+                                      <NumberField value={subEvent.maxTeamMembers} onChange={(value) => updateSubEvent(subEvent.id, 'maxTeamMembers', value)} min={Math.max(Number(subEvent.minParticipants) || 1, 1)} max={MAX_TEAM_SIZE} ariaLabel="Maximum players" />
                                     </Field>
                                   </>
                                 )}
                                 <Field label="Venue">
-                                  <input value={subEvent.venue || ''} onChange={(e) => updateSubEvent(subEvent.id, 'venue', e.target.value)} placeholder="e.g. Brgy. Olympia Court" style={inputStyle} />
+                                  <TextInput label="Venue" value={subEvent.venue || ''} onChange={(e) => updateSubEvent(subEvent.id, 'venue', e.target.value)} placeholder="e.g. Brgy. Olympia Court" maxLength={120} />
                                 </Field>
                                 <button onClick={() => removeSubEvent(subEvent.id)} style={iconButtonStyle} title="Remove"><i className="bi bi-trash3" /></button>
                               </div>
@@ -1827,23 +1842,38 @@ export default function CreateEvent() {
                         </div>
                         <BracketFormatExplainer value={form.bracketType} />
                         <Field label="Maximum contestants">
-                          <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 16 contestants" style={inputStyle} />
+                          <NumberField value={form.maxParticipants} onChange={(value) => setFormNumber('maxParticipants', value)} min={2} max={MAX_ENTRANTS} placeholder="e.g. 16" unit="contestants" ariaLabel="Maximum contestants" />
                         </Field>
                       </div>
                     ) : (
                       <div style={gridTwoStyle}>
                         <Field label="Point scale">
-                          <select name="pointScale" value={form.pointScale} onChange={handleFieldChange} style={inputStyle}>
-                            <option value="10">10-point scale</option>
-                            <option value="50">50-point scale</option>
-                            <option value="100">100-point scale</option>
-                          </select>
+                          <div role="radiogroup" aria-label="Point scale" style={segmentedStyle}>
+                            {POINT_SCALES.map((scale) => {
+                              const active = String(form.pointScale) === scale;
+                              return (
+                                <button
+                                  key={scale}
+                                  type="button"
+                                  role="radio"
+                                  aria-checked={active}
+                                  onClick={() => setFormNumber('pointScale', scale)}
+                                  style={{ ...segmentStyle, ...(active ? segmentActiveStyle : null) }}
+                                >
+                                  1 – {scale}
+                                </button>
+                              );
+                            })}
+                          </div>
                           <div style={helperTextStyle}>
                             Judges score each criterion from 1 to {form.pointScale}, and final scores are out of {form.pointScale}.
                           </div>
                         </Field>
                         <Field label="Maximum contestants">
-                          <input name="maxParticipants" type="number" min="2" value={form.maxParticipants} onChange={handleFieldChange} placeholder="e.g. 30 contestants" style={inputStyle} />
+                          <NumberField value={form.maxParticipants} onChange={(value) => setFormNumber('maxParticipants', value)} min={2} max={MAX_ENTRANTS} placeholder="e.g. 30" unit="contestants" ariaLabel="Maximum contestants" />
+                          <div style={helperTextStyle}>
+                            Registration closes once this many contestants have joined.
+                          </div>
                         </Field>
                       </div>
                     )}
@@ -1858,21 +1888,26 @@ export default function CreateEvent() {
                               <i className={isFinals ? 'bi bi-trophy' : 'bi bi-arrow-right-circle'} style={{ color: isFinals ? '#fff' : '#2563eb' }} />
                             </div>
                             <div style={{ flex: 1, minWidth: 140 }}>
-                              <input
+                              <TextInput
+                                label="Round name"
                                 value={round.name}
                                 onChange={(e) => updateRound(round.id, 'name', e.target.value)}
-                                style={{ ...inputStyle, fontWeight: 700, padding: '8px 12px' }}
+                                style={{ fontWeight: 700, padding: '8px 12px' }}
                                 placeholder="Round name"
+                                maxLength={60}
                               />
                             </div>
                             {!isFinals && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
                                 <span style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>Top</span>
-                                <input
-                                  type="number" min="1" value={round.advanceTo || ''}
-                                  onChange={(e) => updateRound(round.id, 'advanceTo', Number(e.target.value))}
-                                  style={{ ...inputStyle, width: 72, padding: '8px 10px', textAlign: 'center' }}
+                                <NumberField
+                                  compact
+                                  value={round.advanceTo}
+                                  onChange={(value) => updateRound(round.id, 'advanceTo', Number(value))}
+                                  min={1}
+                                  max={MAX_ENTRANTS}
                                   placeholder="10"
+                                  ariaLabel={`Contestants advancing from ${round.name || 'this round'}`}
                                 />
                                 <span style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>advance</span>
                               </div>
@@ -1935,7 +1970,7 @@ export default function CreateEvent() {
                     {form.eventType !== 'sportsfest' && (
                       <div style={scheduleFieldStyle}>
                         <label htmlFor="location" style={scheduleLabelStyle}>Venue / location</label>
-                        <input id="location" name="location" value={form.location} onChange={handleFieldChange} placeholder="e.g. Main gymnasium" style={inputStyle} />
+                        <TextInput label="Location" id="location" name="location" value={form.location} onChange={handleFieldChange} placeholder="e.g. Main gymnasium" maxLength={120} />
                         <div style={helperTextStyle}>Where participants and judges should go.</div>
                       </div>
                     )}
@@ -1959,15 +1994,7 @@ export default function CreateEvent() {
                       <div style={eyebrowStyle}>Audience impact settings</div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 14 }}>
                         <Field label="Audience impact weight">
-                          <input
-                            name="audienceImpactWeight"
-                            type="number"
-                            min="1"
-                            max="30"
-                            value={form.audienceImpactWeight}
-                            onChange={handleFieldChange}
-                            style={inputStyle}
-                          />
+                          <NumberField value={form.audienceImpactWeight} onChange={(value) => setFormNumber('audienceImpactWeight', value)} min={1} max={30} unit="%" ariaLabel="Audience impact weight" />
                         </Field>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#0f172a', fontWeight: 800, paddingTop: 24 }}>
                           <input name="audienceVotingOpen" type="checkbox" checked={form.audienceVotingOpen} onChange={handleFieldChange} />
@@ -2511,6 +2538,92 @@ function Field({ label, action, children }) {
   );
 }
 
+// A number-only box: letters and symbols never reach the form, and the
+// reason shows right under the field instead of failing later on "Next".
+function NumberField({ value, onChange, min = 1, max, placeholder, unit, compact = false, ariaLabel }) {
+  const [rejected, setRejected] = useState(false);
+  const text = value === null || value === undefined || value === 0 ? '' : String(value);
+  const number = Number(text);
+  const rangeError = text === ''
+    ? ''
+    : number < min
+      ? `Must be at least ${min}.`
+      : max !== undefined && number > max
+        ? `Must be ${max} or less.`
+        : '';
+  const message = rejected ? 'Numbers only.' : rangeError;
+
+  const handleChange = (event) => {
+    const raw = event.target.value;
+    const digits = raw.replace(/\D/g, '').replace(/^0+(?=\d)/, '').slice(0, 4);
+    setRejected(/\D/.test(raw));
+    onChange(digits);
+  };
+
+  return (
+    <div style={compact ? { width: 76 } : undefined}>
+      <div style={{ position: 'relative' }}>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          autoComplete="off"
+          value={text}
+          onChange={handleChange}
+          onBlur={() => setRejected(false)}
+          placeholder={placeholder}
+          aria-label={ariaLabel}
+          aria-invalid={Boolean(message)}
+          title={compact ? message : undefined}
+          style={{
+            ...inputStyle,
+            ...(compact ? { padding: '8px 10px', textAlign: 'center' } : null),
+            ...(unit && !compact ? { paddingRight: 16 + unit.length * 8 } : null),
+            ...(message ? invalidInputStyle : null),
+          }}
+        />
+        {unit && !compact && (
+          <span style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 13, fontWeight: 600, pointerEvents: 'none' }}>{unit}</span>
+        )}
+      </div>
+      {message && !compact && <FieldMessage>{message}</FieldMessage>}
+    </div>
+  );
+}
+
+// Names, titles and places may contain digits ("University Week 2026",
+// "Room 204") but must have words in them.
+function lettersWarning(value, label) {
+  const text = String(value || '').trim();
+  return text && !/\p{L}/u.test(text) ? `${label} must contain words, not only numbers or symbols.` : '';
+}
+
+function TextInput({ label, style, value, ...inputProps }) {
+  const message = lettersWarning(value, label);
+  return (
+    <div>
+      <input
+        type="text"
+        value={value}
+        aria-label={inputProps.id ? undefined : label}
+        aria-invalid={Boolean(message)}
+        {...inputProps}
+        style={{ ...inputStyle, ...style, ...(message ? invalidInputStyle : null) }}
+      />
+      {message && <FieldMessage>{message}</FieldMessage>}
+    </div>
+  );
+}
+
+function FieldMessage({ children }) {
+  return (
+    <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, color: '#b91c1c', fontSize: 12, fontWeight: 600 }}>
+      <i className="bi bi-exclamation-circle-fill" />
+      <span>{children}</span>
+    </div>
+  );
+}
+
 function ToggleCard({ label, name, value, onChange, description }) {
   return (
     <label style={{ display: 'block', padding: 18, borderRadius: 16, background: value ? 'rgba(37,99,235,0.08)' : '#f8fafc', border: value ? '1px solid rgba(37,99,235,0.22)' : '1px solid #e2e8f0', cursor: 'pointer' }}>
@@ -2719,6 +2832,42 @@ const clearImageButtonStyle = {
   fontSize: 13,
   padding: '10px 14px',
   cursor: 'pointer',
+};
+
+const MAX_ENTRANTS = 9999;
+const MAX_TEAM_SIZE = 99;
+const POINT_SCALES = ['10', '50', '100'];
+
+const invalidInputStyle = {
+  border: '1px solid #dc2626',
+  background: '#fef2f2',
+};
+
+const segmentedStyle = {
+  display: 'flex',
+  gap: 4,
+  padding: 4,
+  borderRadius: 14,
+  background: '#f1f5f9',
+  border: '1px solid #e2e8f0',
+};
+
+const segmentStyle = {
+  flex: 1,
+  padding: '9px 6px',
+  borderRadius: 10,
+  border: 'none',
+  background: 'transparent',
+  color: '#64748b',
+  fontWeight: 700,
+  fontSize: 14,
+  cursor: 'pointer',
+};
+
+const segmentActiveStyle = {
+  background: '#ffffff',
+  color: '#1d4ed8',
+  boxShadow: '0 1px 4px rgba(15,23,42,0.14)',
 };
 
 const helperTextStyle = {
