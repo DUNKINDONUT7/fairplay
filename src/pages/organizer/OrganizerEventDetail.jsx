@@ -13,6 +13,7 @@ import { inferTeamLimitConfig, getParticipantLimitMessage, TEAM_EVENT_CATEGORIES
 import { shuffleArray } from '../../utils/helpers';
 import { getEventCapacity, getEventFullMessage } from '../../utils/systemSelectors';
 import Breadcrumbs from '../../components/common/Breadcrumbs';
+import ScoreGuide from '../../components/scoring/ScoreGuide';
 import useEventReport from '../../hooks/useEventReport';
 import { formatScore } from '../../utils/eventReport';
 import { EMAIL_PATTERN, sendParticipantAddedEmail } from '../../services/participantEmailService';
@@ -1114,6 +1115,7 @@ export default function OrganizerEventDetail() {
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>
                       Range: {criterion.scoringRange || '1-10'} &nbsp;•&nbsp; {criterion.judgeInstructions}
                     </div>
+                    <ScoreGuide criterion={criterion} style={{ marginTop: 6 }} />
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 20, color: '#2563eb', whiteSpace: 'nowrap' }}>
                     {criterion.weight}%

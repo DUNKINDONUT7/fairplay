@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
+import ScoreGuide from '../../components/scoring/ScoreGuide';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
@@ -155,6 +156,8 @@ function CriterionCard({ criterion, score, comment, onScore, onComment }) {
           )}
         </div>
       </div>
+
+      <ScoreGuide criterion={criterion} score={score} style={{ marginBottom: 12 }} />
 
       {/* Score selector */}
       <div style={{ marginBottom: 14 }}>

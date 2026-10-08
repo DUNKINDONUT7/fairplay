@@ -10,10 +10,29 @@ import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 import useRubricTemplateStore from '../../store/rubricTemplateStore';
 import {
-  generateCriteriaFromUpload,
   generateCriteriaWithAIFallback,
   generateJudgeAssets,
+  importUploadedCriteria,
+  refineRubricWithAI,
+  reviewRubricWithAI,
+  writeScoreGuides,
 } from '../../utils/aiCriteriaEngine';
+import {
+  MIN_CRITERIA,
+  buildDefaultScoreGuide,
+  checkRubricHealth,
+  hasScoreGuide,
+  normalizeScoreGuide,
+  scaleWeightsTo100,
+} from '../../utils/rubricTools';
+import {
+  CriterionCard,
+  RefineBar,
+  RubricHealthPanel,
+  WeightBar,
+  smallButtonStyle,
+} from '../../components/criteria/RubricEditor';
+import ScoreGuide from '../../components/scoring/ScoreGuide';
 import { getBusinessActorId } from '../../utils/identity';
 import { requestEventDescription } from '../../services/criteriaApiService';
 import { ensureEventTournamentAutomation } from '../../services/automationService';
@@ -249,20 +268,27 @@ function rangeForScale(pointScale) {
 // `forcedRange` replaces whatever range came back from generation, so the
 // rubric always matches the point scale the organizer picked. Left out for
 // uploaded rubrics and saved templates, which keep the ranges they define.
-function normalizeCriteriaOption(result, index = 0, forcedRange = '') {
+// `defaultRange` only fills in criteria that came without a range of their own.
+function normalizeCriteriaOption(result, index = 0, forcedRange = '', defaultRange = '1-10') {
   const rawCriteria = Array.isArray(result?.criteria) ? result.criteria : [];
-  const criteria = rawCriteria.map((criterion, criterionIndex) => ({
-    id: criterion.id || `criterion-${index}-${criterionIndex}`,
-    name: criterion.name || `Criterion ${criterionIndex + 1}`,
-    weight: Number(criterion.weight || 0),
-    description: criterion.description || '',
-    scoringRange: forcedRange || criterion.scoringRange || '1-10',
-    judgeInstructions: criterion.judgeInstructions || 'Score with consistency and evidence.',
-    editable: true,
-  }));
+  const criteria = rawCriteria.map((criterion, criterionIndex) => {
+    const scoreGuide = normalizeScoreGuide(criterion.scoreGuide);
+    return {
+      id: criterion.id || `criterion-${index}-${criterionIndex}`,
+      name: criterion.name || `Criterion ${criterionIndex + 1}`,
+      weight: Number(criterion.weight || 0),
+      description: criterion.description || '',
+      scoringRange: forcedRange || criterion.scoringRange || defaultRange,
+      judgeInstructions: criterion.judgeInstructions || 'Score with consistency and evidence.',
+      ...(scoreGuide.length ? { scoreGuide } : {}),
+      editable: true,
+    };
+  });
 
   return {
     profile: result?.profile || `Profile ${index + 1}`,
+    summary: result?.summary || '',
+    notes: result?.notes || '',
     criteria,
     scoringMethod: result?.scoringMethod || 'Weighted Rubric',
     tieBreaker: Array.isArray(result?.tieBreaker) ? result.tieBreaker : ['Highest weighted total score'],
@@ -271,10 +297,13 @@ function normalizeCriteriaOption(result, index = 0, forcedRange = '') {
 }
 
 function getCriteriaSourceLabel(source) {
-  if (source === 'api') return 'AI API';
-  if (source === 'uploaded') return 'Uploaded template';
-  return 'Local fallback';
+  if (source === 'api') return 'AI generated';
+  if (source === 'uploaded') return 'Uploaded criteria';
+  if (source === 'template') return 'Saved template';
+  return 'Offline generator';
 }
+
+const CRITERIA_LANGUAGES = ['English', 'Filipino', 'Taglish'];
 
 function getCriteriaSourceTone(source) {
   if (source === 'api') return '#2563eb';
@@ -290,10 +319,17 @@ async function extractPdfText(file) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const text = content.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .filter(Boolean)
-      .join(' ');
+    // Keep the document's line breaks: the criteria parser relies on them to
+    // tell a criterion's name from its description.
+    let text = '';
+    let lastY = null;
+    content.items.forEach((item) => {
+      if (!('str' in item) || !item.str.trim()) return;
+      const y = item.transform[5];
+      if (lastY !== null) text += Math.abs(y - lastY) > 2 ? '\n' : ' ';
+      text += item.str.trim();
+      lastY = y;
+    });
     pageTexts.push(text);
   }
 
@@ -367,6 +403,17 @@ export default function CreateEvent() {
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [uploadedCriteriaText, setUploadedCriteriaText] = useState('');
   const [uploadedCriteriaName, setUploadedCriteriaName] = useState('');
+  const [criteriaLanguage, setCriteriaLanguage] = useState('English');
+  const [isImporting, setIsImporting] = useState(false);
+  const [refineInstruction, setRefineInstruction] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
+  const [rewritingCriterionId, setRewritingCriterionId] = useState(null);
+  const [isWritingGuides, setIsWritingGuides] = useState(false);
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [rubricReview, setRubricReview] = useState(null);
+  const [lastAiChange, setLastAiChange] = useState('');
+  // The rubric as it was before the last AI change, for one-step undo.
+  const [undoDraft, setUndoDraft] = useState(null);
   const [criteriaDraft, setCriteriaDraft] = useState({
     profile: 'Pending generation',
     criteria: [],
@@ -421,6 +468,10 @@ export default function CreateEvent() {
     () => criteriaDraft.criteria.reduce((sum, criterion) => sum + Number(criterion.weight || 0), 0),
     [criteriaDraft.criteria]
   );
+
+  const rubricIssues = useMemo(() => checkRubricHealth(criteriaDraft), [criteriaDraft]);
+  // One AI action at a time, so two answers never overwrite each other.
+  const aiBusy = isGenerating || isImporting || isRefining || isWritingGuides || isReviewing || rewritingCriterionId !== null;
 
   const judgeAssets = useMemo(() => {
     const fallbackCriteria = [{ name: 'Overall Performance', weight: 100 }];
@@ -711,7 +762,8 @@ export default function CreateEvent() {
     }
 
     if (targetStep === 3) {
-      if (criteriaDraft.criteria.length < 5) return 'Generate at least five judging criteria.';
+      if (criteriaDraft.criteria.length < MIN_CRITERIA) return `A rubric needs at least ${MIN_CRITERIA} judging criteria.`;
+      if (criteriaDraft.criteria.some((criterion) => !String(criterion.name || '').trim())) return 'Every criterion needs a name.';
       if (totalWeight !== 100) return `Total criteria weight must be 100. Current total is ${totalWeight}.`;
     }
 
@@ -741,10 +793,16 @@ export default function CreateEvent() {
     totalWeight,
   ]);
 
-  const generateCriteria = useCallback(async () => {
+  // `useUpload` asks the AI to improve the uploaded criteria instead of
+  // writing a rubric from the event description alone.
+  const generateCriteria = useCallback(async ({ useUpload = false } = {}) => {
     const descriptionPrompt = form.description.trim();
     if (!descriptionPrompt) {
       error('Add an event description first. FairPlay uses that as the criteria prompt.');
+      return;
+    }
+    if (useUpload && !uploadedCriteriaText.trim()) {
+      error('Upload or paste your ready-made criteria first.');
       return;
     }
 
@@ -755,7 +813,8 @@ export default function CreateEvent() {
         eventType: form.eventType,
         description: form.description,
         prompt: descriptionPrompt,
-        uploadedCriteria: uploadedCriteriaText,
+        uploadedCriteria: useUpload ? uploadedCriteriaText : '',
+        language: criteriaLanguage,
         subEvents: form.subEvents.filter((subEvent) => subEvent.name.trim()).map(normalizeSubEventForSave),
         scoringMethod: form.scoringType,
         audienceImpact: form.audienceImpact,
@@ -778,7 +837,12 @@ export default function CreateEvent() {
 
       setCriteriaOptions(enhancedNormalized);
       setSelectedOptionIndex(0);
-      setCriteriaDraft(enhancedNormalized[0]);
+      setCriteriaDraft((current) => {
+        setUndoDraft(current.criteria.length > 0 ? current : null);
+        return enhancedNormalized[0];
+      });
+      setRubricReview(null);
+      setLastAiChange('');
 
       // Show source information
       const source = options[0]?.source === 'api' ? '(AI Generated)' : '(Local Generation)';
@@ -790,7 +854,7 @@ export default function CreateEvent() {
     } finally {
       setIsGenerating(false);
     }
-  }, [error, form.audienceImpact, form.description, form.eventType, form.pointScale, form.scoringType, form.subEvents, form.title, success, uploadedCriteriaText, user?.id]);
+  }, [criteriaLanguage, error, form.audienceImpact, form.description, form.eventType, form.pointScale, form.scoringType, form.subEvents, form.title, success, uploadedCriteriaText, user?.id]);
 
   const handleCriteriaFileUpload = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -804,7 +868,7 @@ export default function CreateEvent() {
       }
       setUploadedCriteriaText(text);
       setUploadedCriteriaName(file.name);
-      success('Criteria file loaded. You can edit it, import it, or regenerate with AI.');
+      success('Criteria file loaded. Use it as written, or let the AI improve it.');
     } catch (uploadError) {
       error(String(uploadError?.message || 'Unable to read criteria file.'));
     } finally {
@@ -812,38 +876,239 @@ export default function CreateEvent() {
     }
   }, [error, success]);
 
-  const handleImportUploadedCriteria = useCallback(() => {
+  const aiEventContext = useMemo(
+    () => ({ title: form.title, eventType: form.eventType, description: form.description }),
+    [form.description, form.eventType, form.title]
+  );
+
+  // Uses the uploaded criteria exactly as written — nothing added or reworded.
+  const handleImportUploadedCriteria = useCallback(async () => {
     if (!uploadedCriteriaText.trim()) {
       error('Upload or paste your ready-made criteria first.');
       return;
     }
 
-    const options = generateCriteriaFromUpload(uploadedCriteriaText, {
-      eventName: form.title,
-      eventType: form.eventType,
-      description: form.description,
-      subEvents: form.subEvents.filter((subEvent) => subEvent.name.trim()).map(normalizeSubEventForSave),
-    });
-    const normalized = (Array.isArray(options) ? options : [options])
-      .map((opt, idx) => normalizeCriteriaOption(opt, idx))
-      .filter((option) => option.criteria.length >= 5)
-      .map((option) => ({
+    setIsImporting(true);
+    try {
+      const imported = await importUploadedCriteria(uploadedCriteriaText, {
+        eventName: form.title,
+        eventType: form.eventType,
+        description: form.description,
+        event: aiEventContext,
+        userId: user?.id,
+      });
+      const option = imported && normalizeCriteriaOption(imported, 0, '', rangeForScale(form.pointScale));
+      if (!option || option.criteria.length === 0) {
+        error('No judging criteria could be read from this file. Check that it lists criteria with their weights.');
+        return;
+      }
+
+      const draft = {
         ...option,
         source: 'uploaded',
         modelUsed: uploadedCriteriaName || 'uploaded-template',
         requestId: `uploaded-${Date.now()}`,
-      }));
+      };
+      setCriteriaOptions([draft]);
+      setSelectedOptionIndex(0);
+      setCriteriaDraft((current) => {
+        setUndoDraft(current.criteria.length > 0 ? current : null);
+        return draft;
+      });
+      setRubricReview(null);
+      setLastAiChange('');
+      success(`Imported ${draft.criteria.length} criteria as written. You can edit them before review.`);
+    } finally {
+      setIsImporting(false);
+    }
+  }, [aiEventContext, error, form.description, form.eventType, form.pointScale, form.title, success, uploadedCriteriaName, uploadedCriteriaText, user?.id]);
 
-    if (normalized.length === 0) {
-      error('Unable to read usable criteria from the uploaded template.');
-      return;
+  // Swaps in an AI-edited rubric and keeps the previous one for Undo.
+  const applyAiDraft = useCallback((buildNext, summary) => {
+    setCriteriaDraft((current) => {
+      setUndoDraft(current);
+      return buildNext(current);
+    });
+    setLastAiChange(summary || '');
+  }, []);
+
+  const handleUndoAiChange = useCallback(() => {
+    if (!undoDraft) return;
+    setCriteriaDraft(undoDraft);
+    setUndoDraft(null);
+    setLastAiChange('');
+    success('Restored the rubric from before the last AI change.');
+  }, [success, undoDraft]);
+
+  // New criteria coming back from the AI take the event's scale; existing
+  // ones keep their range and their score guide.
+  const mergeAiCriteria = useCallback((current, incoming) => {
+    const byId = new Map(current.criteria.map((criterion) => [String(criterion.id), criterion]));
+    const fallbackRange = rangeForScale(form.pointScale);
+    return incoming.map((criterion, index) => {
+      const previous = byId.get(String(criterion.id));
+      byId.delete(String(criterion.id));
+      return {
+        ...criterion,
+        id: previous ? previous.id : `criterion-${Date.now()}-${index}`,
+        scoringRange: previous?.scoringRange || criterion.scoringRange || fallbackRange,
+        ...(previous?.scoreGuide ? { scoreGuide: previous.scoreGuide } : {}),
+        editable: true,
+      };
+    });
+  }, [form.pointScale]);
+
+  const handleRefineRubric = useCallback(async (instruction) => {
+    const request = String(instruction || '').trim();
+    if (!request) return false;
+    if (criteriaDraft.criteria.length === 0) {
+      error('Generate or upload criteria first, then tell the AI what to change.');
+      return false;
     }
 
-    setCriteriaOptions(normalized);
-    setSelectedOptionIndex(0);
-    setCriteriaDraft(normalized[0]);
-    success(`Uploaded ${normalized[0].criteria.length} criteria. You can now edit them before review.`);
-  }, [error, form.description, form.eventType, form.subEvents, form.title, success, uploadedCriteriaName, uploadedCriteriaText]);
+    setIsRefining(true);
+    try {
+      const refined = await refineRubricWithAI({
+        rubric: criteriaDraft,
+        instruction: request,
+        event: aiEventContext,
+        language: criteriaLanguage,
+        userId: user?.id,
+      });
+      applyAiDraft((current) => ({
+        ...current,
+        criteria: mergeAiCriteria(current, refined.criteria),
+        tieBreaker: refined.tieBreaker || current.tieBreaker,
+        judgeInstructions: refined.judgeInstructions || current.judgeInstructions,
+      }), refined.changeSummary || 'Rubric updated.');
+      setRefineInstruction('');
+      success(refined.changeSummary || 'Rubric updated by AI.');
+      return true;
+    } catch (refineError) {
+      error(`The AI could not apply that change. ${String(refineError?.message || '')}`.trim());
+      return false;
+    } finally {
+      setIsRefining(false);
+    }
+  }, [aiEventContext, applyAiDraft, criteriaDraft, criteriaLanguage, error, mergeAiCriteria, success, user?.id]);
+
+  // Rewrites one criterion's wording; every other criterion is left untouched
+  // even if the AI returns changes to them.
+  const handleRewriteCriterion = useCallback(async (index) => {
+    const target = criteriaDraft.criteria[index];
+    if (!target) return;
+
+    setRewritingCriterionId(target.id);
+    try {
+      const refined = await refineRubricWithAI({
+        rubric: criteriaDraft,
+        instruction: `Rewrite only the criterion named "${target.name}": make its description and judge instructions clearer, more specific to this event, and easier to score consistently. Keep its name, weight and scoring range. Do not change any other criterion.`,
+        event: aiEventContext,
+        language: criteriaLanguage,
+        userId: user?.id,
+      });
+      const rewritten = refined.criteria.find((criterion) => String(criterion.id) === String(target.id))
+        || refined.criteria.find((criterion) => criterion.name === target.name);
+      if (!rewritten) throw new Error('The criterion was not returned.');
+
+      applyAiDraft((current) => ({
+        ...current,
+        criteria: current.criteria.map((criterion) => (criterion.id === target.id
+          ? { ...criterion, description: rewritten.description || criterion.description, judgeInstructions: rewritten.judgeInstructions || criterion.judgeInstructions }
+          : criterion)),
+      }), `Rewrote "${target.name}".`);
+      success(`Rewrote "${target.name}".`);
+    } catch (rewriteError) {
+      error(`The AI could not rewrite this criterion. ${String(rewriteError?.message || '')}`.trim());
+    } finally {
+      setRewritingCriterionId(null);
+    }
+  }, [aiEventContext, applyAiDraft, criteriaDraft, criteriaLanguage, error, success, user?.id]);
+
+  // Fills in a score guide for every criterion that does not have one yet.
+  const handleWriteScoreGuides = useCallback(async () => {
+    const missing = criteriaDraft.criteria.filter((criterion) => !hasScoreGuide(criterion));
+    if (missing.length === 0) return;
+
+    setIsWritingGuides(true);
+    try {
+      const { guides, source } = await writeScoreGuides({
+        criteria: missing,
+        event: aiEventContext,
+        language: criteriaLanguage,
+        userId: user?.id,
+      });
+      applyAiDraft((current) => ({
+        ...current,
+        criteria: current.criteria.map((criterion) => (!hasScoreGuide(criterion) && guides[String(criterion.id)]
+          ? { ...criterion, scoreGuide: guides[String(criterion.id)] }
+          : criterion)),
+      }), `Added score guides to ${missing.length} ${missing.length === 1 ? 'criterion' : 'criteria'}.`);
+      if (source === 'api') success('Score guides written. Open a criterion to review or edit its guide.');
+      else success('The AI is unavailable, so standard score guides were added. Edit them to fit your event.');
+    } finally {
+      setIsWritingGuides(false);
+    }
+  }, [aiEventContext, applyAiDraft, criteriaDraft.criteria, criteriaLanguage, success, user?.id]);
+
+  const handleReviewRubric = useCallback(async () => {
+    if (criteriaDraft.criteria.length === 0) return;
+    setIsReviewing(true);
+    try {
+      const review = await reviewRubricWithAI({
+        rubric: criteriaDraft,
+        event: aiEventContext,
+        language: criteriaLanguage,
+        userId: user?.id,
+      });
+      setRubricReview(review);
+    } catch (reviewError) {
+      error(`The AI review is unavailable right now. ${String(reviewError?.message || '')}`.trim());
+    } finally {
+      setIsReviewing(false);
+    }
+  }, [aiEventContext, criteriaDraft, criteriaLanguage, error, user?.id]);
+
+  const handleApplyReviewFix = useCallback(async (issue) => {
+    const applied = await handleRefineRubric(issue.fix);
+    if (applied) {
+      setRubricReview((current) => (current ? { ...current, issues: current.issues.filter((item) => item.id !== issue.id) } : current));
+    }
+  }, [handleRefineRubric]);
+
+  const handleScaleWeights = useCallback(() => {
+    setCriteriaDraft((current) => ({ ...current, criteria: scaleWeightsTo100(current.criteria) }));
+    success('Weights scaled to 100% with their proportions kept.');
+  }, [success]);
+
+  const handleScoreGuideAdd = useCallback((index) => {
+    setCriteriaDraft((current) => ({
+      ...current,
+      criteria: current.criteria.map((criterion, criterionIndex) =>
+        (criterionIndex === index ? { ...criterion, scoreGuide: buildDefaultScoreGuide(criterion) } : criterion)),
+    }));
+  }, []);
+
+  const handleScoreGuideRemove = useCallback((index) => {
+    setCriteriaDraft((current) => ({
+      ...current,
+      criteria: current.criteria.map((criterion, criterionIndex) => {
+        if (criterionIndex !== index) return criterion;
+        const rest = { ...criterion };
+        delete rest.scoreGuide;
+        return rest;
+      }),
+    }));
+  }, []);
+
+  const handleScoreGuideChange = useCallback((index, levelKey, value) => {
+    setCriteriaDraft((current) => ({
+      ...current,
+      criteria: current.criteria.map((criterion, criterionIndex) => (criterionIndex === index
+        ? { ...criterion, scoreGuide: (criterion.scoreGuide || []).map((level) => (level.key === levelKey ? { ...level, description: value } : level)) }
+        : criterion)),
+    }));
+  }, []);
 
   useEffect(() => {
     if (step === 3 && !hasAutoGenerated.current) {
@@ -903,7 +1168,7 @@ export default function CreateEvent() {
   const handleRemoveCriterion = useCallback((index) => {
     setCriteriaDraft((current) => ({
       ...current,
-      criteria: current.criteria.length > 5
+      criteria: current.criteria.length > MIN_CRITERIA
         ? current.criteria.filter((_, criterionIndex) => criterionIndex !== index)
         : current.criteria,
     }));
@@ -922,7 +1187,7 @@ export default function CreateEvent() {
         })),
       };
     });
-    success('Criteria weights balanced to 100.');
+    success('Every criterion now has an equal weight.');
   }, [success]);
 
   const handleSaveRubricAsTemplate = useCallback(async () => {
@@ -1719,173 +1984,183 @@ export default function CreateEvent() {
             )}
 
             {step === 3 && (
-              <div style={{ display: 'grid', gridTemplateColumns: '360px minmax(0, 1fr)', gap: 20 }}>
-                <div style={{ display: 'grid', gap: 20, alignSelf: 'start' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+                <div style={{ flex: '1 1 320px', maxWidth: 400, minWidth: 0, display: 'grid', gap: 20 }}>
                   <div style={sectionCardStyle}>
-                    <div style={eyebrowStyle}>Event description prompt</div>
-                    <h2 style={panelTitleStyle}>Criteria Source</h2>
-                    <Field label="Prompt used by AI">
-                      <textarea
-                        value={form.description}
-                        readOnly
-                        rows={8}
-                        placeholder="Go back to Event Setup and add a description first."
-                        style={{ ...inputStyle, resize: 'vertical', background: '#f8fafc', color: '#334155' }}
-                      />
-                    </Field>
-                    <div style={{ ...infoPanelStyle, background: '#ffffff' }}>
-                      <div style={eyebrowStyle}>Ready-made criteria</div>
-                      <div style={{ color: '#0f172a', fontWeight: 800, marginBottom: 8 }}>Upload or paste template</div>
-                      <div style={{ color: '#475569', fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
-                        Minimum is 5 criteria, but FairPlay will import all uploaded criteria even if the template has more. Format: Name | Weight | Description | Scoring range | Judge instructions.
-                      </div>
-                      <input
-                        type="file"
-                        accept=".pdf,application/pdf,.json,.txt,.csv,.md"
-                        onChange={handleCriteriaFileUpload}
-                        style={{ ...inputStyle, padding: 12, height: 'auto', marginBottom: 10 }}
-                      />
-                      {uploadedCriteriaName && (
-                        <div style={{ color: '#059669', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-                          Loaded: {uploadedCriteriaName}
-                        </div>
-                      )}
-                      <textarea
-                        value={uploadedCriteriaText}
-                        onChange={(event) => setUploadedCriteriaText(event.target.value)}
-                        rows={6}
-                        placeholder={'Example:\nCreativity | 20 | Originality and uniqueness | 1-10 | Score creative concept, freshness, and theme fit.\nExecution | 20 | Skill and accuracy | 1-10 | Score clean delivery, timing, and control.'}
-                        style={{ ...inputStyle, resize: 'vertical', color: '#0f172a', marginBottom: 12 }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleImportUploadedCriteria}
-                        style={{ ...secondaryButtonStyle, width: '100%', justifyContent: 'center' }}
-                      >
-                        <i className="bi bi-upload" />
-                        <span>Use uploaded criteria</span>
-                      </button>
-                    </div>
-                    <div style={infoPanelStyle}>
-                      <div style={eyebrowStyle}>Criteria basis</div>
-                      <div style={{ color: '#0f172a', fontWeight: 700, marginBottom: 6 }}>{selectedEventType?.label}</div>
-                      <div style={{ color: '#475569', fontSize: 14 }}>
-                        {form.subEvents.filter((subEvent) => subEvent.name.trim()).map(normalizeSubEventForSave).map((subEvent) => `${subEvent.name} - ${subEvent.category}, ${subEvent.format}, ${subEvent.tournamentFormat}`).join('; ') || 'No sub-events listed'}
-                      </div>
-                    </div>
-                  </div>
+                    <div style={eyebrowStyle}>Step 1</div>
+                    <h2 style={panelTitleStyle}>Where the criteria come from</h2>
 
-                  <div style={sectionCardStyle}>
-                    <div style={eyebrowStyle}>Profile summary</div>
-                    <h2 style={panelTitleStyle}>Generated Overview</h2>
-                    <div style={summaryStatGridStyle}>
-                      <StatTile label="Criteria count" value={String(criteriaDraft.criteria.length)} />
-                      <StatTile label="Total weight" value={`${totalWeight}%`} tone={totalWeight === 100 ? '#2563eb' : '#b45309'} />
-                      <StatTile label="Scoring method" value={criteriaDraft.scoringMethod} />
-                      <StatTile label="Generation source" value={getCriteriaSourceLabel(criteriaDraft.source)} tone={getCriteriaSourceTone(criteriaDraft.source)} />
-                    </div>
-                    {criteriaDraft.fallbackReason && (
-                      <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 14, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 13 }}>
-                        AI API unavailable, so FairPlay used the local rubric generator. Reason: {criteriaDraft.fallbackReason}
+                    <div style={{ ...nestedPanelStyle, padding: 14 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#0f172a', fontWeight: 800, marginBottom: 6 }}>
+                        <i className="bi bi-stars" style={{ color: '#2563eb' }} />
+                        From your event description
                       </div>
-                    )}
-                    <div style={{ marginTop: 16, color: '#475569', fontSize: 14 }}>{criteriaDraft.judgeInstructions || 'Generate a profile to see judging guidance.'}</div>
-                  </div>
-                </div>
-
-                <div style={{ display: 'grid', gap: 20 }}>
-                  <div style={sectionCardStyle}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                      <div>
-                        <div style={eyebrowStyle}>Generated criteria</div>
-                        <h2 style={panelTitleStyle}>Criteria Editor</h2>
+                      <div style={{ color: '#475569', fontSize: 13, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {form.description.trim() || 'Go back to Event Setup and add a description first.'}
                       </div>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <button
-                          onClick={() => { hasAutoGenerated.current = true; generateCriteria(); }}
-                          disabled={isGenerating}
-                          style={{
-                            ...secondaryButtonStyle,
-                            opacity: isGenerating ? 0.6 : 1,
-                            cursor: isGenerating ? 'not-allowed' : 'pointer',
-                          }}
-                        >
-                          <i className={isGenerating ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-stars'} />
-                          <span>{isGenerating ? 'Generating...' : 'Regenerate'}</span>
-                        </button>
-                        <button onClick={handleBalanceWeights} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
-                          <i className="bi bi-distribute-horizontal" />
-                          <span>Balance weights</span>
-                        </button>
-                        <button onClick={handleAddCriterion} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
-                          <i className="bi bi-plus-lg" />
-                          <span>Add criterion</span>
-                        </button>
-                        <button onClick={handleSaveRubricAsTemplate} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
-                          <i className="bi bi-bookmark-plus" />
-                          <span>Save as template</span>
-                        </button>
-                        <button onClick={handleDownloadCriteriaPdf} disabled={isGenerating || criteriaDraft.criteria.length === 0} style={{ ...secondaryButtonStyle, opacity: isGenerating || criteriaDraft.criteria.length === 0 ? 0.5 : 1 }}>
-                          <i className="bi bi-file-earmark-pdf" />
-                          <span>Download PDF</span>
-                        </button>
-                        <div style={{ position: 'relative' }}>
-                          <button onClick={() => setShowRubricLibrary((v) => !v)} disabled={isGenerating} style={{ ...secondaryButtonStyle, opacity: isGenerating ? 0.5 : 1 }}>
-                            <i className="bi bi-collection" />
-                            <span>Load template ({rubricTemplates.length})</span>
-                          </button>
-                          {showRubricLibrary && (
-                            <div style={{ position: 'absolute', right: 0, top: '110%', width: 280, maxHeight: 320, overflowY: 'auto', background: '#fff', border: '1px solid #dbeafe', borderRadius: 14, boxShadow: '0 20px 50px rgba(37,99,235,0.15)', zIndex: 50, padding: 8 }}>
-                              {rubricTemplates.length === 0 ? (
-                                <div style={{ padding: 16, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
-                                  No saved templates yet. Generate a rubric, then "Save as template".
-                                </div>
-                              ) : rubricTemplates.map((template) => (
-                                <button
-                                  key={template.id}
-                                  onClick={() => handleLoadRubricTemplate(template)}
-                                  style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 10, border: 'none', background: 'transparent', cursor: 'pointer' }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                                >
-                                  <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{template.name}</div>
-                                  <div style={{ fontSize: 11, color: '#64748b' }}>{template.criteria.length} criteria · {template.eventType || 'any type'}</div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                      <div style={{ color: '#94a3b8', fontSize: 12, marginTop: 8 }}>
+                        {selectedEventType?.label}
+                        {form.subEvents.some((subEvent) => subEvent.name.trim()) && ` · ${form.subEvents.filter((subEvent) => subEvent.name.trim()).map((subEvent) => subEvent.name).join(', ')}`}
                       </div>
                     </div>
 
-                    {criteriaOptions.length > 1 && !isGenerating && (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 16 }}>
-                        {criteriaOptions.map((option, index) => {
-                          const active = index === selectedOptionIndex;
+                    <div style={{ marginTop: 16 }}>
+                      <div style={{ color: '#64748b', fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Language the AI writes in</div>
+                      <div role="radiogroup" aria-label="Criteria language" style={{ display: 'flex', gap: 6, padding: 4, borderRadius: 12, background: '#f1f5f9' }}>
+                        {CRITERIA_LANGUAGES.map((language) => {
+                          const active = language === criteriaLanguage;
                           return (
                             <button
-                              key={`${option.profile}-${index}`}
-                              onClick={() => handleSelectOption(index)}
-                              style={{
-                                textAlign: 'left',
-                                padding: 16,
-                                borderRadius: 16,
-                                border: active ? '1px solid rgba(37,99,235,0.32)' : '1px solid #e2e8f0',
-                                background: active ? 'rgba(37,99,235,0.10)' : '#ffffff',
-                                color: '#0f172a',
-                                cursor: 'pointer',
-                                boxShadow: active ? '0 10px 26px rgba(37,99,235,0.10)' : 'none',
-                              }}
+                              key={language}
+                              type="button"
+                              role="radio"
+                              aria-checked={active}
+                              onClick={() => setCriteriaLanguage(language)}
+                              style={{ flex: 1, padding: '8px 6px', borderRadius: 9, border: 'none', background: active ? '#ffffff' : 'transparent', color: active ? '#1d4ed8' : '#64748b', fontWeight: 700, fontSize: 13, cursor: 'pointer', boxShadow: active ? '0 1px 4px rgba(15,23,42,0.12)' : 'none' }}
                             >
-                              <div style={{ fontWeight: 700, marginBottom: 4 }}>{option.profile}</div>
-                              <div style={{ fontSize: 13, color: '#64748b' }}>{option.criteria.length} criteria</div>
-                              <div style={{ fontSize: 13, color: '#2563eb', marginTop: 10 }}>{option.scoringMethod}</div>
-                              <div style={{ fontSize: 12, color: getCriteriaSourceTone(option.source), marginTop: 8, textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                                {getCriteriaSourceLabel(option.source)}
-                              </div>
+                              {language}
                             </button>
                           );
                         })}
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid #e2e8f0' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#0f172a', fontWeight: 800, marginBottom: 6 }}>
+                        <i className="bi bi-file-earmark-arrow-up" style={{ color: '#2563eb' }} />
+                        Already have criteria?
+                      </div>
+                      <div style={{ color: '#475569', fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
+                        Upload a PDF, text or CSV file, or paste the criteria below. Any layout works as long as each criterion has a weight.
+                      </div>
+                      <label style={{ ...smallButtonStyle, width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderStyle: 'dashed', marginBottom: 10 }}>
+                        <i className="bi bi-upload" />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{uploadedCriteriaName || 'Choose a file'}</span>
+                        <input
+                          type="file"
+                          accept=".pdf,application/pdf,.json,.txt,.csv,.md"
+                          onChange={handleCriteriaFileUpload}
+                          style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                        />
+                      </label>
+                      <textarea
+                        value={uploadedCriteriaText}
+                        onChange={(event) => setUploadedCriteriaText(event.target.value)}
+                        rows={5}
+                        aria-label="Pasted criteria"
+                        placeholder={'Or paste here, for example:\nVoice Quality - 40%\nStage Presence - 30%\nOriginality - 30%'}
+                        style={{ ...inputStyle, resize: 'vertical', fontSize: 13, marginBottom: 10 }}
+                      />
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={handleImportUploadedCriteria}
+                          disabled={aiBusy || !uploadedCriteriaText.trim()}
+                          title="Import the criteria exactly as written"
+                          style={{ ...smallButtonStyle, padding: '10px 8px', opacity: aiBusy || !uploadedCriteriaText.trim() ? 0.5 : 1 }}
+                        >
+                          <i className={isImporting ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-check2-square'} />
+                          <span>{isImporting ? 'Reading...' : 'Use as written'}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { hasAutoGenerated.current = true; generateCriteria({ useUpload: true }); }}
+                          disabled={aiBusy || !uploadedCriteriaText.trim()}
+                          title="Keep these criteria and weights, and let the AI improve the wording"
+                          style={{ ...smallButtonStyle, padding: '10px 8px', opacity: aiBusy || !uploadedCriteriaText.trim() ? 0.5 : 1 }}
+                        >
+                          <i className="bi bi-stars" />
+                          <span>Improve with AI</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={sectionCardStyle}>
+                    <div style={eyebrowStyle}>Rubric health</div>
+                    <h2 style={panelTitleStyle}>Weights and checks</h2>
+                    <RubricHealthPanel
+                      criteria={criteriaDraft.criteria}
+                      issues={rubricIssues}
+                      busy={aiBusy}
+                      onScaleWeights={handleScaleWeights}
+                      onWriteGuides={handleWriteScoreGuides}
+                      isWritingGuides={isWritingGuides}
+                      onReview={handleReviewRubric}
+                      isReviewing={isReviewing}
+                      review={rubricReview}
+                      onApplyFix={handleApplyReviewFix}
+                      onDismissReview={() => setRubricReview(null)}
+                    />
+                    {criteriaDraft.fallbackReason && (
+                      <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 12, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 13 }}>
+                        The AI was unavailable, so FairPlay used its offline generator. Reason: {criteriaDraft.fallbackReason}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ flex: '999 1 520px', minWidth: 0, display: 'grid', gap: 20 }}>
+                  <div style={sectionCardStyle}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                      <div>
+                        <div style={eyebrowStyle}>Step 2</div>
+                        <h2 style={{ ...panelTitleStyle, marginBottom: 4 }}>Criteria Editor</h2>
+                        {criteriaDraft.criteria.length > 0 && (
+                          <div style={{ fontSize: 13, color: getCriteriaSourceTone(criteriaDraft.source), fontWeight: 700 }}>
+                            {getCriteriaSourceLabel(criteriaDraft.source)}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => { hasAutoGenerated.current = true; generateCriteria(); }}
+                        disabled={aiBusy}
+                        style={{ ...primaryButtonStyle, minHeight: 42, padding: '10px 16px', opacity: aiBusy ? 0.6 : 1, cursor: aiBusy ? 'not-allowed' : 'pointer' }}
+                      >
+                        <i className={isGenerating ? 'bi bi-arrow-repeat animate-spin' : 'bi bi-stars'} />
+                        <span>{isGenerating ? 'Generating...' : criteriaDraft.criteria.length > 0 ? 'Regenerate from description' : 'Generate criteria'}</span>
+                      </button>
+                    </div>
+
+                    {criteriaOptions.length > 1 && !isGenerating && (
+                      <div style={{ marginBottom: 16 }}>
+                        <div style={{ color: '#64748b', fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Pick a starting profile</div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
+                          {criteriaOptions.map((option, index) => {
+                            const active = index === selectedOptionIndex;
+                            return (
+                              <button
+                                key={`${option.profile}-${index}`}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => handleSelectOption(index)}
+                                style={{
+                                  textAlign: 'left',
+                                  padding: 14,
+                                  borderRadius: 16,
+                                  border: active ? '2px solid #2563eb' : '1px solid #e2e8f0',
+                                  background: active ? 'rgba(37,99,235,0.06)' : '#ffffff',
+                                  color: '#0f172a',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start', marginBottom: 6 }}>
+                                  <div style={{ fontWeight: 800, fontSize: 14 }}>{option.profile}</div>
+                                  {active && <i className="bi bi-check-circle-fill" style={{ color: '#2563eb' }} />}
+                                </div>
+                                {option.summary && <div style={{ fontSize: 12, color: '#64748b', lineHeight: 1.45, marginBottom: 10 }}>{option.summary}</div>}
+                                <WeightBar criteria={option.criteria} height={8} />
+                                <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>{option.criteria.length} criteria</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {criteriaOptions[0]?.notes && (
+                          <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>
+                            <i className="bi bi-info-circle" /> {criteriaOptions[0].notes}
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -1906,57 +2181,98 @@ export default function CreateEvent() {
                         <div style={{ color: '#2563eb', fontSize: 30, marginBottom: 10 }}>
                           <i className="bi bi-stars" />
                         </div>
-                        <div style={{ color: '#0f172a', fontWeight: 800, marginBottom: 6 }}>No criteria generated yet</div>
-                        <div style={{ color: '#64748b', fontSize: 14, marginBottom: 16 }}>
-                          Click Regenerate to build your judging rubric from the event description.
+                        <div style={{ color: '#0f172a', fontWeight: 800, marginBottom: 6 }}>No criteria yet</div>
+                        <div style={{ color: '#64748b', fontSize: 14 }}>
+                          Generate a rubric from your event description, or upload criteria you already have.
                         </div>
-                        <button onClick={() => { hasAutoGenerated.current = true; generateCriteria(); }} style={secondaryButtonStyle}>
-                          <i className="bi bi-stars" />
-                          <span>Generate Criteria</span>
-                        </button>
                       </div>
                     )}
 
-                    <div style={{ display: 'grid', gap: 12, opacity: isGenerating ? 0.3 : 1, pointerEvents: isGenerating ? 'none' : 'auto', transition: 'opacity 0.2s' }}>
-                      {criteriaDraft.criteria.map((criterion, index) => (
-                        <div key={criterion.id} style={nestedPanelStyle}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-                            <div style={{ color: '#2563eb', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                              Criterion {index + 1}
-                            </div>
-                            <div style={{ display: 'flex', gap: 8 }}>
-                              <button onClick={() => handleReorderCriterion(index, -1)} style={iconButtonStyle} disabled={index === 0}>
-                                <i className="bi bi-arrow-up" />
-                              </button>
-                              <button onClick={() => handleReorderCriterion(index, 1)} style={iconButtonStyle} disabled={index === criteriaDraft.criteria.length - 1}>
-                                <i className="bi bi-arrow-down" />
-                              </button>
-                              <button onClick={() => handleRemoveCriterion(index)} style={iconButtonStyle} disabled={criteriaDraft.criteria.length <= 5}>
-                                <i className="bi bi-trash3" />
-                              </button>
-                            </div>
-                          </div>
-                          <div style={gridTwoStyle}>
-                            <Field label="Criterion name">
-                              <input value={criterion.name} onChange={(event) => handleCriteriaChange(index, 'name', event.target.value)} style={inputStyle} />
-                            </Field>
-                            <Field label="Weight">
-                              <input type="number" value={criterion.weight} onChange={(event) => handleCriteriaChange(index, 'weight', event.target.value)} style={inputStyle} />
-                            </Field>
-                          </div>
-                          <Field label="Description">
-                            <textarea value={criterion.description} onChange={(event) => handleCriteriaChange(index, 'description', event.target.value)} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
-                          </Field>
-                          <div style={gridTwoStyle}>
-                            <Field label="Scoring range">
-                              <input value={criterion.scoringRange} onChange={(event) => handleCriteriaChange(index, 'scoringRange', event.target.value)} style={inputStyle} />
-                            </Field>
-                            <Field label="Judge instructions">
-                              <textarea value={criterion.judgeInstructions} onChange={(event) => handleCriteriaChange(index, 'judgeInstructions', event.target.value)} rows={2} style={{ ...inputStyle, resize: 'vertical' }} />
-                            </Field>
-                          </div>
+                    {!isGenerating && criteriaDraft.criteria.length > 0 && (
+                      <>
+                        <RefineBar
+                          value={refineInstruction}
+                          onChange={setRefineInstruction}
+                          onSubmit={handleRefineRubric}
+                          busy={aiBusy}
+                          isRefining={isRefining}
+                          canUndo={Boolean(undoDraft)}
+                          onUndo={handleUndoAiChange}
+                          lastChange={lastAiChange}
+                        />
+
+                        <div style={{ display: 'grid', gap: 12 }}>
+                          {criteriaDraft.criteria.map((criterion, index) => (
+                            <CriterionCard
+                              key={criterion.id}
+                              criterion={criterion}
+                              index={index}
+                              count={criteriaDraft.criteria.length}
+                              busy={aiBusy}
+                              isRewriting={rewritingCriterionId === criterion.id}
+                              onChange={(field, value) => handleCriteriaChange(index, field, value)}
+                              onMove={(direction) => handleReorderCriterion(index, direction)}
+                              onRemove={() => handleRemoveCriterion(index)}
+                              onRewrite={() => handleRewriteCriterion(index)}
+                              onGuideChange={(levelKey, value) => handleScoreGuideChange(index, levelKey, value)}
+                              onGuideAdd={() => handleScoreGuideAdd(index)}
+                              onGuideRemove={() => handleScoreGuideRemove(index)}
+                            />
+                          ))}
                         </div>
-                      ))}
+
+                        <button
+                          type="button"
+                          onClick={handleAddCriterion}
+                          disabled={aiBusy}
+                          style={{ ...smallButtonStyle, width: '100%', marginTop: 12, padding: '12px', borderStyle: 'dashed', background: '#ffffff', opacity: aiBusy ? 0.5 : 1 }}
+                        >
+                          <i className="bi bi-plus-lg" />
+                          <span>Add criterion</span>
+                        </button>
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 16, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+                      <button type="button" onClick={handleBalanceWeights} disabled={aiBusy || criteriaDraft.criteria.length === 0} style={{ ...smallButtonStyle, opacity: aiBusy || criteriaDraft.criteria.length === 0 ? 0.5 : 1 }}>
+                        <i className="bi bi-distribute-horizontal" />
+                        <span>Equal weights</span>
+                      </button>
+                      <button type="button" onClick={handleSaveRubricAsTemplate} disabled={aiBusy || criteriaDraft.criteria.length === 0} style={{ ...smallButtonStyle, opacity: aiBusy || criteriaDraft.criteria.length === 0 ? 0.5 : 1 }}>
+                        <i className="bi bi-bookmark-plus" />
+                        <span>Save as template</span>
+                      </button>
+                      <div style={{ position: 'relative' }}>
+                        <button type="button" onClick={() => setShowRubricLibrary((v) => !v)} disabled={aiBusy} aria-expanded={showRubricLibrary} style={{ ...smallButtonStyle, opacity: aiBusy ? 0.5 : 1 }}>
+                          <i className="bi bi-collection" />
+                          <span>Load template ({rubricTemplates.length})</span>
+                        </button>
+                        {showRubricLibrary && (
+                          <div style={{ position: 'absolute', left: 0, bottom: '110%', width: 280, maxHeight: 320, overflowY: 'auto', background: '#fff', border: '1px solid #dbeafe', borderRadius: 14, boxShadow: '0 20px 50px rgba(37,99,235,0.15)', zIndex: 50, padding: 8 }}>
+                            {rubricTemplates.length === 0 ? (
+                              <div style={{ padding: 16, color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
+                                No saved templates yet. Build a rubric, then "Save as template".
+                              </div>
+                            ) : rubricTemplates.map((template) => (
+                              <button
+                                key={template.id}
+                                type="button"
+                                onClick={() => handleLoadRubricTemplate(template)}
+                                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', borderRadius: 10, border: 'none', background: 'transparent', cursor: 'pointer' }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = '#f8fafc'; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                              >
+                                <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{template.name}</div>
+                                <div style={{ fontSize: 11, color: '#64748b' }}>{template.criteria.length} criteria · {template.eventType || 'any type'}</div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button type="button" onClick={handleDownloadCriteriaPdf} disabled={aiBusy || criteriaDraft.criteria.length === 0} style={{ ...smallButtonStyle, marginLeft: 'auto', opacity: aiBusy || criteriaDraft.criteria.length === 0 ? 0.5 : 1 }}>
+                        <i className="bi bi-file-earmark-pdf" />
+                        <span>Download PDF</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2086,6 +2402,7 @@ export default function CreateEvent() {
                         <div>
                           <div style={{ color: '#0f172a', fontWeight: 700 }}>{criterion.name}</div>
                           <div style={{ color: '#64748b', fontSize: 13 }}>{criterion.description}</div>
+                          <ScoreGuide criterion={criterion} style={{ marginTop: 4 }} />
                         </div>
                         <div style={{ color: '#2563eb', fontWeight: 800 }}>{criterion.weight}%</div>
                       </div>

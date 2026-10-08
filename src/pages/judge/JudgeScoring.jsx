@@ -1,6 +1,7 @@
 import EventPicker from '../../components/common/EventPicker';
 import { useEffect, useState } from 'react';
 import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
+import ScoreGuide from '../../components/scoring/ScoreGuide';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
@@ -227,6 +228,7 @@ export default function JudgeScoring() {
                           </div>
                         </div>
                       </div>
+                      <ScoreGuide criterion={criterion} score={score} style={{ marginBottom: 12 }} />
                       {longScale && (
                         <LargeScoreInput value={score} max={rangeMax} label={criterion.name} onChange={(n) => handleScoreChange(criterion.id, n)} />
                       )}

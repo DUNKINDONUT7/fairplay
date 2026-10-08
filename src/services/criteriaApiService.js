@@ -1,5 +1,6 @@
 import { supabase } from '../utils/supabaseClient';
 import usePlatformSettingsStore from '../store/platformSettingsStore';
+import { MIN_CRITERIA, normalizeScoreGuide, scaleWeightsTo100 } from '../utils/rubricTools';
 
 // AI requests go through the `ai-proxy` Supabase Edge Function — the Groq/
 // OpenRouter API key lives server-side only (Edge Function secrets), never
@@ -50,6 +51,7 @@ Output strict JSON with this shape:
   "profiles": [
     {
       "profile": "Balanced Professional",
+      "summary": "One sentence on what this profile rewards and when to pick it.",
       "criteria": [
         {
           "id": "criterion-1",
@@ -75,11 +77,13 @@ Rules:
 - Total criteria weight per profile must equal 100.
 - Support audience impact only when appropriate for the event.
 - If this is a sports fest or multi-event, tailor the rubric to the selected sub-event.
-- Include at least 5 criteria in every profile.
-- Include practical descriptions and judge instructions.
-- Use the uploaded template if provided, but improve it professionally.
+- Use the number of criteria that fits the event: at least ${MIN_CRITERIA}, usually 4 to 6. Do not pad with generic criteria.
+- Criteria must not overlap: each one measures something the others do not.
+- Descriptions say what is being judged; judge instructions say what to look or listen for.
+- If "uploadedTemplate" is not empty, every profile keeps its criteria names and weights; only improve the wording of descriptions and judge instructions.
 - Respect the organizer prompt override.
 - Include tie-breakers that fit close judging scenarios.
+- Write every name, description, instruction and summary in this language: ${payload.language || 'English'}. Keep the JSON keys in English.
 
 Event payload:
 ${JSON.stringify(payload, null, 2)}
@@ -113,29 +117,22 @@ export function parseCriteriaApiResponse(content) {
   return JSON.parse(raw);
 }
 
-function rebalanceWeights(criteria = []) {
-  const normalized = criteria.map((criterion, index) => ({
+function normalizeCriterion(criterion = {}, index = 0) {
+  const scoreGuide = normalizeScoreGuide(criterion.scoreGuide);
+  return {
     id: criterion.id || `criterion-${index + 1}`,
-    name: criterion.name || `Criterion ${index + 1}`,
-    weight: Number(criterion.weight || 0),
-    description: criterion.description || '',
-    scoringRange: criterion.scoringRange || '1-10',
-    judgeInstructions: criterion.judgeInstructions || 'Score based on observable performance.',
-  }));
+    name: String(criterion.name || `Criterion ${index + 1}`).trim(),
+    weight: parseFloat(criterion.weight) || 0,
+    description: String(criterion.description || '').trim(),
+    scoringRange: String(criterion.scoringRange || '1-10').trim(),
+    judgeInstructions: String(criterion.judgeInstructions || '').trim() || 'Score based on observable performance.',
+    ...(scoreGuide.length ? { scoreGuide } : {}),
+  };
+}
 
-  if (!normalized.length) return normalized;
-
-  const total = normalized.reduce((sum, criterion) => sum + criterion.weight, 0);
-  if (total === 100) {
-    return normalized;
-  }
-
-  const base = Math.floor(100 / normalized.length);
-  const remainder = 100 % normalized.length;
-  return normalized.map((criterion, index) => ({
-    ...criterion,
-    weight: base + (index < remainder ? 1 : 0),
-  }));
+// When the model's weights miss 100, keep its emphasis and scale them.
+function rebalanceWeights(criteria = []) {
+  return scaleWeightsTo100(criteria.map(normalizeCriterion));
 }
 
 function normalizeProfiles(rawProfiles = []) {
@@ -143,6 +140,7 @@ function normalizeProfiles(rawProfiles = []) {
     .filter(Boolean)
     .map((profile, index) => ({
       profile: profile.profile || `Profile ${index + 1}`,
+      summary: String(profile.summary || '').trim(),
       criteria: rebalanceWeights(Array.isArray(profile.criteria) ? profile.criteria : []),
       scoringMethod: profile.scoringMethod || 'Weighted Rubric',
       tieBreaker: Array.isArray(profile.tieBreaker) && profile.tieBreaker.length > 0
@@ -150,7 +148,7 @@ function normalizeProfiles(rawProfiles = []) {
         : ['Highest weighted total score'],
       judgeInstructions: profile.judgeInstructions || 'Apply the rubric consistently across all contestants.',
     }))
-    .filter((profile) => profile.criteria.length >= 5);
+    .filter((profile) => profile.criteria.length >= MIN_CRITERIA);
 }
 
 export async function requestCriteriaProfiles(payload) {
@@ -192,6 +190,7 @@ export async function requestCriteriaProfiles(payload) {
     // OpenAI-compatible upstream response) for AI-usage logging, without the
     // client ever choosing or holding a model name itself.
     normalizedProfiles.model = json?.model || 'unknown';
+    normalizedProfiles.notes = String(parsed?.requestMeta?.notes || '').trim();
     return normalizedProfiles;
   }
 
@@ -233,4 +232,205 @@ export async function requestEventDescription(payload) {
 
 export function isCriteriaApiEnabled() {
   return getApiConfig().enabled;
+}
+
+const RUBRIC_SYSTEM_PROMPT = 'You are a judging rubric expert for academic, sports, and cultural competitions. You reply with strict JSON only.';
+
+const compactRubric = (rubric = {}) => ({
+  criteria: (rubric.criteria || []).map((criterion) => ({
+    id: criterion.id,
+    name: criterion.name,
+    weight: criterion.weight,
+    description: criterion.description,
+    scoringRange: criterion.scoringRange,
+    judgeInstructions: criterion.judgeInstructions,
+  })),
+  scoringMethod: rubric.scoringMethod,
+  tieBreaker: rubric.tieBreaker,
+  judgeInstructions: rubric.judgeInstructions,
+});
+
+const compactEvent = (event = {}) => ({
+  title: event.title || '',
+  eventType: event.eventType || '',
+  description: String(event.description || '').slice(0, 1500),
+});
+
+async function requestRubricJson(prompt, temperature = 0.3) {
+  const json = await callAiProxy({
+    model: getApiConfig().model,
+    temperature,
+    responseFormat: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: RUBRIC_SYSTEM_PROMPT },
+      { role: 'user', content: prompt },
+    ],
+  });
+
+  const content = json?.choices?.[0]?.message?.content;
+  if (!content) throw new Error('The AI returned an empty response.');
+  return { data: parseCriteriaApiResponse(content), model: json?.model || 'unknown' };
+}
+
+// Applies one organizer instruction ("add a costume criterion", "make vocals
+// heavier") to the rubric being edited, instead of regenerating all of it.
+export async function requestRubricRefinement({ rubric, instruction, event, language }) {
+  const { data, model } = await requestRubricJson(`
+Revise this judging rubric by following the organizer's instruction.
+
+Output strict JSON with this shape:
+{
+  "criteria": [
+    { "id": "keep the existing id, or a new one for a new criterion", "name": "", "weight": 0, "description": "", "scoringRange": "", "judgeInstructions": "" }
+  ],
+  "tieBreaker": ["..."],
+  "judgeInstructions": "General instruction for all judges.",
+  "changeSummary": "One sentence describing what you changed."
+}
+
+Rules:
+- Change only what the instruction asks for. Copy every other criterion back exactly, with the same id, wording, weight and order.
+- Total weight must equal 100. If you add, remove or reweight a criterion, adjust the others proportionally.
+- Keep at least ${MIN_CRITERIA} criteria.
+- Keep each scoringRange as it is; give new criteria the same range the others use.
+- Write in ${language || 'English'}. Keep the JSON keys in English.
+
+Organizer instruction: ${JSON.stringify(String(instruction || '').slice(0, 600))}
+
+Event: ${JSON.stringify(compactEvent(event))}
+
+Current rubric: ${JSON.stringify(compactRubric(rubric))}
+  `.trim());
+
+  const criteria = rebalanceWeights(Array.isArray(data?.criteria) ? data.criteria : []);
+  if (criteria.length < MIN_CRITERIA) throw new Error('The AI did not return a usable rubric.');
+
+  return {
+    criteria,
+    tieBreaker: Array.isArray(data.tieBreaker) && data.tieBreaker.length ? data.tieBreaker : rubric.tieBreaker,
+    judgeInstructions: String(data.judgeInstructions || rubric.judgeInstructions || '').trim(),
+    changeSummary: String(data.changeSummary || '').trim(),
+    model,
+  };
+}
+
+// Writes what each score level looks like for every criterion, so different
+// judges read the scale the same way.
+export async function requestScoreGuides({ criteria, event, language }) {
+  const { data, model } = await requestRubricJson(`
+Write a score guide for each judging criterion below.
+
+Output strict JSON with this shape:
+{
+  "guides": [
+    { "id": "the criterion id", "excellent": "", "good": "", "fair": "", "weak": "" }
+  ]
+}
+
+Rules:
+- One entry per criterion, using the same id.
+- Each level is one sentence of at most 22 words describing what a judge would actually observe at that level for this specific criterion and event.
+- "excellent" is the top of the scale, "good" is strong with minor lapses, "fair" is acceptable with clear gaps, "weak" is the bottom of the scale.
+- Be concrete and observable. Do not mention numbers or scores.
+- Write in ${language || 'English'}. Keep the JSON keys in English.
+
+Event: ${JSON.stringify(compactEvent(event))}
+
+Criteria: ${JSON.stringify((criteria || []).map((criterion) => ({ id: criterion.id, name: criterion.name, description: criterion.description })))}
+  `.trim());
+
+  const guides = {};
+  (Array.isArray(data?.guides) ? data.guides : []).forEach((guide) => {
+    const scoreGuide = normalizeScoreGuide(guide);
+    if (guide?.id !== undefined && scoreGuide.length) guides[String(guide.id)] = scoreGuide;
+  });
+  if (Object.keys(guides).length === 0) throw new Error('The AI did not return any score guides.');
+
+  return { guides, model };
+}
+
+// Reads criteria out of any uploaded document text, exactly as written.
+export async function requestCriteriaExtraction({ text }) {
+  const { data, model } = await requestRubricJson(`
+Extract the judging criteria from the document text below.
+
+Output strict JSON with this shape:
+{
+  "criteria": [
+    { "name": "", "weight": 0, "description": "", "scoringRange": "", "judgeInstructions": "" }
+  ],
+  "tieBreaker": ["..."],
+  "judgeInstructions": "General instruction for judges, if the document has one."
+}
+
+Rules:
+- Copy the criteria exactly as the document states them. Do not add, merge, rename, reword or improve anything.
+- "weight" is the criterion's percentage or points as a number. Use 0 when the document gives none.
+- Leave "description", "scoringRange" and "judgeInstructions" as empty strings when the document does not provide them.
+- Ignore titles, dates, venues, totals, signatures, page numbers and anything that is not a judging criterion.
+- If the document contains no judging criteria, return {"criteria": []}.
+
+Document text:
+${String(text || '').slice(0, 12000)}
+  `.trim(), 0);
+
+  const criteria = (Array.isArray(data?.criteria) ? data.criteria : [])
+    .filter((criterion) => String(criterion?.name || '').trim())
+    .map((criterion, index) => ({
+      id: `uploaded-${index + 1}`,
+      name: String(criterion.name).trim(),
+      weight: parseFloat(criterion.weight) || 0,
+      description: String(criterion.description || '').trim(),
+      scoringRange: String(criterion.scoringRange || '').trim(),
+      judgeInstructions: String(criterion.judgeInstructions || '').trim(),
+    }));
+
+  return {
+    criteria,
+    tieBreaker: Array.isArray(data?.tieBreaker) ? data.tieBreaker.map(String).filter(Boolean) : [],
+    judgeInstructions: String(data?.judgeInstructions || '').trim(),
+    model,
+  };
+}
+
+// A second opinion on the rubric being edited, with a ready-to-apply fix
+// for each problem found.
+export async function requestRubricReview({ rubric, event, language }) {
+  const { data, model } = await requestRubricJson(`
+Review this judging rubric for fairness and clarity.
+
+Output strict JSON with this shape:
+{
+  "verdict": "One sentence overall assessment.",
+  "issues": [
+    { "severity": "high | medium | low", "criterion": "criterion name, or empty for the whole rubric", "problem": "", "fix": "A direct instruction that would fix it, e.g. Merge Stage Presence and Audience Impact into one criterion." }
+  ]
+}
+
+Rules:
+- Look for: criteria that overlap or double-count, vague descriptions judges would read differently, weights that do not match what this kind of event should reward, something important for this event that is missing, and instructions that invite bias.
+- Report at most 5 issues, most important first. Return an empty "issues" array when the rubric is sound.
+- Do not report that weights fail to total 100 or that score guides are missing.
+- Each "fix" must be one concrete instruction that can be applied as written.
+- Write "verdict", "problem" and "fix" in ${language || 'English'}. Keep the JSON keys and severity values in English.
+
+Event: ${JSON.stringify(compactEvent(event))}
+
+Rubric: ${JSON.stringify(compactRubric(rubric))}
+  `.trim());
+
+  return {
+    verdict: String(data?.verdict || '').trim(),
+    issues: (Array.isArray(data?.issues) ? data.issues : [])
+      .filter((issue) => String(issue?.problem || '').trim())
+      .slice(0, 5)
+      .map((issue, index) => ({
+        id: `review-${index}`,
+        severity: ['high', 'medium', 'low'].includes(issue.severity) ? issue.severity : 'medium',
+        criterion: String(issue.criterion || '').trim(),
+        problem: String(issue.problem).trim(),
+        fix: String(issue.fix || '').trim(),
+      })),
+    model,
+  };
 }

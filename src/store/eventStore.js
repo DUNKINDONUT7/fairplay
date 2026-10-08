@@ -5,6 +5,7 @@ import { isSupabaseConfigured, subscribeToTable, supabase } from '../utils/supab
 import { bindDataCacheReset } from '../utils/dataCache';
 import { getBusinessActorId, matchesActorIdentity } from '../utils/identity';
 import useNotificationStore from './notificationStore';
+import { normalizeScoreGuide } from '../utils/rubricTools';
 import {
   applyApprovalDecision,
   createDefaultApprovalWorkflow,
@@ -46,6 +47,7 @@ function normalizeCriteria(criteria = []) {
       };
     }
 
+    const scoreGuide = normalizeScoreGuide(criterion.scoreGuide);
     return {
       id: criterion.id || `criterion-${index + 1}`,
       name: criterion.name || `Criterion ${index + 1}`,
@@ -53,6 +55,7 @@ function normalizeCriteria(criteria = []) {
       description: criterion.description || '',
       scoringRange: criterion.scoringRange || '1-10',
       judgeInstructions: criterion.judgeInstructions || 'Score based on observed performance.',
+      ...(scoreGuide.length ? { scoreGuide } : {}),
     };
   });
 }

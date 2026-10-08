@@ -1,5 +1,18 @@
 import { requestCriteriaProfiles } from '../services/criteriaApiService';
 import useAILogsStore from '../store/aiLogsStore';
+import {
+  requestCriteriaExtraction,
+  requestRubricRefinement,
+  requestRubricReview,
+  requestScoreGuides,
+} from '../services/criteriaApiService';
+import {
+  MIN_CRITERIA,
+  SCORE_LEVELS,
+  buildDefaultScoreGuide,
+  normalizeScoreGuide,
+  scaleWeightsTo100,
+} from './rubricTools';
 
 /**
  * Dynamically generate criteria based on event details (title, description, type).
@@ -147,31 +160,28 @@ function toTitleCase(str) {
   return str.replace(/-/g, ' ').replace(/\w\S*/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
 }
 
+// Weights that miss 100 are scaled, keeping the emphasis between criteria.
+// An empty scoringRange is left empty so the caller can apply the event's
+// own point scale.
 function rebalanceCriteriaWeights(criteria = []) {
-  const normalized = criteria.map((criterion, index) => ({
-    id: criterion.id || `criterion-${index + 1}`,
-    name: criterion.name || `Criterion ${index + 1}`,
-    weight: Number(criterion.weight || 0),
-    description: criterion.description || '',
-    scoringRange: criterion.scoringRange || '1-10',
-    judgeInstructions: criterion.judgeInstructions || 'Score with consistency and evidence.',
-    editable: true,
-  }));
+  const normalized = criteria.map((criterion, index) => {
+    const scoreGuide = normalizeScoreGuide(criterion.scoreGuide);
+    return {
+      id: criterion.id || `criterion-${index + 1}`,
+      name: criterion.name || `Criterion ${index + 1}`,
+      weight: Number(criterion.weight || 0),
+      description: criterion.description || '',
+      scoringRange: criterion.scoringRange || '',
+      judgeInstructions: criterion.judgeInstructions || 'Score with consistency and evidence.',
+      ...(scoreGuide.length ? { scoreGuide } : {}),
+      editable: true,
+    };
+  });
 
-  if (!normalized.length) return normalized;
-
-  const total = normalized.reduce((sum, criterion) => sum + Number(criterion.weight || 0), 0);
-  if (total === 100) return normalized;
-
-  const base = Math.floor(100 / normalized.length);
-  const remainder = 100 % normalized.length;
-  return normalized.map((criterion, index) => ({
-    ...criterion,
-    weight: base + (index < remainder ? 1 : 0),
-  }));
+  return scaleWeightsTo100(normalized);
 }
 
-function ensureMinimumCriteria(criteria = [], minimum = 5) {
+function ensureMinimumCriteria(criteria = [], minimum = MIN_CRITERIA) {
   const fallbackCriteria = [
     {
       name: 'Technical Execution',
@@ -226,7 +236,7 @@ function ensureMinimumCriteria(criteria = [], minimum = 5) {
 }
 
 function createProfileVariants(base) {
-  const baseCriteria = ensureMinimumCriteria(base.criteria, 5);
+  const baseCriteria = ensureMinimumCriteria(base.criteria);
 
   const balanced = {
     profile: `${base.profile} - Balanced`,
@@ -308,6 +318,215 @@ export const aiEngine = {
   },
 };
 
+const RANGE_SOURCE = '\\d+(?:\\.\\d+)?\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?';
+
+const collapseSpaces = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+
+// Letter-spaced PDF headings extract as "O F F I C I A L", so headings are
+// matched with any whitespace allowed between their characters.
+const spacedPattern = (label) => new RegExp(
+  label.replace(/\s+/g, '').split('').map((char) => char.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&')).join('\\s*'),
+);
+
+function commonWordPrefix(first = '', second = '') {
+  const firstWords = collapseSpaces(first).split(' ');
+  const secondWords = collapseSpaces(second).split(' ');
+  const shared = [];
+  for (let index = 0; index < firstWords.length && firstWords[index] && firstWords[index] === secondWords[index]; index += 1) {
+    shared.push(firstWords[index]);
+  }
+  return shared.join(' ');
+}
+
+// Splits "1. first 2. second ..." into its items, plus whatever precedes item 1.
+function splitNumberedItems(text = '') {
+  const bounds = [];
+  let cursor = 0;
+  for (let number = 1; ; number += 1) {
+    const marker = new RegExp(`(?:^|\\s)${number}\\.\\s+`, 'g');
+    marker.lastIndex = cursor;
+    const match = marker.exec(text);
+    if (!match) break;
+    bounds.push({ markerStart: match.index, start: marker.lastIndex });
+    cursor = marker.lastIndex;
+  }
+  return {
+    preamble: bounds.length ? text.slice(0, bounds[0].markerStart).trim() : text.trim(),
+    items: bounds.map((bound, index) => text.slice(bound.start, bounds[index + 1]?.markerStart ?? text.length).trim()),
+  };
+}
+
+// Reads back a criteria sheet produced by FairPlay's own "Download PDF"
+// (see criteriaPdf.js), so a saved rubric re-imports as the same rubric.
+export function parseFairPlayCriteriaDocument(rawText = '') {
+  const text = String(rawText || '')
+    .replace(/Prepared with FairPlay\s*\|\s*[A-Za-z]+ \d{1,2}, \d{4}\s*Page \d+ of \d+/g, ' ');
+  const headPattern = /No\.\s+Criteria\s+Score\s+Range\s+Weight/g;
+  const head = headPattern.exec(text);
+  if (!head) return null;
+
+  const afterHead = text.slice(head.index + head[0].length);
+  const total = afterHead.match(/\bTOTAL\s+\d+(?:\.\d+)?%/);
+  if (!total) return null;
+
+  // The table header repeats when the table continues on another page.
+  const tableText = afterHead.slice(0, total.index).replace(headPattern, ' ');
+  const tail = afterHead.slice(total.index + total[0].length);
+
+  const rows = [];
+  let cursor = 0;
+  for (let number = 1; ; number += 1) {
+    const rowPattern = new RegExp(`(?:^|\\s)${number}\\s+([\\s\\S]+?)\\s+(\\d+(?:\\.\\d+)?)%(?=\\s+${number + 1}\\s|\\s*$)`, 'g');
+    rowPattern.lastIndex = cursor;
+    const match = rowPattern.exec(tableText);
+    if (!match) break;
+    rows.push({ body: match[1].trim(), weight: Number(match[2]) });
+    cursor = rowPattern.lastIndex;
+  }
+  if (rows.length === 0) return null;
+
+  const guidelinesHead = tail.match(spacedPattern('GUIDELINES FOR JUDGES'));
+  const scoringHead = tail.match(spacedPattern('SCORING AND TIE-BREAKING'));
+  const scoreGuideHead = tail.match(spacedPattern('SCORE GUIDE'));
+  const scoringStart = scoringHead ? scoringHead.index : tail.length;
+  const guidelinesText = guidelinesHead
+    ? tail.slice(guidelinesHead.index + guidelinesHead[0].length, scoreGuideHead ? scoreGuideHead.index : scoringStart)
+    : '';
+  const scoreGuideText = scoreGuideHead ? tail.slice(scoreGuideHead.index + scoreGuideHead[0].length, scoringStart) : '';
+  const scoringText = scoringHead ? tail.slice(scoringHead.index + scoringHead[0].length) : '';
+
+  // "Excellent (9-10): ..." lines under each criterion's name.
+  const scoreGuides = new Map();
+  const levelLabels = SCORE_LEVELS.map((level) => level.label).join('|');
+  splitNumberedItems(scoreGuideText).items.forEach((item) => {
+    const levelPattern = new RegExp(`(${levelLabels}) \\(\\d+(?:\\.\\d+)?(?:\\s*-\\s*\\d+(?:\\.\\d+)?)?\\):`, 'g');
+    const marks = [...item.matchAll(levelPattern)];
+    if (marks.length === 0) return;
+    const guide = {};
+    marks.forEach((mark, index) => {
+      guide[mark[1]] = collapseSpaces(item.slice(mark.index + mark[0].length, marks[index + 1]?.index ?? item.length));
+    });
+    scoreGuides.set(collapseSpaces(item.slice(0, marks[0].index)).toLowerCase(), normalizeScoreGuide(guide));
+  });
+
+  const guidelines = splitNumberedItems(guidelinesText);
+  const unusedGuides = [...guidelines.items];
+  // Text pasted as one run only has the odd page break in it, not a break per row.
+  const hasLines = (tableText.trim().match(/\n/g) || []).length >= Math.max(rows.length - 1, 1);
+  const rangeAtEnd = new RegExp(`(?:^|\\s)(${RANGE_SOURCE})$`);
+
+  const criteria = rows.map((row) => {
+    const rangeMatch = row.body.match(rangeAtEnd);
+    const content = rangeMatch ? row.body.slice(0, rangeMatch.index).trim() : row.body;
+    const flat = collapseSpaces(content);
+
+    // Each guideline is printed under its criterion's name, which is also
+    // the only reliable way to tell a wrapped name from its description.
+    let guideIndex = unusedGuides.findIndex((item) => {
+      const label = collapseSpaces(item.split('\n')[0]);
+      return item.includes('\n') && label && flat.startsWith(label);
+    });
+    if (guideIndex < 0 && !hasLines) {
+      guideIndex = unusedGuides.findIndex((item) => commonWordPrefix(flat, item));
+    }
+    const guide = guideIndex >= 0 ? unusedGuides.splice(guideIndex, 1)[0] : '';
+
+    let name = flat;
+    if (guide && guide.includes('\n')) name = collapseSpaces(guide.split('\n')[0]);
+    else if (content.includes('\n')) name = collapseSpaces(content.split('\n')[0]);
+    else if (guide) name = commonWordPrefix(flat, guide) || flat;
+
+    return {
+      name,
+      weight: row.weight,
+      description: flat.slice(name.length).trim(),
+      scoringRange: rangeMatch ? collapseSpaces(rangeMatch[1]) : '',
+      judgeInstructions: collapseSpaces(guide).slice(name.length).trim(),
+      scoreGuide: scoreGuides.get(name.toLowerCase()) || [],
+    };
+  });
+
+  const scoringFlat = collapseSpaces(scoringText);
+  const methodMatch = scoringFlat.match(/Scoring method:\s*(.+?)\.\s+Each criterion is scored/);
+  const tieBreaker = splitNumberedItems(scoringText).items
+    .map((rule) => collapseSpaces(rule).match(/^Tie-breaker \d+:\s*(.+?)\.?$/)?.[1])
+    .filter(Boolean);
+
+  return {
+    criteria,
+    scoringMethod: methodMatch ? methodMatch[1].trim() : '',
+    tieBreaker,
+    judgeInstructions: collapseSpaces(guidelines.preamble),
+  };
+}
+
+// Any other criteria sheet: every line carrying a weight ("Voice Quality 40%",
+// "Stage Presence - 20 pts", "(30%) Originality") opens a criterion, and the
+// lines under it are its description.
+function parseWeightedCriteriaText(rawText = '') {
+  const lines = String(rawText || '').split(/\r?\n/).map(collapseSpaces).filter(Boolean);
+  const weightPattern = /(?<![\d.]|\d\s?[-–]\s?|\bto\s)\(?\s*(\d+(?:\.\d+)?)\s*(?:%|percent\b|points?\b|pts?\b)\s*\)?/i;
+  const rangePattern = new RegExp(`\\b(${RANGE_SOURCE})\\b`, 'i');
+  const cleanName = (value = '') => value
+    .replace(/^\s*(?:\d+[.)]|[A-Za-z][.)]\s|[-•*▪●○])\s*/, '')
+    .replace(/[\s:;,(\-–—.]+$/, '')
+    .trim();
+
+  const criteria = [];
+  let current = null;
+  let looseLine = '';
+
+  lines.forEach((line) => {
+    if (/^(?:sub-?\s*|grand\s+)?total\b/i.test(line)) {
+      current = null;
+      looseLine = '';
+      return;
+    }
+
+    const match = line.match(weightPattern);
+    const weight = match ? Number(match[1]) : 0;
+    if (!match || weight <= 0 || weight > 100) {
+      if (current) current.body.push(line);
+      else looseLine = line;
+      return;
+    }
+
+    let name = cleanName(line.slice(0, match.index));
+    let rest = line.slice(match.index + match[0].length).replace(/^[\s:;,.–—-]+/, '');
+
+    if (!name && rest) {
+      name = cleanName(rest);
+      rest = '';
+    } else if (!name) {
+      // The weight sits on its own line, under the criterion's name.
+      name = cleanName(current?.body.length ? current.body.pop() : looseLine);
+    }
+    looseLine = '';
+
+    const split = name.match(/^(.{2,60}?)\s*(?::|\s[-–—]\s)\s*(.+)$/);
+    if (split) {
+      name = split[1].trim();
+      rest = `${split[2]} ${rest}`.trim();
+    }
+    if (!name || /^(criteria|criterion|weight|percentage|score|points?)$/i.test(name)) return;
+
+    current = { name, weight, body: rest ? [rest] : [] };
+    criteria.push(current);
+  });
+
+  if (criteria.length < 2) return [];
+
+  return criteria.map((criterion) => {
+    const description = criterion.body.join(' ').trim();
+    return {
+      name: criterion.name,
+      weight: criterion.weight,
+      description,
+      scoringRange: description.match(rangePattern)?.[1] || '',
+    };
+  });
+}
+
 export function parseUploadedCriteriaTemplate(uploadedCriteria = '') {
   const input = String(uploadedCriteria || '').trim();
   if (!input) return [];
@@ -334,10 +553,11 @@ export function parseUploadedCriteriaTemplate(uploadedCriteria = '') {
   const normalizeUploadedCriterion = (criterion = {}, index = 0) => ({
     id: pickValue(criterion, ['id'], `uploaded-${index + 1}`),
     name: String(pickValue(criterion, ['name', 'criterionName', 'criterion_name', 'criterion', 'title', 'Criterion name'], `Criterion ${index + 1}`)).trim(),
-    weight: Number(pickValue(criterion, ['weight', 'points', 'percentage', 'scoreWeight', 'Weight'], 0)) || 0,
+    weight: parseFloat(pickValue(criterion, ['weight', 'points', 'percentage', 'scoreWeight', 'Weight'], 0)) || 0,
     description: String(pickValue(criterion, ['description', 'desc', 'details', 'rubricDescription', 'Description'], '')).trim(),
-    scoringRange: String(pickValue(criterion, ['scoringRange', 'scoring_range', 'range', 'scoreRange', 'Scoring range'], '1-10')).trim(),
+    scoringRange: String(pickValue(criterion, ['scoringRange', 'scoring_range', 'range', 'scoreRange', 'Scoring range'], '')).trim(),
     judgeInstructions: String(pickValue(criterion, ['judgeInstructions', 'judge_instructions', 'instructions', 'judgeGuide', 'Judge instructions'], 'Score based on uploaded rubric.')).trim(),
+    ...(normalizeScoreGuide(criterion.scoreGuide).length ? { scoreGuide: normalizeScoreGuide(criterion.scoreGuide) } : {}),
     editable: true,
   });
 
@@ -441,6 +661,11 @@ export function parseUploadedCriteriaTemplate(uploadedCriteria = '') {
     // Fallback to plain text parsing below.
   }
 
+  const fairPlayDocument = parseFairPlayCriteriaDocument(input);
+  if (fairPlayDocument) {
+    return fairPlayDocument.criteria.map(normalizeUploadedCriterion);
+  }
+
   const tableCriteria = parseTableTextCriteria(input);
   if (tableCriteria.length > 0) {
     return tableCriteria;
@@ -475,6 +700,15 @@ export function parseUploadedCriteriaTemplate(uploadedCriteria = '') {
     return labeledCriteria;
   }
 
+  // "Name | Weight | ..." and CSV rows are handled by the line parser below.
+  const isDelimitedRows = lines.every((line) => line.includes('|') || line.split(',').length >= 3);
+  if (!isDelimitedRows) {
+    const weightedCriteria = parseWeightedCriteriaText(input);
+    if (weightedCriteria.length > 0) {
+      return weightedCriteria.map(normalizeUploadedCriterion);
+    }
+  }
+
   return lines.map((line, index) => {
     const delimiter = line.includes('|') ? '|' : ',';
     const parts = line.split(delimiter).map((part) => part.trim());
@@ -498,12 +732,16 @@ export function generateCriteriaFromUpload(uploadedCriteria = '', params = {}) {
 
   const baseProfile = parsedTemplate.length > 0
     ? (() => {
+        const fairPlayDocument = parseFairPlayCriteriaDocument(uploadedCriteria) || {};
         return {
           profile: 'Uploaded Criteria Template',
-          criteria: ensureMinimumCriteria(parsedTemplate, 5),
-          scoringMethod: 'Weighted Rubric',
-          tieBreaker: ['Highest weighted total score', 'Highest score in first criterion'],
-          judgeInstructions: 'Use the uploaded ready-made criteria as the official judging rubric.',
+          // An uploaded rubric is official: never padded with extra criteria.
+          criteria: rebalanceCriteriaWeights(parsedTemplate),
+          scoringMethod: fairPlayDocument.scoringMethod || 'Weighted Rubric',
+          tieBreaker: fairPlayDocument.tieBreaker?.length
+            ? fairPlayDocument.tieBreaker
+            : ['Highest weighted total score', 'Highest score in first criterion'],
+          judgeInstructions: fairPlayDocument.judgeInstructions || 'Use the uploaded ready-made criteria as the official judging rubric.',
         };
       })()
     : generateDynamicCriteria(eventName, eventType, description, subEvents);
@@ -555,7 +793,8 @@ export async function generateCriteriaWithAIFallback(params = {}) {
       scoringMethod: params.scoringMethod || 'weighted',
       audienceImpact: params.audienceImpact !== false,
       userPrompt: promptText,
-      uploadedTemplate: params.uploadedCriteria || '',
+      uploadedTemplate: String(params.uploadedCriteria || '').slice(0, 8000),
+      language: params.language || 'English',
     });
     source = 'api';
   } catch (apiError) {
@@ -596,7 +835,9 @@ export async function generateCriteriaWithAIFallback(params = {}) {
   if (Array.isArray(result)) {
     return result.map((option, index) => ({
       profile: option.profile || `Profile ${index + 1}`,
-      criteria: ensureMinimumCriteria(Array.isArray(option.criteria) ? option.criteria : [], 5),
+      summary: option.summary || '',
+      notes: result.notes || '',
+      criteria: ensureMinimumCriteria(Array.isArray(option.criteria) ? option.criteria : []),
       scoringMethod: option.scoringMethod || 'Weighted Rubric',
       tieBreaker: Array.isArray(option.tieBreaker) ? option.tieBreaker : ['Highest weighted total score'],
       judgeInstructions: option.judgeInstructions || '',
@@ -609,12 +850,128 @@ export async function generateCriteriaWithAIFallback(params = {}) {
 
   return [{
     ...result,
-    criteria: ensureMinimumCriteria(Array.isArray(result?.criteria) ? result.criteria : [], 5),
+    criteria: ensureMinimumCriteria(Array.isArray(result?.criteria) ? result.criteria : []),
     source,
     modelUsed,
     requestId,
     fallbackReason,
   }];
+}
+
+// Every AI rubric action is recorded in the same AI usage log the admin
+// dashboard reads, whether it succeeded or fell back.
+async function runLoggedAiAction(action, context = {}, run) {
+  const startTime = Date.now();
+  const entry = {
+    timestamp: new Date().toISOString(),
+    requestId: `req-${startTime}-${Math.random().toString(36).slice(2, 8)}`,
+    eventType: context.event?.eventType || 'unknown',
+    eventTitle: context.event?.title || 'Untitled',
+    userId: context.userId || 'unknown',
+    promptPreview: `[${action}] ${String(context.preview || '').slice(0, 120)}`,
+    criteriaCount: context.criteriaCount || 0,
+  };
+
+  try {
+    const result = await run();
+    useAILogsStore.getState().addLog({
+      ...entry,
+      source: 'api',
+      modelUsed: result?.model || 'unknown',
+      success: true,
+      error: null,
+      fallbackReason: null,
+      responseTime: Date.now() - startTime,
+    });
+    return result;
+  } catch (actionError) {
+    const reason = String(actionError?.message || 'AI unavailable');
+    useAILogsStore.getState().addLog({
+      ...entry,
+      source: 'fallback',
+      modelUsed: 'fallback',
+      success: false,
+      error: reason,
+      fallbackReason: reason,
+      responseTime: Date.now() - startTime,
+    });
+    throw actionError;
+  }
+}
+
+export function refineRubricWithAI({ rubric, instruction, event, language, userId }) {
+  return runLoggedAiAction('refine', { event, userId, preview: instruction, criteriaCount: rubric?.criteria?.length }, () =>
+    requestRubricRefinement({ rubric, instruction, event, language }));
+}
+
+export function reviewRubricWithAI({ rubric, event, language, userId }) {
+  return runLoggedAiAction('review', { event, userId, preview: event?.title, criteriaCount: rubric?.criteria?.length }, () =>
+    requestRubricReview({ rubric, event, language }));
+}
+
+// Score guides for the given criteria, keyed by criterion id. Falls back to
+// FairPlay's standard wording when the AI is unavailable, so the organizer
+// always gets a guide to edit.
+export async function writeScoreGuides({ criteria = [], event, language, userId }) {
+  try {
+    const { guides } = await runLoggedAiAction('score-guides', { event, userId, preview: event?.title, criteriaCount: criteria.length }, () =>
+      requestScoreGuides({ criteria, event, language }));
+    criteria.forEach((criterion) => {
+      if (!guides[String(criterion.id)]) guides[String(criterion.id)] = buildDefaultScoreGuide(criterion);
+    });
+    return { guides, source: 'api' };
+  } catch (guideError) {
+    const guides = {};
+    criteria.forEach((criterion) => {
+      guides[String(criterion.id)] = buildDefaultScoreGuide(criterion);
+    });
+    return { guides, source: 'fallback', fallbackReason: String(guideError?.message || 'AI unavailable') };
+  }
+}
+
+// Turns any uploaded criteria document into a rubric, exactly as written.
+// FairPlay's own PDF is read directly; anything else goes to the AI reader,
+// with the pattern-based parser as the offline fallback.
+export async function importUploadedCriteria(uploadedCriteria = '', params = {}) {
+  const text = String(uploadedCriteria || '').trim();
+  if (!text) return null;
+
+  // FairPlay's PDF, JSON, and "Name | Weight | ..." rows need no AI to read.
+  const isStructured = Boolean(parseFairPlayCriteriaDocument(text))
+    || text.split(/\r?\n/).filter((line) => line.trim()).every((line) => line.includes('|'))
+    || (() => {
+      try {
+        JSON.parse(text);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    })();
+
+  if (!isStructured) {
+    try {
+      const extracted = await runLoggedAiAction('read-upload', { event: params.event, userId: params.userId, preview: text }, () =>
+        requestCriteriaExtraction({ text }));
+      if (extracted.criteria.length > 0) {
+        return {
+          profile: 'Uploaded Criteria',
+          criteria: rebalanceCriteriaWeights(extracted.criteria),
+          scoringMethod: 'Weighted Rubric',
+          tieBreaker: extracted.tieBreaker.length
+            ? extracted.tieBreaker
+            : ['Highest weighted total score', 'Highest score in first criterion'],
+          judgeInstructions: extracted.judgeInstructions || 'Use the uploaded criteria as the official judging rubric.',
+          readBy: 'ai',
+        };
+      }
+    } catch (extractionError) {
+      // Fall through to the local parser.
+    }
+  }
+
+  if (parseUploadedCriteriaTemplate(text).length === 0) return null;
+  const [profile] = generateCriteriaFromUpload(text, params);
+  return { ...profile, profile: 'Uploaded Criteria', readBy: 'parser' };
 }
 
 export { generateDynamicCriteria };

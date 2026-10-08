@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { describeScoreBands } from './rubricTools';
 
 const INK = [17, 24, 39];
 const MUTED = [90, 99, 115];
@@ -201,6 +202,40 @@ export function buildCriteriaPdf({ event = {}, rubric = {}, preparedBy = '' }) {
       y += lines.length * 5.2 + 3;
     }
     guidelines.forEach((item, index) => numberedItem(index + 1, item.name, item.text));
+    y += 4;
+  }
+
+  // ---- Score guide ----
+  // Laid out as "Level (scores): text" lines under each criterion's name;
+  // parseFairPlayCriteriaDocument reads this section back on re-upload.
+  const guided = criteria
+    .map((criterion) => ({
+      name: clean(criterion.name),
+      bands: describeScoreBands(criterion.scoreGuide, criterion.scoringRange).filter((band) => clean(band.description)),
+    }))
+    .filter((item) => item.bands.length);
+
+  if (guided.length) {
+    sectionHeading('Score Guide');
+    guided.forEach((item, index) => {
+      const indent = 7;
+      doc.setFont('times', 'normal');
+      doc.setFontSize(11);
+      const bandLines = item.bands.map((band) => doc.splitTextToSize(`${band.label} (${band.rangeLabel}): ${clean(band.description)}`, contentWidth - indent));
+      const lineCount = bandLines.reduce((sum, lines) => sum + lines.length, 0);
+      y = ensureSpace(y, 5.2 + lineCount * 5.2 + 2.5);
+      doc.setTextColor(...INK);
+      doc.text(`${index + 1}.`, MARGIN, y);
+      doc.setFont('times', 'bold');
+      doc.text(item.name, MARGIN + indent, y);
+      y += 5.2;
+      doc.setFont('times', 'normal');
+      bandLines.forEach((lines) => {
+        doc.text(lines, MARGIN + indent, y, { lineHeightFactor: 1.3 });
+        y += lines.length * 5.2;
+      });
+      y += 2.5;
+    });
     y += 4;
   }
 

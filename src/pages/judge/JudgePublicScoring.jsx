@@ -1,4 +1,5 @@
 import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
+import ScoreGuide from '../../components/scoring/ScoreGuide';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
@@ -406,6 +407,7 @@ export default function JudgePublicScoring() {
                     </div>
                   </div>
 
+                  <ScoreGuide criterion={criterion} score={score} style={{ padding: '8px 18px 0' }} />
                   {longScale && (
                     <div style={{ padding: '12px 18px 10px' }}>
                       <LargeScoreInput value={score} max={rangeMax} label={criterion.name} onChange={(n) => setScores((prev) => ({ ...prev, [criterion.id]: n }))} />
