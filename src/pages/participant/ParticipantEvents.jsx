@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import useEventStore from '../../store/eventStore';
+import useAuthStore from '../../store/authStore';
+import useRegistrationStore from '../../store/registrationStore';
 
 const EVENT_TYPE_ICON = {
   esports: 'bi-controller',
@@ -20,25 +22,55 @@ function eventTypeIcon(type) {
   return EVENT_TYPE_ICON[String(type).toLowerCase()] || 'bi-trophy-fill';
 }
 
+// Email is the primary match (pre-filled from the account at registration
+// time), with an exact name fallback for registrations submitted before
+// that fix, or from the mobile app with a slightly different typed email.
+// Mirrors the same check in ParticipantSchedule and ParticipantDashboard.
+function isMyRegistration(registration, user) {
+  if (!user) return false;
+  const email = String(registration.email || '').trim().toLowerCase();
+  const userEmail = String(user.email || '').trim().toLowerCase();
+  if (email && userEmail && email === userEmail) return true;
+
+  const participantName = String(registration.participantName || '').trim().toLowerCase();
+  const userName = String(user.name || '').trim().toLowerCase();
+  return Boolean(participantName && userName && participantName === userName);
+}
+
 export default function ParticipantEvents() {
   const navigate = useNavigate();
+  const { user } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
+  const { registrations, fetchRegistrations } = useRegistrationStore();
 
   useEffect(() => {
     fetchEvents();
-  }, [fetchEvents]);
+    fetchRegistrations();
+  }, [fetchEvents, fetchRegistrations]);
+
+  const registeredEventIds = useMemo(() => {
+    if (!user) return new Set();
+    return new Set(
+      registrations
+        .filter((registration) => isMyRegistration(registration, user))
+        .map((registration) => String(registration.eventId))
+    );
+  }, [registrations, user]);
 
   const availableEvents = events.map((event) => {
     const max = Number(event.maxParticipants || 0);
     const current = Array.isArray(event.contestants) ? event.contestants.length : Number(event.participants || 0);
     const isTeam = ['team', 'sports', 'esports', 'tournament', 'sportsfest'].includes(String(event.type).toLowerCase());
-    const status = event.status === 'completed'
-      ? 'closed'
-      : max && current >= max
-        ? 'full'
-        : event.status === 'draft'
-          ? 'closed'
-          : 'open';
+    const registered = registeredEventIds.has(String(event.id));
+    const status = registered
+      ? 'registered'
+      : event.status === 'completed'
+        ? 'closed'
+        : max && current >= max
+          ? 'full'
+          : event.status === 'draft'
+            ? 'closed'
+            : 'open';
 
     return {
       id: event.id,
@@ -64,6 +96,7 @@ export default function ParticipantEvents() {
   const statusStyle = (status) => {
     if (status === 'open') return { background: '#dcfce7', color: '#15803d' };
     if (status === 'full') return { background: '#fee2e2', color: '#dc2626' };
+    if (status === 'registered') return { background: '#dbeafe', color: '#2563eb' };
     return { background: '#f1f5f9', color: '#64748b' };
   };
 
@@ -124,15 +157,26 @@ export default function ParticipantEvents() {
                 disabled={event.status !== 'open'}
                 style={{
                   width: '100%', padding: '11px', borderRadius: 10,
-                  background: event.status === 'open' ? 'linear-gradient(135deg, #2563eb, #0ea5e9)' : '#f1f5f9',
-                  color: event.status === 'open' ? '#fff' : '#94a3b8',
+                  background: event.status === 'open'
+                    ? 'linear-gradient(135deg, #2563eb, #0ea5e9)'
+                    : event.status === 'registered' ? '#dbeafe' : '#f1f5f9',
+                  color: event.status === 'open' ? '#fff' : event.status === 'registered' ? '#2563eb' : '#94a3b8',
                   border: 'none', fontWeight: 700, fontSize: 13,
                   cursor: event.status === 'open' ? 'pointer' : 'not-allowed',
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                 }}
               >
-                {event.status === 'open' && <i className={event.format === 'team' ? 'bi bi-people-fill' : 'bi bi-person-fill'} />}
-                {event.status === 'open' ? `Register ${event.format === 'team' ? 'Team' : 'Individually'}` : event.status === 'full' ? 'Registration Full' : 'Registration Closed'}
+                <i className={event.status === 'open'
+                  ? (event.format === 'team' ? 'bi bi-people-fill' : 'bi bi-person-fill')
+                  : event.status === 'registered' ? 'bi bi-check-circle-fill' : ''}
+                />
+                {event.status === 'open'
+                  ? `Register ${event.format === 'team' ? 'Team' : 'Individually'}`
+                  : event.status === 'registered'
+                    ? 'Already Registered'
+                    : event.status === 'full'
+                      ? 'Registration Full'
+                      : 'Registration Closed'}
               </motion.button>
             </motion.div>
           ))}
