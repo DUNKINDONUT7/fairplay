@@ -620,6 +620,9 @@ export default function OrganizerBracket() {
   const playableMatches = (currentTournament?.matches || []).filter((match) => match.status !== 'bye');
   const completedMatches = playableMatches.filter((match) => match.status === 'completed').length;
   const hasBracket = Boolean(currentTournament) && (currentTournament.matches || []).length > 0;
+  // A bye is filled in by the bracket itself, not a recorded result, so it
+  // doesn't count toward whether rebuilding would lose anything.
+  const hasResults = playableMatches.some((match) => ['completed', 'in-progress'].includes(match.status));
   const isFinalized = Boolean(currentTournament?.isFinalized);
   const eventStarted = hasEventStarted(currentEvent);
   const eventOver = isEventOver(currentEvent);
