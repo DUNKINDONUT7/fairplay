@@ -4,7 +4,7 @@ import useRememberedEvent from '../../hooks/useRememberedEvent';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import DashboardLayout from '../../components/layout/DashboardLayout';
-import CertificateRenderer from '../../components/certificates/CertificateRenderer';
+import CertificateRenderer, { MAX_SIGNERS } from '../../components/certificates/CertificateRenderer';
 import NamePlacementEditor from '../../components/certificates/NamePlacementEditor';
 import useCertificateStore from '../../store/certificateStore';
 import useEventStore from '../../store/eventStore';
@@ -144,6 +144,42 @@ async function pdfFileToTemplateImage(file) {
   await page.render({ canvasContext: context, viewport, canvas }).promise;
 
   return { dataUrl: canvas.toDataURL('image/jpeg', 0.92), pageCount: pdf.numPages };
+}
+
+// Turns a signature photo into ink on a see-through background: the darker a
+// pixel, the more of it is kept, so white paper disappears. Two copies come
+// back — dark ink for light designs and white ink for the built-in
+// certificate's navy footer — because the PDF export cannot recolor an image.
+async function prepareSignatureImage(dataUrl) {
+  const image = await loadTemplateImage(dataUrl);
+  const scale = Math.min(1, 700 / image.naturalWidth);
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  context.drawImage(image, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height);
+  const data = pixels.data;
+
+  const render = (red, green, blue) => {
+    const copy = new ImageData(new Uint8ClampedArray(data), width, height);
+    for (let index = 0; index < copy.data.length; index += 4) {
+      const luminance = (data[index] * 0.299) + (data[index + 1] * 0.587) + (data[index + 2] * 0.114);
+      // Paper (light) drops out completely; ink keeps its full strength.
+      const ink = Math.min(1, Math.max(0, (215 - luminance) / 110));
+      copy.data[index] = red;
+      copy.data[index + 1] = green;
+      copy.data[index + 2] = blue;
+      copy.data[index + 3] = Math.round(data[index + 3] * ink);
+    }
+    context.clearRect(0, 0, width, height);
+    context.putImageData(copy, 0, 0);
+    return canvas.toDataURL('image/png');
+  };
+
+  return { dark: render(17, 24, 39), light: render(255, 255, 255) };
 }
 
 function formatFileSize(bytes) {
@@ -487,6 +523,32 @@ async function scanCertificateTemplate(dataUrl) {
   };
 }
 
+// A signer's signature: its preview, and upload, replace and remove.
+function SignatureControl({ image, onUpload, onRemove }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 38 }}>
+      {image && (
+        <img
+          src={image}
+          alt="Signature"
+          style={{ height: 36, maxWidth: 120, objectFit: 'contain', background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 8, padding: '2px 6px' }}
+        />
+      )}
+      <label style={{ ...secondaryButtonStyle, display: 'inline-flex' }}>
+        <i className="bi bi-pen" style={{ marginRight: 8 }} />
+        {image ? 'Replace' : 'Upload signature'}
+        <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onUpload} style={{ display: 'none' }} />
+      </label>
+      {image && (
+        <button type="button" onClick={onRemove} style={removeTemplateButtonStyle}>
+          <i className="bi bi-x-lg" style={{ marginRight: 6 }} />
+          Remove
+        </button>
+      )}
+    </div>
+  );
+}
+
 function CertificateModal({ certificate, template, onClose }) {
   const certRef = useRef(null);
   const [exporting, setExporting] = useState(false);
@@ -758,7 +820,17 @@ export default function OrganizerCertificates() {
         customTemplateType: isPdf ? 'image/jpeg' : file.type,
         customTemplateSize: file.size,
         customTemplateAspect: image.naturalWidth / image.naturalHeight,
-        customTemplateFields: scanResult?.fields || null,
+        // Only the name is guessed; everything else starts where its box
+        // defaults to and is switched on by the organizer.
+        customTemplateFields: {
+          ...(scanResult?.fields?.name ? { name: scanResult.fields.name } : {}),
+          // A signature already on file goes straight onto the new design.
+          ...(template.signatureDataUrl ? { signature: { enabled: true, manual: true } } : {}),
+          ...Object.fromEntries(extraSigners
+            .map((signer, index) => [`signature${index + 2}`, signer.signatureDataUrl])
+            .filter(([, image]) => image)
+            .map(([key]) => [key, { enabled: true, manual: true }])),
+        },
         customTemplateScanStatus: 'We guessed where the name goes. Drag the blue box in the preview if it is not in the right spot.',
       });
       success(converted && converted.pageCount > 1
@@ -781,7 +853,8 @@ export default function OrganizerCertificates() {
     try {
       const scanResult = await scanCertificateTemplate(template.customTemplateDataUrl);
       updateTemplate({
-        customTemplateFields: scanResult.fields,
+        // Leaves the other details where the organizer put them.
+        customTemplateFields: { ...(template.customTemplateFields || {}), name: scanResult.fields.name },
         customTemplateScanStatus: 'We guessed where the name goes. Drag the blue box in the preview if it is not in the right spot.',
       });
       success('Name position reset to our best guess.');
@@ -804,11 +877,67 @@ export default function OrganizerCertificates() {
     });
   };
 
-  const handleNameFieldChange = (nameField) => {
+  const extraSigners = Array.isArray(template.extraSigners) ? template.extraSigners.slice(0, MAX_SIGNERS - 1) : [];
+
+  // Signer 0 is the main signer; 1 and 2 are the ones added below it.
+  const handleSignatureUpload = (signerIndex) => async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      error('Upload the signature as a PNG, JPG, or WEBP image.');
+      return;
+    }
+    if (file.size > TEMPLATE_UPLOAD_MAX_BYTES) {
+      error(`Signature image is too large. Maximum is ${formatFileSize(TEMPLATE_UPLOAD_MAX_BYTES)}.`);
+      return;
+    }
+    try {
+      const signature = await prepareSignatureImage(await fileToDataUrl(file));
+      const images = { signatureDataUrl: signature.dark, signatureLightDataUrl: signature.light };
+      const fieldKey = signerIndex === 0 ? 'signature' : `signature${signerIndex + 1}`;
+      updateTemplate({
+        ...(signerIndex === 0
+          ? images
+          : { extraSigners: extraSigners.map((signer, index) => (index === signerIndex - 1 ? { ...signer, ...images } : signer)) }),
+        // On an uploaded design the signature is shown straight away; the
+        // organizer drags it onto the signature line.
+        customTemplateFields: {
+          ...(template.customTemplateFields || {}),
+          [fieldKey]: { ...(template.customTemplateFields?.[fieldKey] || {}), enabled: true, manual: true },
+        },
+      });
+      success('Signature added.');
+    } catch {
+      error('Failed to read the signature image.');
+    }
+  };
+
+  const handleRemoveSignature = (signerIndex) => {
+    const cleared = { signatureDataUrl: '', signatureLightDataUrl: '' };
+    updateTemplate(signerIndex === 0
+      ? cleared
+      : { extraSigners: extraSigners.map((signer, index) => (index === signerIndex - 1 ? { ...signer, ...cleared } : signer)) });
+  };
+
+  const updateExtraSigner = (extraIndex, updates) => {
+    updateTemplate({ extraSigners: extraSigners.map((signer, index) => (index === extraIndex ? { ...signer, ...updates } : signer)) });
+  };
+
+  const handleAddSigner = () => {
+    if (extraSigners.length >= MAX_SIGNERS - 1) return;
+    updateTemplate({ extraSigners: [...extraSigners, { name: '', role: '', signatureDataUrl: '', signatureLightDataUrl: '' }] });
+  };
+
+  const handleRemoveSigner = (extraIndex) => {
+    updateTemplate({ extraSigners: extraSigners.filter((_, index) => index !== extraIndex) });
+  };
+
+  const handleTemplateFieldChange = (key, field) => {
     updateTemplate({
       customTemplateFields: {
         ...(template.customTemplateFields || {}),
-        name: { ...nameField, cover: false, manual: true },
+        [key]: { ...field, cover: false, manual: true },
       },
       customTemplateScanStatus: '',
     });
@@ -1065,14 +1194,14 @@ export default function OrganizerCertificates() {
                   </div>
                 )}
                 <div style={templateUploadNoteStyle}>
-                  Only the recipient&apos;s name is added on top of your design, so keep the event, role, place, and other wording inside the design itself. The same template and name position are reused for every certificate.
+                  The recipient&apos;s name is always added on top of your design. If your design has no title, message, event name, award, signer, organization or date of its own, tick them under the preview and drag each into place. The same template and positions are reused for every certificate.
                 </div>
               </div>
 
               <div style={templatePreviewBoxStyle}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 10 }}>
                   <div style={{ color: '#64748b', fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase' }}>
-                    {hasUploadedTemplate && !uploadedTemplateIsPdf ? 'Where the name goes' : 'Uploaded Preview'}
+                    {hasUploadedTemplate && !uploadedTemplateIsPdf ? 'Where each detail goes' : 'Uploaded Preview'}
                   </div>
                 </div>
                 {hasUploadedTemplate ? (
@@ -1085,8 +1214,13 @@ export default function OrganizerCertificates() {
                   ) : (
                     <NamePlacementEditor
                       template={template}
-                      sampleName={participantRecipients[0]?.name || judgeRecipients[0]?.name || 'Sample Recipient Name'}
-                      onChange={handleNameFieldChange}
+                      sampleCertificate={{
+                        recipientName: participantRecipients[0]?.name || judgeRecipients[0]?.name || 'Sample Recipient Name',
+                        eventTitle: selectedEvent?.title || 'Event Name',
+                        category: 'champion',
+                        placement: 1,
+                      }}
+                      onChange={handleTemplateFieldChange}
                     />
                   )
                 ) : (
@@ -1118,7 +1252,65 @@ export default function OrganizerCertificates() {
                   />
                 </div>
               ))}
+              <div>
+                <label style={labelStyle}>Signature</label>
+                <SignatureControl
+                  image={template.signatureDataUrl}
+                  onUpload={handleSignatureUpload(0)}
+                  onRemove={() => handleRemoveSignature(0)}
+                />
+                <div style={{ color: '#64748b', fontSize: 11, marginTop: 4 }}>
+                  A photo of a signature on white paper works — the paper is removed for you.
+                </div>
+              </div>
             </div>
+
+            {/* A certificate is often signed by more than one person. */}
+            {extraSigners.map((signer, index) => (
+              <div key={index} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={labelStyle}>{index === 0 ? '2nd' : '3rd'} Signer Name</label>
+                  <input
+                    value={signer.name || ''}
+                    onChange={(e) => updateExtraSigner(index, { name: e.target.value })}
+                    placeholder="e.g. Maria Santos"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>{index === 0 ? '2nd' : '3rd'} Signer Role</label>
+                  <input
+                    value={signer.role || ''}
+                    onChange={(e) => updateExtraSigner(index, { role: e.target.value })}
+                    placeholder="e.g. School Principal"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Signature</label>
+                  <SignatureControl
+                    image={signer.signatureDataUrl}
+                    onUpload={handleSignatureUpload(index + 1)}
+                    onRemove={() => handleRemoveSignature(index + 1)}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                  <button type="button" onClick={() => handleRemoveSigner(index)} style={removeTemplateButtonStyle}>
+                    <i className="bi bi-person-dash" style={{ marginRight: 6 }} />
+                    Remove this signer
+                  </button>
+                </div>
+              </div>
+            ))}
+            {extraSigners.length < MAX_SIGNERS - 1 && (
+              <div style={{ marginBottom: 14 }}>
+                <button type="button" onClick={handleAddSigner} style={secondaryButtonStyle}>
+                  <i className="bi bi-person-plus" style={{ marginRight: 8 }} />
+                  Add another signer
+                </button>
+                <span style={{ color: '#64748b', fontSize: 11, marginLeft: 10 }}>Up to {MAX_SIGNERS} people can sign a certificate.</span>
+              </div>
+            )}
 
             <div style={roleCopyGridStyle}>
               <div style={roleCopyBoxStyle}>

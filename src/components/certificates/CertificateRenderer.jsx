@@ -53,10 +53,67 @@ const DEFAULT_UPLOADED_HEIGHT = 636;
 const DEFAULT_NAME_COLOR = '#073047';
 const NAME_FONT_FAMILY = '"Segoe UI", Arial, sans-serif';
 
+// Everything that can be written onto an uploaded template. Only the name is
+// always there; the rest are switched on by the organizer when their design
+// does not already carry them. `box` is where a field starts out, in percent
+// of the template's width and height.
+export const UPLOADED_FIELD_DEFS = [
+  { key: 'name', label: 'Recipient name', weight: 900, uppercase: true, box: { left: 19, top: 44, width: 62, height: 10 } },
+  { key: 'title', label: 'Certificate title', weight: 800, box: { left: 20, top: 14, width: 60, height: 9 } },
+  { key: 'message', label: 'Message', weight: 500, wrap: true, box: { left: 18, top: 56, width: 64, height: 9 } },
+  { key: 'event', label: 'Event name', weight: 800, box: { left: 25, top: 67, width: 50, height: 6 } },
+  { key: 'place', label: 'Award / place', weight: 800, uppercase: true, box: { left: 35, top: 74, width: 30, height: 5 } },
+  { key: 'organization', label: 'Organization', weight: 800, box: { left: 30, top: 6, width: 40, height: 5 } },
+  { key: 'date', label: 'Date issued', weight: 500, box: { left: 70, top: 6, width: 22, height: 3.5 } },
+  // One set per signer: the first on the left, a second on the right, a
+  // third in the middle. `signer` is which signer the field belongs to.
+  ...[
+    { suffix: '', signer: 0, left: 8, prefix: '' },
+    { suffix: '2', signer: 1, left: 66, prefix: '2nd ' },
+    { suffix: '3', signer: 2, left: 37, prefix: '3rd ' },
+  ].flatMap(({ suffix, signer, left, prefix }) => [
+    { key: `signature${suffix}`, label: `${prefix}Signature`, signer, image: true, box: { left: left + 2, top: 80, width: 22, height: 7 } },
+    { key: `signerName${suffix}`, label: `${prefix}Signer name`, signer, weight: 800, box: { left, top: 87.5, width: 26, height: 4 } },
+    { key: `signerRole${suffix}`, label: `${prefix}Signer role`, signer, weight: 500, box: { left, top: 92, width: 26, height: 3 } },
+  ]),
+];
+
+export const MAX_SIGNERS = 3;
+
+// Everyone who signs the certificate: the main signer first, then any added
+// on the Certificates page. `dark` and `light` are the same signature in dark
+// and white ink.
+export function getSigners(template) {
+  const tmpl = template || {};
+  const main = {
+    name: tmpl.signerName || 'FairPlay Event Director',
+    role: tmpl.signerRole || 'Event Director',
+    dark: tmpl.signatureDataUrl || '',
+    light: tmpl.signatureLightDataUrl || '',
+  };
+  const extras = (Array.isArray(tmpl.extraSigners) ? tmpl.extraSigners : [])
+    .slice(0, MAX_SIGNERS - 1)
+    .map((signer) => ({
+      name: signer?.name || '',
+      role: signer?.role || '',
+      dark: signer?.signatureDataUrl || '',
+      light: signer?.signatureLightDataUrl || '',
+    }));
+  return [main, ...extras];
+}
+
+// Whether a field has anything to show yet: a signature needs its image, and
+// a second or third signer's fields need that signer to have been added.
+export function isUploadedFieldAvailable(template, key) {
+  const definition = UPLOADED_FIELD_DEFS.find((entry) => entry.key === key);
+  if (!definition || definition.signer === undefined) return true;
+  const signer = getSigners(template)[definition.signer];
+  if (!signer) return false;
+  return definition.image ? Boolean(signer.dark) : true;
+}
+
 const DEFAULT_UPLOADED_FIELDS = {
-  name: { left: 19, top: 44, width: 62, height: 10, cover: false },
-  event: { left: 32, top: 54, width: 54, height: 7, cover: false },
-  place: { left: 38, top: 62, width: 42, height: 6, cover: false },
+  name: UPLOADED_FIELD_DEFS[0].box,
 };
 
 export function uploadedTemplateHeight(aspect) {
@@ -65,18 +122,53 @@ export function uploadedTemplateHeight(aspect) {
   return Math.round(UPLOADED_TEMPLATE_WIDTH / Math.min(2.5, Math.max(0.5, ratio)));
 }
 
-// The largest size at which the name still fits its box on one line, so a
-// long name shrinks instead of spilling out of the space the template left.
+const WRAPPED_LINE_HEIGHT = 1.3;
+
+// The largest size at which the text still fits its box, so a long name or
+// message shrinks instead of spilling out of the space the template left.
+// One line for most fields; `wrap` lets a message run over several.
 let measureContext = null;
-export function fitNameFontSize(text, boxWidth, boxHeight) {
+export function fitTextFontSize(text, boxWidth, boxHeight, { weight = 900, uppercase = false, wrap = false } = {}) {
   const byHeight = boxHeight * 0.72;
   if (typeof document === 'undefined') return byHeight;
   if (!measureContext) measureContext = document.createElement('canvas').getContext('2d');
   if (!measureContext) return byHeight;
-  measureContext.font = `900 100px ${NAME_FONT_FAMILY}`;
-  const widthAt100 = measureContext.measureText(String(text || '').toUpperCase()).width;
-  const byWidth = widthAt100 > 0 ? ((boxWidth * 0.96) / widthAt100) * 100 : byHeight;
-  return Math.max(8, Math.min(byHeight, byWidth, 110));
+  measureContext.font = `${weight} 100px ${NAME_FONT_FAMILY}`;
+  const content = uppercase ? String(text || '').toUpperCase() : String(text || '');
+  const usableWidth = boxWidth * 0.96;
+
+  if (!wrap) {
+    const widthAt100 = measureContext.measureText(content).width;
+    const byWidth = widthAt100 > 0 ? (usableWidth / widthAt100) * 100 : byHeight;
+    return Math.max(6, Math.min(byHeight, byWidth, 110));
+  }
+
+  const wordWidths = content.split(/\s+/).filter(Boolean).map((word) => measureContext.measureText(word).width);
+  const spaceWidth = measureContext.measureText(' ').width;
+  const fits = (size) => {
+    const ratio = size / 100;
+    let lines = 1;
+    let lineWidth = 0;
+    for (const wordWidth of wordWidths) {
+      const width = wordWidth * ratio;
+      if (lineWidth > 0 && lineWidth + spaceWidth * ratio + width > usableWidth) {
+        lines += 1;
+        lineWidth = width;
+      } else {
+        lineWidth += (lineWidth > 0 ? spaceWidth * ratio : 0) + width;
+      }
+      if (width > usableWidth) return false;
+    }
+    return lines * size * WRAPPED_LINE_HEIGHT <= boxHeight;
+  };
+
+  let low = 6;
+  let high = Math.max(6, Math.min(byHeight, 60));
+  for (let step = 0; step < 12; step += 1) {
+    const middle = (low + high) / 2;
+    if (fits(middle)) low = middle; else high = middle;
+  }
+  return low;
 }
 
 function normalizeUploadedNameField(field) {
@@ -94,13 +186,18 @@ function normalizeUploadedNameField(field) {
   return looksLikeOldFallback ? DEFAULT_UPLOADED_FIELDS.name : field;
 }
 
-// Where the recipient's name goes on an uploaded template, in percent of the
-// template's width and height.
-export function getUploadedNameField(template) {
-  const stored = template?.customTemplateFields?.name;
+// Where one field goes on an uploaded template and whether it is shown. The
+// name is always shown; anything else only once the organizer switched it on.
+export function getUploadedField(template, key) {
+  const definition = UPLOADED_FIELD_DEFS.find((entry) => entry.key === key) || UPLOADED_FIELD_DEFS[0];
+  const stored = template?.customTemplateFields?.[key];
+  const isName = key === 'name';
   return {
-    ...DEFAULT_UPLOADED_FIELDS.name,
-    ...(normalizeUploadedNameField(stored) || {}),
+    ...definition.box,
+    // Positions an old scan guessed for anything but the name were never
+    // shown and are not trusted now.
+    ...(isName ? normalizeUploadedNameField(stored) : stored?.manual ? stored : null),
+    enabled: isName || Boolean(stored?.enabled),
     cover: false,
   };
 }
@@ -168,9 +265,11 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
   const placementLabel = awardLabel(certificate);
   const isJudgeCertificate = certificate.category === 'judge';
 
-  const signerName = tmpl.signerName       || 'FairPlay Event Director';
-  const signerRole = tmpl.signerRole       || 'Event Director';
   const orgName    = tmpl.organizationName || 'FairPlay';
+  const signers    = getSigners(tmpl);
+  // An added signer left blank is not printed on the built-in certificate.
+  const footerSigners = signers.filter((signer, index) => index === 0 || signer.name || signer.dark);
+  const signerWidth = footerSigners.length > 2 ? 132 : footerSigners.length > 1 ? 160 : 180;
   const certTitle  = isJudgeCertificate
     ? tmpl.judgeTitle || 'Certificate of Appreciation'
     : tmpl.participantTitle || tmpl.title || 'Certificate of Achievement';
@@ -184,11 +283,23 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
     : new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 
   if (isImageTemplate(tmpl)) {
-    const recipientName = certificate.recipientName || 'Recipient Name';
-    const nameField = getUploadedNameField(tmpl);
     // Templates saved before the shape was recorded are measured as they load.
     const height = uploadedTemplateHeight(tmpl.customTemplateAspect || measuredAspect);
-    const nameColor = nameField.color || DEFAULT_NAME_COLOR;
+    const values = {
+      name: certificate.recipientName || 'Recipient Name',
+      title: certTitle,
+      message,
+      event: certificate.eventTitle || '',
+      place: uploadedTemplatePlaceLabel(certificate),
+      organization: orgName,
+      date: issuedDate,
+    };
+    signers.forEach((signer, index) => {
+      const suffix = index === 0 ? '' : String(index + 1);
+      values[`signature${suffix}`] = signer.dark;
+      values[`signerName${suffix}`] = signer.name;
+      values[`signerRole${suffix}`] = signer.role;
+    });
 
     return (
       <div
@@ -212,19 +323,37 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
           }}
           style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'fill' }}
         />
-        <UploadedField
-          field={nameField}
-          textStyle={{
-            color: nameColor,
-            fontSize: fitNameFontSize(recipientName, (nameField.width / 100) * UPLOADED_TEMPLATE_WIDTH, (nameField.height / 100) * height),
-            fontWeight: 900,
-            lineHeight: 1.05,
-            whiteSpace: 'nowrap',
-            textTransform: 'uppercase',
-          }}
-        >
-          {recipientName}
-        </UploadedField>
+        {UPLOADED_FIELD_DEFS.map((definition) => {
+          const field = getUploadedField(tmpl, definition.key);
+          const text = values[definition.key];
+          if (!field.enabled || !text) return null;
+          if (definition.image) {
+            return (
+              <img
+                key={definition.key}
+                src={text}
+                alt={definition.label}
+                style={{ ...percentBoxStyle(field), objectFit: 'contain', zIndex: 1 }}
+              />
+            );
+          }
+          return (
+            <UploadedField
+              key={definition.key}
+              field={field}
+              textStyle={{
+                color: field.color || DEFAULT_NAME_COLOR,
+                fontSize: fitTextFontSize(text, (field.width / 100) * UPLOADED_TEMPLATE_WIDTH, (field.height / 100) * height, definition),
+                fontWeight: definition.weight,
+                lineHeight: definition.wrap ? WRAPPED_LINE_HEIGHT : 1.05,
+                whiteSpace: definition.wrap ? 'normal' : 'nowrap',
+                textTransform: definition.uppercase ? 'uppercase' : 'none',
+              }}
+            >
+              {text}
+            </UploadedField>
+          );
+        })}
       </div>
     );
   }
@@ -344,11 +473,22 @@ const CertificateRenderer = forwardRef(function CertificateRenderer({ certificat
           <div style={{ color: 'rgba(255,255,255,0.45)', fontSize: 9, fontWeight: 900, letterSpacing: 2.4, textTransform: 'uppercase', marginTop: 3 }}>Date Issued</div>
         </div>
 
-        {/* Signature */}
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ color: '#fff', fontSize: 13, fontWeight: 900, marginBottom: 5 }}>{signerName}</div>
-          <div style={{ width: 180, borderBottom: '1.5px solid rgba(246,201,69,0.55)', margin: '0 auto 5px' }} />
-          <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: 9, fontWeight: 900, letterSpacing: 2.4, textTransform: 'uppercase' }}>{signerRole}</div>
+        {/* Signatures — side by side, lined up on their signing lines */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: footerSigners.length > 2 ? 14 : 22 }}>
+          {footerSigners.map((signer, index) => (
+            <div key={index} style={{ textAlign: 'center', width: signerWidth }}>
+              {(signer.light || signer.dark) && (
+                <img
+                  src={signer.light || signer.dark}
+                  alt="Signature"
+                  style={{ display: 'block', height: 26, maxWidth: signerWidth, objectFit: 'contain', margin: '0 auto 1px' }}
+                />
+              )}
+              <div style={{ color: '#fff', fontSize: footerSigners.length > 2 ? 11 : 13, fontWeight: 900, marginBottom: 5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{signer.name}</div>
+              <div style={{ borderBottom: '1.5px solid rgba(246,201,69,0.55)', margin: '0 auto 5px' }} />
+              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: footerSigners.length > 2 ? 8 : 9, fontWeight: 900, letterSpacing: footerSigners.length > 1 ? 1.4 : 2.4, textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{signer.role}</div>
+            </div>
+          ))}
         </div>
 
         {/* Verification */}

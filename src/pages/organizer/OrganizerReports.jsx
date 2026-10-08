@@ -28,6 +28,47 @@ const SORTS = {
   'generated-desc': { label: 'Recently generated', compare: (a, b) => (b.generatedValue - a.generatedValue) },
 };
 
+// How far scoring has got, as a count and a bar. The count and its unit sit
+// in the same place on every row, so judged and bracket events read alike.
+function ScoringProgress({ row }) {
+  const done = row.isJudged ? row.evaluations : row.completedMatches;
+  const total = row.isJudged ? row.expected : row.matches;
+  if (!total) return <span style={{ color: '#cbd5e1' }}>—</span>;
+  const complete = done >= total;
+  const percent = Math.min(100, Math.round((done / total) * 100));
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 5 }}>
+        <span style={{ fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{done} / {total}</span>
+        <span style={{ fontSize: 11, color: '#94a3b8' }}>{row.isJudged ? 'scores' : 'matches'}</span>
+      </div>
+      <div
+        role="progressbar"
+        aria-valuenow={percent}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        style={{ height: 5, borderRadius: 999, background: '#e2e8f0', overflow: 'hidden' }}
+      >
+        <div style={{ width: `${percent}%`, height: '100%', borderRadius: 999, background: complete ? '#10b981' : '#2563eb' }} />
+      </div>
+    </div>
+  );
+}
+
+// Date above, time below — the same two lines whether or not a report exists.
+function LastGenerated({ value }) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) {
+    return <span style={{ color: '#94a3b8' }}>Not generated</span>;
+  }
+  return (
+    <div style={{ whiteSpace: 'nowrap' }}>
+      <div>{formatReportDate(date)}</div>
+      <div style={{ fontSize: 12, color: '#94a3b8' }}>{date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</div>
+    </div>
+  );
+}
+
 export default function OrganizerReports() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
@@ -235,45 +276,60 @@ export default function OrganizerReports() {
         ) : (
           <>
             <div style={s.tableWrap}>
-              <table style={{ ...s.table, minWidth: 1040 }}>
+              <style>{'.report-row:hover > td { background: #f8fbff; }'}</style>
+              {/* Fixed columns: every row lines up the same way however long
+                  its title, numbers or status happen to be. */}
+              <table style={{ ...s.table, minWidth: 1160, tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 72 }} />
+                  <col style={{ width: 136 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 124 }} />
+                  <col style={{ width: 224 }} />
+                </colgroup>
                 <thead>
                   <tr>
                     <th style={s.th}>Event</th>
                     <th style={s.th}>Event date</th>
-                    <th style={s.th}>Completed</th>
-                    <th style={{ ...s.th, textAlign: 'right' }}>Participants</th>
-                    <th style={{ ...s.th, textAlign: 'right' }}>Judges</th>
-                    <th style={{ ...s.th, textAlign: 'right' }}>Evaluations</th>
-                    <th style={s.th}>Report status</th>
+                    <th style={{ ...s.th, textAlign: 'center' }}>Participants</th>
+                    <th style={{ ...s.th, textAlign: 'center' }}>Judges</th>
+                    <th style={s.th}>Scoring progress</th>
+                    <th style={{ ...s.th, textAlign: 'center' }}>Report status</th>
                     <th style={s.th}>Last generated</th>
                     <th style={{ ...s.th, textAlign: 'right' }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visible.map((row) => (
-                    <tr key={row.id}>
+                    <tr key={row.id} className="report-row">
                       <td style={s.td}>
                         <button
                           type="button"
                           onClick={() => navigate(`/organizer/reports/${row.id}`)}
-                          style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', fontWeight: 700, fontSize: 14, color: '#0f172a' }}
+                          title={row.title}
+                          style={{ display: 'block', width: '100%', border: 'none', background: 'none', padding: 0, textAlign: 'left', cursor: 'pointer', fontWeight: 700, fontSize: 14, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                         >
                           {row.title}
                         </button>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 12, color: '#64748b' }}>{row.category}</span>
-                          <EventStatusBadge status={row.status} />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                          <EventStatusBadge status={row.status} width={92} />
+                          <span style={{ fontSize: 12, color: '#64748b', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.category}</span>
                         </div>
                       </td>
-                      <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{formatReportDate(row.start)}</td>
-                      <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{row.completedOn ? formatReportDate(row.completedOn) : '—'}</td>
-                      <td style={{ ...s.td, ...s.num }}>{row.participants}</td>
-                      <td style={{ ...s.td, ...s.num }}>{row.judges}</td>
-                      <td style={{ ...s.td, ...s.num }}>
-                        {row.isJudged ? `${row.evaluations} / ${row.expected}` : row.matches ? `${row.completedMatches} / ${row.matches} matches` : '—'}
+                      <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
+                        <div>{formatReportDate(row.start)}</div>
+                        <div style={{ fontSize: 12, marginTop: 2, color: row.completedOn ? '#047857' : '#94a3b8' }}>
+                          {row.completedOn ? `Completed ${formatReportDate(row.completedOn)}` : 'Not completed yet'}
+                        </div>
                       </td>
-                      <td style={s.td}><ReportStatusBadge status={row.reportStatus} /></td>
-                      <td style={{ ...s.td, whiteSpace: 'nowrap' }}>{row.lastGeneratedAt ? formatReportDate(row.lastGeneratedAt, true) : 'Not generated'}</td>
+                      <td style={{ ...s.td, textAlign: 'center', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#0f172a' }}>{row.participants}</td>
+                      <td style={{ ...s.td, textAlign: 'center', fontVariantNumeric: 'tabular-nums', fontWeight: 700, color: '#0f172a' }}>{row.judges}</td>
+                      <td style={s.td}><ScoringProgress row={row} /></td>
+                      <td style={{ ...s.td, textAlign: 'center' }}><ReportStatusBadge status={row.reportStatus} width={126} /></td>
+                      <td style={s.td}><LastGenerated value={row.lastGeneratedAt} /></td>
                       <td style={{ ...s.td, textAlign: 'right' }}>
                         <div style={{ display: 'inline-flex', gap: 8 }}>
                           <button type="button" onClick={() => navigate(`/organizer/reports/${row.id}`)} style={{ ...s.secondaryButton, padding: '7px 12px' }}>

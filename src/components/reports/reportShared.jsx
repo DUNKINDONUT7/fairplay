@@ -7,17 +7,18 @@ export const REPORT_STATUS = {
   pending: { label: 'No results yet', color: '#64748b', background: '#f8fafc', border: '#e2e8f0', icon: 'bi bi-dash-circle' },
 };
 
-export function ReportStatusBadge({ status }) {
+// `width` gives every badge in a column the same size, whatever it says.
+export function ReportStatusBadge({ status, width }) {
   const tone = REPORT_STATUS[status] || REPORT_STATUS.pending;
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, color: tone.color, background: tone.background, border: `1px solid ${tone.border}`, whiteSpace: 'nowrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', width, gap: 6, padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, color: tone.color, background: tone.background, border: `1px solid ${tone.border}`, whiteSpace: 'nowrap' }}>
       <i className={tone.icon} />
       {tone.label}
     </span>
   );
 }
 
-export function EventStatusBadge({ status }) {
+export function EventStatusBadge({ status, width }) {
   const value = String(status || 'draft');
   const tone = value === 'completed'
     ? { color: '#047857', background: '#ecfdf5', border: '#a7f3d0' }
@@ -25,7 +26,7 @@ export function EventStatusBadge({ status }) {
       ? { color: '#1d4ed8', background: '#eff6ff', border: '#bfdbfe' }
       : { color: '#475569', background: '#f8fafc', border: '#e2e8f0' };
   return (
-    <span style={{ padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, textTransform: 'capitalize', whiteSpace: 'nowrap', color: tone.color, background: tone.background, border: `1px solid ${tone.border}` }}>
+    <span style={{ display: 'inline-block', boxSizing: 'border-box', width, textAlign: 'center', padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, textTransform: 'capitalize', whiteSpace: 'nowrap', color: tone.color, background: tone.background, border: `1px solid ${tone.border}` }}>
       {value.replace(/[-_]/g, ' ')}
     </span>
   );
