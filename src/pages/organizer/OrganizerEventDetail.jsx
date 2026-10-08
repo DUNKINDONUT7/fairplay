@@ -390,6 +390,7 @@ export default function OrganizerEventDetail() {
   const { report } = useEventReport(id);
   const [confirmingDeleteInvite, setConfirmingDeleteInvite] = useState(null);
   const [deletingInviteId, setDeletingInviteId] = useState(null);
+  const [confirmingRemoveContestant, setConfirmingRemoveContestant] = useState(null);
   const [inviteSearch, setInviteSearch] = useState('');
   const [inviteStatusFilter, setInviteStatusFilter] = useState('all');
   const [inviteSortOrder, setInviteSortOrder] = useState('newest');
@@ -503,6 +504,26 @@ export default function OrganizerEventDetail() {
     }
     await updateEvent(id, { eliminatedContestantIds: Array.from(current) });
     notifySuccess(wasNoShow ? 'Participant restored.' : 'Participant marked as a no-show.');
+  }
+
+  // Unlike a no-show, this takes the participant off the roster entirely and
+  // frees their slot — meant for entries added by mistake.
+  async function handleRemoveContestant() {
+    const target = confirmingRemoveContestant;
+    setConfirmingRemoveContestant(null);
+    if (!target || isFinalized) return;
+    const key = String(target.id);
+    const remaining = (event.contestants || []).filter((c) => String(c.id) !== key);
+    try {
+      await updateEvent(id, {
+        contestants: remaining,
+        participants: remaining.length,
+        eliminatedContestantIds: (event.eliminatedContestantIds || []).filter((cid) => String(cid) !== key),
+      });
+      notifySuccess(`${target.name} was removed from the event.`);
+    } catch (err) {
+      notifyError(err.message || 'Unable to remove this participant.');
+    }
   }
 
   // Random numbers are reshuffled across the whole roster every time this
@@ -706,6 +727,14 @@ export default function OrganizerEventDetail() {
       confirmLabel="Cancel Access"
       onCancel={() => setConfirmingRevokeInvite(null)}
       onConfirm={handleRevokeInvite}
+    />
+    <ConfirmDialog
+      open={Boolean(confirmingRemoveContestant)}
+      title="Remove this participant?"
+      message={confirmingRemoveContestant ? `${confirmingRemoveContestant.name} will be taken off the roster and their slot freed up. Scores already submitted for them and any bracket they were placed in are not updated. To keep them on record but out of scoring, mark them as a no-show instead.` : ''}
+      confirmLabel="Remove"
+      onCancel={() => setConfirmingRemoveContestant(null)}
+      onConfirm={handleRemoveContestant}
     />
     {fullscreenQR && (
       <QRFullscreenModal
@@ -987,6 +1016,24 @@ export default function OrganizerEventDetail() {
                         }}
                       >
                         <i className={isNoShow ? 'bi bi-arrow-counterclockwise' : 'bi bi-person-dash'} />
+                      </button>
+                    )}
+                    {!isFinalized && (
+                      <button
+                        onClick={() => setConfirmingRemoveContestant(c)}
+                        title="Remove this participant"
+                        aria-label={`Remove ${c.name}`}
+                        style={{
+                          border: 'none',
+                          background: 'transparent',
+                          color: '#94a3b8',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                          padding: '2px 4px',
+                          textDecoration: 'none',
+                        }}
+                      >
+                        <i className="bi bi-x-lg" />
                       </button>
                     )}
                   </div>
