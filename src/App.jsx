@@ -5,6 +5,7 @@ import ToastContainer from './components/ui/Toast';
 import GlobalAuthModal from './components/auth/GlobalAuthModal';
 import AIChatbot from './components/AIChatbot';
 import OrganizerTour from './components/onboarding/OrganizerTour';
+import ParticipantTour from './components/onboarding/ParticipantTour';
 import MaintenanceScreen from './components/common/MaintenanceScreen';
 import usePlatformSettingsStore from './store/platformSettingsStore';
 import { startLiveSync } from './utils/supabaseClient';
@@ -416,6 +417,7 @@ export default function App() {
     <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <GlobalAuthModal />
       <OrganizerTour />
+      <ParticipantTour />
       <AppErrorBoundary>
         <MaintenanceGate>
         <Suspense fallback={<LoadingFallback />}>

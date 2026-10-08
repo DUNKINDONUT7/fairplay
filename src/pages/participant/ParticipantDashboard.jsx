@@ -6,6 +6,26 @@ import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useScoreStore from '../../store/scoreStore';
 import useRegistrationStore from '../../store/registrationStore';
+import useParticipantTourStore from '../../store/participantTourStore';
+
+// Per-account onboarding flag. Browser storage is fine here: losing it only
+// means a participant sees the tour again, and it only ever auto-starts for
+// an account that has no registrations yet.
+function readFlag(key) {
+  try {
+    return window.localStorage.getItem(key) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeFlag(key) {
+  try {
+    window.localStorage.setItem(key, '1');
+  } catch {
+    /* storage unavailable — onboarding just won't be remembered */
+  }
+}
 
 const EVENT_TYPE_ICON = {
   esports: 'bi-controller',
@@ -56,10 +76,12 @@ export default function ParticipantDashboard() {
   const { registrations, fetchRegistrations } = useRegistrationStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const startTour = useParticipantTourStore((state) => state.start);
+  const [registrationsLoaded, setRegistrationsLoaded] = useState(false);
 
   useEffect(() => {
     fetchEvents();
-    fetchRegistrations();
+    Promise.resolve(fetchRegistrations()).then(() => setRegistrationsLoaded(true));
   }, [fetchEvents, fetchRegistrations]);
 
   // Hide only unpublished/finished events (draft, completed, rejected,
@@ -77,6 +99,16 @@ export default function ParticipantDashboard() {
     if (!user) return [];
     return registrations.filter((r) => isMyRegistration(r, user));
   }, [registrations, user]);
+
+  // A brand-new participant (no registrations yet) sees the welcome tour once.
+  useEffect(() => {
+    if (!registrationsLoaded || !user?.id) return;
+    const key = `fairplay_participant_tour_seen_${user.id}`;
+    if (readFlag(key)) return;
+    writeFlag(key);
+    if (myRegistrations.length === 0) startTour();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrationsLoaded, user?.id]);
 
   const myRegisteredEventIds = useMemo(
     () => new Set(myRegistrations.map((r) => String(r.eventId))),
@@ -133,7 +165,7 @@ export default function ParticipantDashboard() {
     <DashboardLayout title="Participant Dashboard" subtitle="Browse events, register, and view your scores">
       <div style={{ display: 'grid', gap: 20 }}>
         {/* Hero: greeting, quick actions, and the next registered event */}
-        <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} style={heroStyle}>
+        <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} style={heroStyle} data-tour="dash-hero">
           <div aria-hidden="true" style={{ position: 'absolute', right: -90, top: -110, width: 320, height: 320, borderRadius: '50%', background: 'radial-gradient(circle, rgba(56,189,248,0.35), transparent 65%)' }} />
           <div aria-hidden="true" style={{ position: 'absolute', left: -70, bottom: -140, width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(129,140,248,0.28), transparent 65%)' }} />
 
@@ -152,6 +184,9 @@ export default function ParticipantDashboard() {
                 </motion.button>
                 <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} type="button" onClick={() => navigate('/participant/schedule')} style={heroGhostButtonStyle}>
                   <i className="bi bi-calendar-week" /> My Schedule
+                </motion.button>
+                <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} type="button" onClick={startTour} style={{ ...heroGhostButtonStyle, borderColor: 'rgba(125,211,252,0.6)', color: '#bae6fd' }}>
+                  <i className="bi bi-play-circle" /> Take the tour
                 </motion.button>
               </div>
             </div>
@@ -192,7 +227,7 @@ export default function ParticipantDashboard() {
           </div>
 
           {/* Quick stats */}
-          <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))', gap: 12, marginTop: 24 }}>
+          <div data-tour="dash-stats" style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))', gap: 12, marginTop: 24 }}>
             {[
               { label: 'Open events', value: openEvents.length, icon: 'bi bi-calendar-event', tone: 'linear-gradient(135deg, #6366f1, #4f46e5)', onClick: () => navigate('/participant/events') },
               { label: 'My registrations', value: myRegistrations.length, icon: 'bi bi-check-circle', tone: 'linear-gradient(135deg, #14b8a6, #0d9488)', onClick: () => navigate('/participant/schedule') },
