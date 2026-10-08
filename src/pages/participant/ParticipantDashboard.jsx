@@ -78,6 +78,11 @@ export default function ParticipantDashboard() {
     return registrations.filter((r) => isMyRegistration(r, user));
   }, [registrations, user]);
 
+  const myRegisteredEventIds = useMemo(
+    () => new Set(myRegistrations.map((r) => String(r.eventId))),
+    [myRegistrations]
+  );
+
   const myPrimaryEvent = useMemo(() => {
     const active = myRegistrations.find((r) => {
       const event = events.find((e) => String(e.id) === String(r.eventId));
@@ -170,55 +175,69 @@ export default function ParticipantDashboard() {
           </div>
         ) : (
           <div style={{ display: 'grid', gap: 12 }}>
-            {filteredEvents.map((event, i) => (
-              <motion.div
-                key={event.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                whileHover={{ borderColor: '#93c5fd', background: '#f0f7ff' }}
-                transition={{ delay: i * 0.05 }}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '16px 20px',
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 12, flexWrap: 'wrap', gap: 12,
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <IconChip icon={eventTypeIcon(event.type)} color="#2563eb" size={38} />
-                    <div>
-                      <p style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', margin: 0 }}>{event.title}</p>
-                      <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>
-                        {event.startDate || 'TBD'} · {event.location || 'Online'}
-                        · {event.participants}/{event.maxParticipants || '∞'} participants
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <motion.button
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => {
-                    const route = event.type === 'tournament' || event.type === 'esports' || event.type === 'sportsfest'
-                      ? 'team'
-                      : 'individual';
-                    navigate(`/participant/register-${route}?eventId=${event.id}`);
-                  }}
+            {filteredEvents.map((event, i) => {
+              const registered = myRegisteredEventIds.has(String(event.id));
+              return (
+                <motion.div
+                  key={event.id}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  whileHover={{ borderColor: '#93c5fd', background: '#f0f7ff' }}
+                  transition={{ delay: i * 0.05 }}
                   style={{
-                    padding: '10px 20px', borderRadius: 10,
-                    background: 'linear-gradient(135deg, #2563eb, #0ea5e9)',
-                    border: 'none', color: '#fff', fontWeight: 700, fontSize: 13,
-                    cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '16px 20px',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 12, flexWrap: 'wrap', gap: 12,
                   }}
                 >
-                  Register Now
-                  <i className="bi bi-arrow-right" />
-                </motion.button>
-              </motion.div>
-            ))}
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <IconChip icon={eventTypeIcon(event.type)} color="#2563eb" size={38} />
+                      <div>
+                        <p style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', margin: 0 }}>{event.title}</p>
+                        <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 0' }}>
+                          {event.startDate || 'TBD'} · {event.location || 'Online'}
+                          · {event.participants}/{event.maxParticipants || '∞'} participants
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {registered ? (
+                    <span style={{
+                      padding: '10px 20px', borderRadius: 10,
+                      background: '#dbeafe', color: '#2563eb', fontWeight: 700, fontSize: 13,
+                      display: 'inline-flex', alignItems: 'center', gap: 8,
+                    }}>
+                      <i className="bi bi-check-circle-fill" />
+                      Already Registered
+                    </span>
+                  ) : (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => {
+                        const route = event.type === 'tournament' || event.type === 'esports' || event.type === 'sportsfest'
+                          ? 'team'
+                          : 'individual';
+                        navigate(`/participant/register-${route}?eventId=${event.id}`);
+                      }}
+                      style={{
+                        padding: '10px 20px', borderRadius: 10,
+                        background: 'linear-gradient(135deg, #2563eb, #0ea5e9)',
+                        border: 'none', color: '#fff', fontWeight: 700, fontSize: 13,
+                        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8,
+                      }}
+                    >
+                      Register Now
+                      <i className="bi bi-arrow-right" />
+                    </motion.button>
+                  )}
+                </motion.div>
+              );
+            })}
           </div>
         )}
       </div>
