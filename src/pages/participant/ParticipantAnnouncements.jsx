@@ -34,7 +34,7 @@ function formatTime(time) {
 
 export default function ParticipantAnnouncements() {
   const { user } = useAuthStore();
-  const { loadNotifications, subscribeToNotifications, getNotificationsForUser, markAsRead } = useNotificationStore();
+  const { loadNotifications, subscribeToNotifications, getNotificationsForUser, markAsRead, markAllAsRead } = useNotificationStore();
 
   useEffect(() => {
     if (!user) return undefined;
@@ -43,6 +43,7 @@ export default function ParticipantAnnouncements() {
   }, [loadNotifications, subscribeToNotifications, user]);
 
   const announcements = getNotificationsForUser(user);
+  const unreadCount = announcements.filter((a) => !a.read).length;
 
   if (announcements.length === 0) {
     return (
@@ -58,6 +59,16 @@ export default function ParticipantAnnouncements() {
 
   return (
     <DashboardLayout title="Announcements" subtitle="Latest updates and notifications">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 14px', borderRadius: 999, background: unreadCount > 0 ? '#eff6ff' : '#f1f5f9', border: `1px solid ${unreadCount > 0 ? '#bfdbfe' : '#e2e8f0'}`, color: unreadCount > 0 ? '#1d4ed8' : '#64748b', fontWeight: 700, fontSize: 13 }}>
+          <i className="bi bi-bell-fill" /> {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
+        </span>
+        {unreadCount > 0 && (
+          <button type="button" onClick={() => markAllAsRead(user)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderRadius: 10, border: '1px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+            <i className="bi bi-check2-all" /> Mark all as read
+          </button>
+        )}
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {announcements.map((a, i) => {
           const meta = typeMeta(a);

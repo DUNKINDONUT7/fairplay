@@ -1,42 +1,101 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import useAuthStore from '../../store/authStore';
 import useCertificateStore from '../../store/certificateStore';
 import useEventStore from '../../store/eventStore';
+import useRegistrationStore from '../../store/registrationStore';
 import useScoreStore from '../../store/scoreStore';
+
+// Mirrors the matching used by ParticipantSchedule/ParticipantDashboard — email
+// first, exact name as a fallback for older or mobile-typed registrations.
+function isMyRegistration(registration, user) {
+  if (!user) return false;
+  const email = String(registration.email || '').trim().toLowerCase();
+  const userEmail = String(user.email || '').trim().toLowerCase();
+  if (email && userEmail && email === userEmail) return true;
+
+  const participantName = String(registration.participantName || '').trim().toLowerCase();
+  const userName = String(user.name || '').trim().toLowerCase();
+  return Boolean(participantName && userName && participantName === userName);
+}
+
+function SectionLabel({ icon, children }) {
+  return (
+    <h3 style={{ margin: 0, fontSize: 15, fontWeight: 800, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <i className={icon} style={{ color: '#2563eb' }} />
+      {children}
+    </h3>
+  );
+}
+
+function StatTile({ label, value, icon, color }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 16, borderRadius: 16, background: '#ffffff', border: '1px solid #e2e8f0', boxShadow: '0 8px 24px rgba(15,23,42,0.05)' }}>
+      <span style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 18, background: `${color}1a`, color }}>
+        <i className={icon} />
+      </span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: 22, fontWeight: 900, color: '#0f172a', lineHeight: 1.1 }}>{value}</span>
+        <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#64748b' }}>{label}</span>
+      </span>
+    </div>
+  );
+}
 
 export default function ParticipantScores() {
   const navigate = useNavigate();
   const { user } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
+  const { registrations, fetchRegistrations } = useRegistrationStore();
   const { fetchCertificates, getCertificatesByRecipient } = useCertificateStore();
   const { fetchScores, calculateLeaderboard } = useScoreStore();
 
   useEffect(() => {
     fetchEvents();
+    fetchRegistrations();
     fetchCertificates();
     fetchScores();
-  }, [fetchCertificates, fetchEvents, fetchScores]);
+  }, [fetchCertificates, fetchEvents, fetchRegistrations, fetchScores]);
+
+  const myEventIds = useMemo(() => {
+    if (!user) return new Set();
+    return new Set(
+      registrations
+        .filter((registration) => isMyRegistration(registration, user))
+        .map((registration) => String(registration.eventId))
+    );
+  }, [registrations, user]);
 
   const recipientCertificates = getCertificatesByRecipient(user?.name || '');
-  const results = events.map((event) => {
-    const leaderboard = calculateLeaderboard(event.id, event.criteria || []);
-    const participantEntry = leaderboard.find((entry) => entry.contestantName === user?.name) || null;
-    const certificate = recipientCertificates.find((item) => String(item.eventId) === String(event.id)) || null;
+  // Only the events this participant is actually registered for — showing
+  // every event on the platform here (including ones never joined) was just
+  // noise and made it look like scores were missing for unrelated events.
+  const results = events
+    .filter((event) => myEventIds.has(String(event.id)))
+    .map((event) => {
+      const leaderboard = calculateLeaderboard(event.id, event.criteria || []);
+      const participantEntry = leaderboard.find((entry) => entry.contestantName === user?.name) || null;
+      const certificate = recipientCertificates.find((item) => String(item.eventId) === String(event.id)) || null;
 
-    return {
-      eventId: event.id,
-      event: event.title,
-      score: participantEntry?.averageScore ?? null,
-      rank: participantEntry?.rank ?? null,
-      total: leaderboard.length,
-      status: event.status,
-      date: event.endDate || event.startDate,
-      certificate,
-    };
-  });
+      return {
+        eventId: event.id,
+        event: event.title,
+        score: participantEntry?.averageScore ?? null,
+        rank: participantEntry?.rank ?? null,
+        total: leaderboard.length,
+        status: event.status,
+        date: event.endDate || event.startDate,
+        certificate,
+      };
+    });
+
+  const summary = {
+    scored: results.filter((result) => result.score !== null).length,
+    certificates: results.filter((result) => result.certificate).length,
+    bestRank: results.reduce((best, result) => (result.rank && (!best || result.rank < best) ? result.rank : best), null),
+  };
 
   return (
     <DashboardLayout title="Scores and Results" subtitle="View rankings, progress, and available certificates">
@@ -44,11 +103,23 @@ export default function ParticipantScores() {
         <div style={{ background: '#ffffff', border: '1px solid #dbeafe', borderRadius: 16, boxShadow: '0 10px 30px rgba(37,99,235,0.06)', padding: 48, textAlign: 'center', color: '#64748b' }}>
           <i className="bi bi-bar-chart" style={{ fontSize: 40, marginBottom: 12, display: 'block', color: '#cbd5e1' }} />
           <p style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', marginBottom: 4 }}>No results yet</p>
-          <p style={{ fontSize: 13, margin: 0 }}>Your scores will show up here once events are underway</p>
+          <p style={{ fontSize: 13, margin: 0 }}>Register for an event to see your scores and rankings here.</p>
+          <button type="button" onClick={() => navigate('/participant/events')} style={{ marginTop: 16, display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 18px', borderRadius: 12, border: 'none', background: 'linear-gradient(135deg, #2563eb, #0ea5e9)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+            <i className="bi bi-calendar-plus" /> Browse events
+          </button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
-          {results.map((result, index) => (
+        <div style={{ display: 'grid', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 14 }}>
+            <StatTile label="Events scored" value={summary.scored} icon="bi bi-bar-chart-line-fill" color="#2563eb" />
+            <StatTile label="Certificates earned" value={summary.certificates} icon="bi bi-award-fill" color="#d97706" />
+            <StatTile label="Best rank" value={summary.bestRank ? `#${summary.bestRank}` : '—'} icon="bi bi-trophy-fill" color="#7c3aed" />
+          </div>
+
+          <div style={{ display: 'grid', gap: 14 }}>
+            <SectionLabel icon="bi bi-list-check">My results</SectionLabel>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
+              {results.map((result, index) => (
             <motion.div
               key={result.eventId}
               initial={{ opacity: 0, y: 20 }}
@@ -112,7 +183,9 @@ export default function ParticipantScores() {
                 </motion.button>
               </div>
             </motion.div>
-          ))}
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </DashboardLayout>

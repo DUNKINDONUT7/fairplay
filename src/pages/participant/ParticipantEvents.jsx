@@ -1,10 +1,18 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import useEventStore from '../../store/eventStore';
 import useAuthStore from '../../store/authStore';
 import useRegistrationStore from '../../store/registrationStore';
+
+const STATUS_TABS = [
+  { value: 'all', label: 'All' },
+  { value: 'open', label: 'Open' },
+  { value: 'registered', label: 'Registered' },
+  { value: 'full', label: 'Full' },
+  { value: 'closed', label: 'Closed' },
+];
 
 const EVENT_TYPE_ICON = {
   esports: 'bi-controller',
@@ -42,6 +50,8 @@ export default function ParticipantEvents() {
   const { user } = useAuthStore();
   const { events, fetchEvents } = useEventStore();
   const { registrations, fetchRegistrations } = useRegistrationStore();
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => {
     fetchEvents();
@@ -84,6 +94,18 @@ export default function ParticipantEvents() {
     };
   });
 
+  const term = search.trim().toLowerCase();
+  const statusTabs = STATUS_TABS.map((tab) => ({
+    ...tab,
+    count: tab.value === 'all' ? availableEvents.length : availableEvents.filter((event) => event.status === tab.value).length,
+  })).filter((tab) => tab.value === 'all' || tab.count > 0 || tab.value === statusFilter);
+
+  const filteredEvents = availableEvents.filter((event) => {
+    if (statusFilter !== 'all' && event.status !== statusFilter) return false;
+    if (!term) return true;
+    return [event.title, event.type].some((value) => String(value || '').toLowerCase().includes(term));
+  });
+
   const handleRegister = (event) => {
     if (event.status !== 'open') return;
     if (event.format === 'team') {
@@ -109,8 +131,49 @@ export default function ParticipantEvents() {
           <p style={{ fontSize: 13, margin: 0 }}>Check back later for newly published events</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
-          {availableEvents.map((event, index) => (
+        <div style={{ background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: 18, padding: 22, boxShadow: '0 8px 24px rgba(15,23,42,0.05)' }}>
+          <div style={{ position: 'relative', marginBottom: 16, maxWidth: 360 }}>
+            <i className="bi bi-search" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: '#94a3b8', fontSize: 13 }} />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search by title or type"
+              aria-label="Search events"
+              style={{ width: '100%', boxSizing: 'border-box', padding: '10px 14px 10px 34px', borderRadius: 12, background: '#ffffff', border: '1px solid #e2e8f0', color: '#0f172a', fontSize: 13, outline: 'none' }}
+            />
+          </div>
+
+          <div role="tablist" aria-label="Filter by status" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+            {statusTabs.map((tab) => {
+              const active = statusFilter === tab.value;
+              return (
+                <button
+                  key={tab.value}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setStatusFilter(tab.value)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 14px', borderRadius: 999, border: active ? '1px solid #2563eb' : '1px solid #e2e8f0', background: active ? '#eff6ff' : '#ffffff', color: active ? '#1d4ed8' : '#475569', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+                >
+                  {tab.label}
+                  <span style={{ padding: '0 7px', borderRadius: 999, fontSize: 12, background: active ? '#dbeafe' : '#f1f5f9', color: active ? '#1d4ed8' : '#64748b' }}>{tab.count}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {filteredEvents.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#64748b' }}>
+              <i className="bi bi-search" style={{ fontSize: 34, color: '#cbd5e1', display: 'block', marginBottom: 10 }} />
+              <p style={{ fontSize: 15, fontWeight: 700, color: '#475569', margin: '0 0 4px' }}>No events match your search or filter</p>
+              <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>Try another status or clear the search.</p>
+              <button type="button" onClick={() => { setSearch(''); setStatusFilter('all'); }} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 16px', borderRadius: 12, border: '1px solid #e2e8f0', background: '#ffffff', color: '#0f172a', fontWeight: 700, fontSize: 13, cursor: 'pointer', marginTop: 14 }}>
+                <i className="bi bi-x-lg" /> Clear filters
+              </button>
+            </div>
+          ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: 16 }}>
+          {filteredEvents.map((event, index) => (
             <motion.div
               key={event.id}
               initial={{ opacity: 0, y: 20 }}
@@ -180,6 +243,8 @@ export default function ParticipantEvents() {
               </motion.button>
             </motion.div>
           ))}
+          </div>
+          )}
         </div>
       )}
     </DashboardLayout>

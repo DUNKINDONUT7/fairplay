@@ -108,42 +108,121 @@ export default function ParticipantDashboard() {
       .map((e) => e.id)
   ).size;
 
+  // The registered event the participant should pay attention to next:
+  // whichever one is live, otherwise the soonest upcoming one with a date.
+  const nextEvent = useMemo(() => {
+    const myEvents = events.filter((e) => myRegisteredEventIds.has(String(e.id)));
+    const byDate = (a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0);
+    const live = myEvents.filter((e) => e.status === 'active' || e.status === 'ongoing').sort(byDate)[0];
+    if (live) return live;
+    return myEvents.filter((e) => ['approved', 'upcoming'].includes(e.status) && e.startDate).sort(byDate)[0] || null;
+  }, [events, myRegisteredEventIds]);
+
   const cardStyle = {
-    background: '#ffffff', border: '1px solid #dbeafe',
-    borderRadius: 16, padding: 24, boxShadow: '0 10px 30px rgba(37,99,235,0.06)',
+    background: '#ffffff', border: '1px solid #e2e8f0',
+    borderRadius: 18, padding: 22, boxShadow: '0 8px 24px rgba(15,23,42,0.05)',
   };
+
+  const firstName = String(user?.name || '').trim().split(/\s+/)[0];
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const headline = myRegistrations.length === 0
+    ? 'Browse open events and register to get started.'
+    : `You're registered for ${myRegistrations.length} event${myRegistrations.length === 1 ? '' : 's'}${myRank ? `, currently ranked #${myRank}` : ''}.`;
 
   return (
     <DashboardLayout title="Participant Dashboard" subtitle="Browse events, register, and view your scores">
-      {/* Quick Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 16, marginBottom: 28 }}>
-        {[
-          { label: 'Open Events', value: openEvents.length, icon: 'bi-calendar-event-fill', color: '#2563eb' },
-          { label: 'Active Registrations', value: myRegistrations.length, icon: 'bi-check-circle-fill', color: '#10b981' },
-          { label: 'Completed Events', value: completedCount, icon: 'bi-trophy-fill', color: '#9333ea' },
-          { label: 'Your Ranking', value: myRank ? `#${myRank}` : '—', icon: 'bi-bar-chart-line-fill', color: '#d97706' },
-        ].map((stat, i) => (
-          <motion.div
-            key={stat.label}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            whileHover={{ y: -3, boxShadow: '0 16px 34px rgba(37,99,235,0.12)' }}
-            transition={{ delay: i * 0.08 }}
-            style={{ ...cardStyle, padding: 20, borderLeft: `3px solid ${stat.color}` }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-              <div>
-                <p style={{ fontSize: 11, color: '#64748b', marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>{stat.label}</p>
-                <p style={{ fontSize: 28, fontWeight: 800, color: stat.color, margin: 0 }}>{stat.value}</p>
+      <div style={{ display: 'grid', gap: 20 }}>
+        {/* Hero: greeting, quick actions, and the next registered event */}
+        <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} style={heroStyle}>
+          <div aria-hidden="true" style={{ position: 'absolute', right: -90, top: -110, width: 320, height: 320, borderRadius: '50%', background: 'radial-gradient(circle, rgba(56,189,248,0.35), transparent 65%)' }} />
+          <div aria-hidden="true" style={{ position: 'absolute', left: -70, bottom: -140, width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(129,140,248,0.28), transparent 65%)' }} />
+
+          <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 24, alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', minWidth: 0 }}>
+              <span style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', gap: 8, padding: '6px 12px', borderRadius: 999, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.16)', color: '#bae6fd', fontSize: 12, fontWeight: 700 }}>
+                <i className="bi bi-calendar3" /> {today}
+              </span>
+              <h2 style={{ margin: '14px 0 8px', fontSize: 'clamp(26px, 3vw, 36px)', lineHeight: 1.1, fontWeight: 900, color: '#ffffff', letterSpacing: '-0.01em' }}>
+                {firstName ? `Welcome back, ${firstName}` : 'Welcome back'}
+              </h2>
+              <p style={{ margin: 0, fontSize: 15, color: '#cbd5e1', maxWidth: 520, lineHeight: 1.5 }}>{headline}</p>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 22 }}>
+                <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} type="button" onClick={() => navigate('/participant/events')} style={heroPrimaryButtonStyle}>
+                  <i className="bi bi-calendar-plus-fill" /> Browse Events
+                </motion.button>
+                <motion.button whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }} type="button" onClick={() => navigate('/participant/schedule')} style={heroGhostButtonStyle}>
+                  <i className="bi bi-calendar-week" /> My Schedule
+                </motion.button>
               </div>
-              <IconChip icon={stat.icon} color={stat.color} />
             </div>
-          </motion.div>
-        ))}
-      </div>
+
+            {/* Next event */}
+            <div style={glassCardStyle}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <span style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#7dd3fc' }}>
+                  {nextEvent?.status === 'active' || nextEvent?.status === 'ongoing' ? 'Happening now' : 'Next event'}
+                </span>
+                {nextEvent && (nextEvent.status === 'active' || nextEvent.status === 'ongoing') && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 999, fontSize: 12, fontWeight: 700, background: 'rgba(52,211,153,0.18)', color: '#6ee7b7' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#34d399', boxShadow: '0 0 0 4px rgba(52,211,153,0.25)' }} />
+                    Live
+                  </span>
+                )}
+              </div>
+              {nextEvent ? (
+                <>
+                  <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+                    <DateTile value={nextEvent.startDate} />
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#ffffff', overflowWrap: 'anywhere' }}>{nextEvent.title}</h3>
+                  </div>
+                  <div style={{ display: 'grid', gap: 7, fontSize: 13, color: '#cbd5e1' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><i className="bi bi-geo-alt" style={{ color: '#7dd3fc', flexShrink: 0 }} />{nextEvent.location || 'No venue set'}</div>
+                  </div>
+                  <button type="button" onClick={() => navigate('/participant/schedule')} style={{ ...heroPrimaryButtonStyle, padding: '10px 16px', fontSize: 13, boxShadow: 'none', marginTop: 'auto' }}>
+                    View schedule <i className="bi bi-arrow-right" />
+                  </button>
+                </>
+              ) : (
+                <div style={{ margin: 'auto 0', color: '#cbd5e1', fontSize: 14, lineHeight: 1.5 }}>
+                  <i className="bi bi-calendar2-plus" style={{ fontSize: 26, color: '#7dd3fc', display: 'block', marginBottom: 8 }} />
+                  No upcoming event yet. Register for one to see it here.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Quick stats */}
+          <div style={{ position: 'relative', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 170px), 1fr))', gap: 12, marginTop: 24 }}>
+            {[
+              { label: 'Open events', value: openEvents.length, icon: 'bi bi-calendar-event', tone: 'linear-gradient(135deg, #6366f1, #4f46e5)', onClick: () => navigate('/participant/events') },
+              { label: 'My registrations', value: myRegistrations.length, icon: 'bi bi-check-circle', tone: 'linear-gradient(135deg, #14b8a6, #0d9488)', onClick: () => navigate('/participant/schedule') },
+              { label: 'Completed events', value: completedCount, icon: 'bi bi-patch-check', tone: 'linear-gradient(135deg, #8b5cf6, #7c3aed)', onClick: () => navigate('/participant/scores') },
+              { label: 'Your ranking', value: myRank ? `#${myRank}` : '—', icon: 'bi bi-bar-chart-line', tone: 'linear-gradient(135deg, #f59e0b, #d97706)', onClick: () => navigate('/participant/scores') },
+            ].map((stat, index) => (
+              <motion.button
+                key={stat.label}
+                type="button"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.08 + index * 0.05 }}
+                whileHover={{ y: -3 }}
+                onClick={stat.onClick}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, textAlign: 'left', cursor: 'pointer', background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }}
+              >
+                <span style={{ width: 42, height: 42, borderRadius: 12, flexShrink: 0, display: 'grid', placeItems: 'center', fontSize: 18, background: stat.tone, color: '#ffffff' }}>
+                  <i className={stat.icon} />
+                </span>
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 26, fontWeight: 900, color: '#ffffff', lineHeight: 1.1, fontVariantNumeric: 'tabular-nums' }}>{stat.value}</span>
+                  <span style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#cbd5e1' }}>{stat.label}</span>
+                </span>
+              </motion.button>
+            ))}
+          </div>
+        </motion.section>
 
       {/* Search */}
-      <div style={{ ...cardStyle, marginBottom: 20, padding: 16 }}>
+      <div style={{ ...cardStyle, padding: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <i className="bi bi-search" style={{ fontSize: 16, color: '#94a3b8' }} />
           <input
@@ -288,6 +367,30 @@ export default function ParticipantDashboard() {
           </div>
         )}
       </div>
+      </div>
     </DashboardLayout>
+  );
+}
+
+const heroStyle = { position: 'relative', overflow: 'hidden', borderRadius: 24, padding: 'clamp(20px, 3vw, 32px)', background: 'linear-gradient(135deg, #0b1b3f 0%, #0f2a5f 55%, #1e3a8a 100%)', boxShadow: '0 24px 60px rgba(15,23,42,0.25)' };
+const glassCardStyle = { display: 'flex', flexDirection: 'column', gap: 14, padding: 20, borderRadius: 20, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.14)', backdropFilter: 'blur(8px)', minWidth: 0 };
+const heroPrimaryButtonStyle = { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 12, border: 'none', background: '#ffffff', color: '#1e3a8a', fontWeight: 800, fontSize: 14, cursor: 'pointer', boxShadow: '0 10px 26px rgba(2,6,23,0.3)' };
+const heroGhostButtonStyle = { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.28)', background: 'rgba(255,255,255,0.08)', color: '#ffffff', fontWeight: 700, fontSize: 14, cursor: 'pointer' };
+
+// The event's start date as a small calendar leaf, matching the organizer dashboard.
+function DateTile({ value }) {
+  const date = value ? new Date(value) : null;
+  const valid = date && !Number.isNaN(date.getTime());
+  return (
+    <span aria-hidden="true" style={{ width: 64, height: 64, borderRadius: 12, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#eff6ff', border: '1px solid #dbeafe', color: '#1d4ed8', lineHeight: 1.1 }}>
+      {valid ? (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' }}>{date.toLocaleDateString('en-US', { month: 'short' })}</span>
+          <span style={{ fontSize: 24, fontWeight: 800, color: '#0f172a' }}>{date.getDate()}</span>
+        </>
+      ) : (
+        <i className="bi bi-calendar-event" style={{ fontSize: 22 }} />
+      )}
+    </span>
   );
 }
