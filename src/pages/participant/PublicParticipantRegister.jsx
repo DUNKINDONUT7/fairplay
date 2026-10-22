@@ -3,7 +3,6 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import useAuthStore from '../../store/authStore';
 import useEventStore from '../../store/eventStore';
 import useRegistrationStore from '../../store/registrationStore';
-import { ensureEventTournamentAutomation } from '../../services/automationService';
 import { getEventCapacity, getEventFullMessage } from '../../utils/systemSelectors';
 import {
   getParticipantLimitMessage,
@@ -247,9 +246,8 @@ export default function PublicParticipantRegister() {
         maxParticipants: limitConfig.max,
       });
 
-      const refreshedEvent = useEventStore.getState().getEventById(eventId);
-      const contestants = refreshedEvent?.contestants || existing;
-      await ensureEventTournamentAutomation(refreshedEvent || currentEvent, contestants);
+      // Registering never touches the bracket: only the organizer builds or
+      // redraws it (W06), so a late registration cannot reshuffle the draw.
 
       const identity = {
         eventId,

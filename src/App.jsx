@@ -73,18 +73,12 @@ const OrganizerVerification = lazy(() => import('./pages/organizer/OrganizerVeri
 const OrganizerEventDetail = lazy(() => import('./pages/organizer/OrganizerEventDetail'));
 const OrganizerCertificates = lazy(() => import('./pages/organizer/OrganizerCertificates'));
 
-const JudgeDashboard = lazy(() => import('./pages/judge/JudgeDashboard'));
-const JudgeEvents = lazy(() => import('./pages/judge/JudgeEvents'));
-const JudgeScoring = lazy(() => import('./pages/judge/JudgeScoring'));
-const JudgeReview = lazy(() => import('./pages/judge/JudgeReview'));
-const JudgeHistory = lazy(() => import('./pages/judge/JudgeHistory'));
 const JudgeSettings = lazy(() => import('./pages/judge/JudgeSettings'));
-const JudgeSessionGate = lazy(() => import('./pages/judge/JudgeSessionGate'));
-const JudgeInviteAccept = lazy(() => import('./pages/judge/JudgeInviteAccept'));
-const JudgePublicScoring = lazy(() => import('./pages/judge/JudgePublicScoring'));
 const JudgeLiveScoring = lazy(() => import('./pages/judge/JudgeLiveScoring'));
-const ScorerLiveScoring = lazy(() => import('./pages/scorer/ScorerLiveScoring'));
-const ScorerSession = lazy(() => import('./pages/scorer/ScorerSession'));
+const ScorerScoring = lazy(() => import('./pages/scorer/ScorerScoring'));
+const StaffHome = lazy(() => import('./pages/staff/StaffHome'));
+const StaffActivate = lazy(() => import('./pages/staff/StaffActivate'));
+const RetiredLink = lazy(() => import('./pages/staff/RetiredLink'));
 
 const PublicParticipantRegister = lazy(() => import('./pages/participant/PublicParticipantRegister'));
 const ParticipantDashboard = lazy(() => import('./pages/participant/ParticipantDashboard'));
@@ -476,21 +470,30 @@ export default function App() {
           <Route path="/organizer/profile" element={<ProtectedRoute role="organizer"><OrganizerSettings /></ProtectedRoute>} />
 
           {/* Judge Routes */}
-          <Route path="/judge" element={<ProtectedRoute role="judge"><JudgeDashboard /></ProtectedRoute>} />
-          <Route path="/judge/events" element={<ProtectedRoute role="judge"><JudgeEvents /></ProtectedRoute>} />
-          <Route path="/judge/scoring" element={<ProtectedRoute role="judge"><JudgeScoring /></ProtectedRoute>} />
-          <Route path="/judge/review" element={<ProtectedRoute role="judge"><JudgeReview /></ProtectedRoute>} />
-          <Route path="/judge/history" element={<ProtectedRoute role="judge"><JudgeHistory /></ProtectedRoute>} />
+          {/* Judges and scorers (W01 / W10): any signed-in account can hold an
+              assignment (a student can be a scorer), so these pages are not
+              limited by profile role — they show only the account's own
+              assignments, and the database checks every save. */}
+          <Route path="/judge" element={<ProtectedRoute><StaffHome role="judge" /></ProtectedRoute>} />
+          <Route path="/judge/events" element={<ProtectedRoute><StaffHome role="judge" /></ProtectedRoute>} />
+          <Route path="/judge/events/:eventId" element={<ProtectedRoute><JudgeLiveScoring /></ProtectedRoute>} />
           <Route path="/judge/settings" element={<ProtectedRoute role="judge"><JudgeSettings /></ProtectedRoute>} />
           <Route path="/judge/profile" element={<ProtectedRoute role="judge"><JudgeSettings /></ProtectedRoute>} />
+          <Route path="/scorer" element={<ProtectedRoute><StaffHome role="scorer" /></ProtectedRoute>} />
+          <Route path="/scorer/events" element={<ProtectedRoute><StaffHome role="scorer" /></ProtectedRoute>} />
+          <Route path="/scorer/events/:eventId" element={<ProtectedRoute><ScorerScoring /></ProtectedRoute>} />
+          <Route path="/scorer/settings" element={<ProtectedRoute role="scorer"><JudgeSettings /></ProtectedRoute>} />
+          <Route path="/staff/activate/:token" element={<StaffActivate />} />
           <Route path="/participant/register" element={<PublicParticipantRegister />} />
-          <Route path="/judge/open/:eventId" element={<JudgePublicScoring />} />
-          <Route path="/judge/session/:sessionId" element={<JudgeSessionGate />} />
-          <Route path="/judge/invite/:token" element={<JudgeInviteAccept />} />
-          <Route path="/judge/live/:sessionId" element={<JudgeLiveScoring />} />
-          <Route path="/scorer/live/:sessionId" element={<ScorerLiveScoring />} />
-          <Route path="/scorer/session/:token" element={<ScorerSession />} />
-          <Route path="/judge/score/:token" element={<ProtectedRoute role="judge"><JudgeScoring /></ProtectedRoute>} />
+          {/* Retired shared links (anyone holding them could score). */}
+          <Route path="/judge/open/:eventId" element={<RetiredLink />} />
+          <Route path="/judge/session/:sessionId" element={<RetiredLink />} />
+          <Route path="/judge/invite/:token" element={<RetiredLink />} />
+          <Route path="/judge/live/:sessionId" element={<RetiredLink />} />
+          <Route path="/scorer/live/:sessionId" element={<RetiredLink />} />
+          <Route path="/scorer/session/:token" element={<RetiredLink />} />
+          <Route path="/judge/score/:token" element={<RetiredLink />} />
+          <Route path="/judge/scoring" element={<RetiredLink />} />
 
           {/* Participant Routes */}
           <Route path="/participant" element={<ProtectedRoute role="participant"><ParticipantDashboard /></ProtectedRoute>} />

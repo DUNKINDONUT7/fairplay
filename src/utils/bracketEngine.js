@@ -114,6 +114,20 @@ function propagateWinner(matches, match, totalRounds) {
   return matches;
 }
 
+function findMatchAt(matches, round, position) {
+  return matches.find((entry) => Number(entry.round) === Number(round) && Number(entry.position) === Number(position)) || null;
+}
+
+// Whether a slot holds a team now or can still receive one from the match
+// that feeds it. An empty slot only counts as a bye when nothing can ever
+// reach it — not while its feeder match simply hasn't been played yet.
+function slotCanFill(matches, match, slotKey) {
+  if (match[slotKey]) return true;
+  if (Number(match.round) <= 1) return false;
+  const feeder = findMatchAt(matches, Number(match.round) - 1, Number(match.position) * 2 + (slotKey === 'team1' ? 0 : 1));
+  return Boolean(feeder) && (slotCanFill(matches, feeder, 'team1') || slotCanFill(matches, feeder, 'team2'));
+}
+
 export function autoAdvanceByes(matches = [], totalRounds = 0) {
   const cloned = matches.map((match) => ({ ...match }));
   let changed = true;
@@ -121,8 +135,11 @@ export function autoAdvanceByes(matches = [], totalRounds = 0) {
   while (changed) {
     changed = false;
     cloned.forEach((match) => {
+      if (match.status === 'completed') return;
       const hasSingleEntrant = Boolean(match.team1) !== Boolean(match.team2);
       if (!hasSingleEntrant) return;
+      const emptySlot = match.team1 ? 'team2' : 'team1';
+      if (slotCanFill(cloned, match, emptySlot)) return;
 
       const winningTeam = match.team1 || match.team2 || null;
       if (!winningTeam) return;
@@ -149,6 +166,42 @@ export function autoAdvanceByes(matches = [], totalRounds = 0) {
   }
 
   return cloned;
+}
+
+// Re-derives who sits in every later-round slot from the results below it.
+// Brackets saved before the bye fix could carry a team that was pushed
+// through an unplayed match (and even a champion); this puts each such team
+// back where it really is. A later match that was actually played between the
+// same two teams keeps its result.
+export function repairSingleEliminationProgress(matches = [], totalRounds = 0) {
+  const repaired = matches.map((match) => ({ ...match }));
+  const sameTeam = (left, right) => String(left?.id ?? '') === String(right?.id ?? '');
+
+  for (let round = 2; round <= Number(totalRounds); round += 1) {
+    repaired
+      .filter((match) => Number(match.round) === round)
+      .forEach((match) => {
+        const feederWinner = (offset) => {
+          const feeder = findMatchAt(repaired, round - 1, Number(match.position) * 2 + offset);
+          return feeder && ['completed', 'bye'].includes(feeder.status) ? feeder.winner || null : null;
+        };
+        const team1 = feederWinner(0);
+        const team2 = feederWinner(1);
+        const sameSlots = sameTeam(match.team1, team1) && sameTeam(match.team2, team2);
+        const falseBye = match.status === 'bye' && slotCanFill(repaired, match, team1 ? 'team2' : 'team1');
+        if (sameSlots && !falseBye) return;
+
+        match.team1 = team1;
+        match.team2 = team2;
+        match.score1 = 0;
+        match.score2 = 0;
+        match.winner = null;
+        match.completedDate = null;
+        match.status = team1 && team2 ? 'scheduled' : 'pending';
+      });
+  }
+
+  return autoAdvanceByes(repaired, totalRounds);
 }
 
 export function generateSingleEliminationBracket(entrants = []) {
@@ -965,6 +1018,74 @@ export function updateBracketMatch(tournament, matchId, updates = {}, options = 
     return updateGroupKnockoutMatch(tournament, matchId, updates, options);
   }
   return updateSingleEliminationMatch(tournament, matchId, updates, options);
+}
+
+// The match a knockout/elimination winner moves on to, and which slot.
+function nextMatchFor(tournament, matches, match) {
+  if (tournament.bracketType === 'round-robin' || isFirstStageMatch(match)) return null;
+  const round = Number(match.round) + 1;
+  const position = Math.floor(Number(match.position) / 2);
+  const next = matches.find((entry) =>
+    Number(entry.round) === round &&
+    Number(entry.position) === position &&
+    (match.stage === 'knockout' ? entry.stage === 'knockout' : !entry.stage || entry.stage === match.stage)
+  );
+  return next ? { next, slotKey: Number(match.position) % 2 === 0 ? 'team1' : 'team2' } : null;
+}
+
+// Whether changing this match's winner would also change a match that
+// already has a result (the team that moved on has played again since).
+export function laterResultDependsOn(tournament, matchId) {
+  const match = (tournament.matches || []).find((entry) => entry.id === matchId);
+  if (!match) return null;
+  if (isFirstStageMatch(match)) {
+    return (tournament.matches || []).find((entry) => entry.stage === 'knockout' && entry.status === 'completed') || null;
+  }
+  const link = nextMatchFor(tournament, tournament.matches || [], match);
+  return link && link.next.status === 'completed' ? link.next : null;
+}
+
+// Takes a saved result off a match (an organizer undo), leaving the match
+// ready to be played again. Refused when a later match already depends on
+// it — undo that one first, so no recorded result is ever silently lost.
+export function resetBracketMatch(tournament, matchId) {
+  const matches = (tournament.matches || []).map((match) => ({ ...match }));
+  const current = matches.find((match) => match.id === matchId);
+  if (!current) throw new Error('Match not found in this bracket.');
+  if (current.status !== 'completed') throw new Error('This match has no saved result to undo.');
+  const blocking = laterResultDependsOn(tournament, matchId);
+  if (blocking) {
+    throw new Error(`${blocking.team1?.name || 'TBD'} vs ${blocking.team2?.name || 'TBD'} already has a result that depends on this match. Undo that one first.`);
+  }
+
+  current.score1 = 0;
+  current.score2 = 0;
+  current.winner = null;
+  current.completedDate = null;
+  current.status = current.team1 && current.team2 ? 'scheduled' : 'pending';
+
+  const teams = tournament.teams || [];
+  let standings = tournament.standings || [];
+  if (tournament.bracketType === 'round-robin') {
+    standings = calculateRoundRobinStandings(matches, teams);
+  } else if (isFirstStageMatch(current)) {
+    standings = calculateFirstStageStandings(matches, teams);
+    seedKnockoutFromGroups(matches, standings);
+  } else {
+    const link = nextMatchFor(tournament, matches, current);
+    if (link) {
+      link.next[link.slotKey] = null;
+      link.next.status = link.next.team1 && link.next.team2 ? 'scheduled' : 'pending';
+    }
+  }
+
+  const next = {
+    ...tournament,
+    matches,
+    standings,
+    rounds: buildRounds(matches, tournament.totalRounds || 0, tournament.bracketType),
+  };
+  return { ...next, champion: calculateChampion(next) };
 }
 
 // League-style matches are saved with a button and may be drawn; knockout

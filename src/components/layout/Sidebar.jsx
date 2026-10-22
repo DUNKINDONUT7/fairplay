@@ -107,16 +107,29 @@ const NAV_GROUPS = {
         label: 'Judging',
         icon: 'bi bi-pencil-square',
         items: [
-          { label: 'Assigned Events', path: '/judge/events', icon: 'bi bi-calendar-event' },
-          { label: 'Score Entry', path: '/judge/scoring', icon: 'bi bi-pencil-square' },
-          { label: 'Score Review', path: '/judge/review', icon: 'bi bi-search' },
-          { label: 'Submission History', path: '/judge/history', icon: 'bi bi-clock-history' },
+          { label: 'My Judging Assignments', path: '/judge/events', icon: 'bi bi-calendar-event' },
         ],
       },
       {
         label: 'Settings',
         icon: 'bi bi-gear',
         items: [{ label: 'Settings', path: '/judge/settings', icon: 'bi bi-gear' }],
+      },
+    ],
+  },
+  scorer: {
+    label: 'Scorer',
+    icon: 'bi bi-clipboard-data',
+    groups: [
+      {
+        label: 'Scoring',
+        icon: 'bi bi-clipboard-data',
+        items: [{ label: 'My Scoring Assignments', path: '/scorer', icon: 'bi bi-clipboard-data' }],
+      },
+      {
+        label: 'Settings',
+        icon: 'bi bi-gear',
+        items: [{ label: 'Settings', path: '/scorer/settings', icon: 'bi bi-gear' }],
       },
     ],
   },
@@ -137,6 +150,15 @@ const NAV_GROUPS = {
           { label: 'Schedule', path: '/participant/schedule', icon: 'bi bi-calendar-week' },
           { label: 'Scores and Results', path: '/participant/scores', icon: 'bi bi-trophy' },
           { label: 'Announcements', path: '/participant/announcements', icon: 'bi bi-megaphone' },
+        ],
+      },
+      {
+        // A student can also be assigned as a scorer or judge.
+        label: 'Staff Duties',
+        icon: 'bi bi-clipboard-check',
+        items: [
+          { label: 'Scorer Assignments', path: '/scorer', icon: 'bi bi-clipboard-data' },
+          { label: 'Judge Assignments', path: '/judge', icon: 'bi bi-person-check' },
         ],
       },
       {

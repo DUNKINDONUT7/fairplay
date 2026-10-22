@@ -4,6 +4,7 @@ import useRememberedEvent from '../../hooks/useRememberedEvent';
 import { useSearchParams } from 'react-router-dom';
 import DashboardLayout from '../../components/layout/DashboardLayout';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
+import ReasonDialog from '../../components/common/ReasonDialog';
 import LiveBracket from '../../components/brackets/LiveBracket';
 import useTournamentStore from '../../store/tournamentStore';
 import useEventStore from '../../store/eventStore';
@@ -169,10 +170,10 @@ export default function OrganizerBracket() {
   const {
     tournaments: allTournaments,
     fetchTournaments,
-    updateMatchDraft,
-    saveMatchResult,
     generateBracket,
-    undoLastResult,
+    correctMatchResult,
+    undoMatchResult,
+    getLastSavedMatch,
     replaceEntrants,
     finalizeTournament,
   } = useTournamentStore();
@@ -197,7 +198,15 @@ export default function OrganizerBracket() {
   const [manualEntrantName, setManualEntrantName] = useState('');
   const [pendingRegenerate, setPendingRegenerate] = useState(null);
   const [seedsOpen, setSeedsOpen] = useState(true);
-  const [confirmingUndo, setConfirmingUndo] = useState(false);
+  // Organizer corrections (W03): a saved result is changed or taken off only
+  // through these dialogs, each with a reason that goes to the change log.
+  const [correcting, setCorrecting] = useState(null); // match being corrected
+  const [correctionScores, setCorrectionScores] = useState({ score1: 0, score2: 0 });
+  const [undoing, setUndoing] = useState(null); // match whose result is being undone
+  // A rebuild after the official pairing (event approved) or after results
+  // exist is an exceptional redraw: it needs a reason and is logged (W06).
+  const [redrawing, setRedrawing] = useState(false);
+  const [exceptionalRedraw, setExceptionalRedraw] = useState(false);
   const [confirmingOpenScoring, setConfirmingOpenScoring] = useState(false);
   const [confirmingFinalize, setConfirmingFinalize] = useState(false);
   const [confirmingGenerate, setConfirmingGenerate] = useState(false);
@@ -495,14 +504,16 @@ export default function OrganizerBracket() {
     );
   };
 
-  const handleGenerate = async (force = false) => {
+  // `reason` is set for an exceptional redraw (after the official pairing
+  // or once results exist); errors are thrown so the reason dialog shows them.
+  const handleGenerate = async (force = false, reason = null) => {
     if (!selectedEvent || !currentEvent) {
       error('Select an event first.');
       return;
     }
 
     if (bracketType === 'double') {
-      error('Double elimination is still being built. Use single elimination or round robin for now.');
+      error('Double elimination is not available for official use yet. Use another format.');
       return;
     }
 
@@ -535,10 +546,12 @@ export default function OrganizerBracket() {
       return;
     }
 
-    await commitGenerate(existingTournament);
+    await commitGenerate(existingTournament, reason);
   };
 
-  // Every (re)build of the bracket goes through one confirmation first.
+  // Every (re)build of the bracket goes through one confirmation first. Once
+  // the pairing is official (event approved) or results exist, that
+  // confirmation asks for a reason instead.
   const requestGenerate = () => {
     if (!selectedEvent || !currentEvent) {
       error('Select an event first.');
@@ -548,76 +561,60 @@ export default function OrganizerBracket() {
       error(`At least ${minimumEntrants} entrants are required for this format.`);
       return;
     }
+    if (hasBracket && (bracketPublic || hasResults)) {
+      setRedrawing(true);
+      return;
+    }
     setConfirmingGenerate(true);
   };
 
-  const commitGenerate = async (existingTournament) => {
+  const commitGenerate = async (existingTournament, reason = null) => {
     try {
       await replaceEntrants(existingTournament.id, seedSummary);
       const generated = await generateBracket(existingTournament.id, {
         entrants: seedSummary,
         force: true,
+        reason,
       });
 
       if (!generated) {
-        error('The bracket could not be built.');
-        return;
+        throw new Error('The bracket could not be built.');
       }
 
       setTournamentId(existingTournament.id);
+      setExceptionalRedraw(false);
       await fetchTournaments(currentEvent.id);
-      success(isBracketPublic(currentEvent)
-        ? 'Bracket built. Participants and the public can see it now.'
-        : 'Bracket built. It becomes visible to the public once the event is approved.');
+      success(reason
+        ? 'Bracket redrawn. The reason and the old pairings were saved in the change log.'
+        : isBracketPublic(currentEvent)
+          ? 'Bracket built. Participants and the public can see it now.'
+          : 'Bracket built. It becomes visible to the public once the event is approved.');
       if (isBracketPublic(currentEvent)) {
         notifyBracketPublished(generated, currentEvent).catch(() => {});
       }
     } catch (generateError) {
+      if (reason) throw generateError;
       error(String(generateError?.message || 'The bracket could not be built.'));
     }
   };
 
-  const handleSaveMatch = async (match) => {
-    if (!currentTournament) return;
-    try {
-      await saveMatchResult(currentTournament.id, match.id);
-      success(`Saved ${match.team1?.name || 'TBD'} vs ${match.team2?.name || 'TBD'}.`);
-    } catch (saveError) {
-      error(String(saveError?.message || 'Unable to save match result.'));
-    }
+  // Results are entered by the assigned scorer (W01). The organizer only
+  // corrects or undoes a saved result, always with a reason (W03).
+  const openCorrection = (match) => {
+    setCorrectionScores({ score1: Number(match.score1 || 0), score2: Number(match.score2 || 0) });
+    setCorrecting(match);
   };
 
-  const handleScoreFieldChange = async (matchId, field, value) => {
-    if (!currentTournament) return;
-    try {
-      await updateMatchDraft(currentTournament.id, matchId, field, value);
-    } catch (draftError) {
-      error(String(draftError?.message || 'Unable to update score draft.'));
-    }
+  const confirmCorrection = async (reason) => {
+    await correctMatchResult(currentTournament.id, correcting.id, correctionScores, reason);
+    success('Result corrected. Standings and the bracket were updated, and the change was logged.');
+    setCorrecting(null);
   };
 
-  const handleAutoAdvanceMatch = async (match) => {
-    if (!currentTournament || !match) return;
-
-    try {
-      await saveMatchResult(currentTournament.id, match.id);
-      info(`${match.team1?.name || 'Entrant 1'} vs ${match.team2?.name || 'Entrant 2'} auto-advanced to the next round.`);
-    } catch (saveError) {
-      error(String(saveError?.message || 'Unable to auto-advance this match.'));
-    }
-  };
-
-  const handlePickWinner = async (match, winnerKey) => {
-    if (!currentTournament || !match) return;
-    const winnerName = winnerKey === 'score1' ? match.team1?.name : match.team2?.name;
-    try {
-      await updateMatchDraft(currentTournament.id, match.id, 'score1', winnerKey === 'score1' ? 1 : 0);
-      await updateMatchDraft(currentTournament.id, match.id, 'score2', winnerKey === 'score2' ? 1 : 0);
-      await saveMatchResult(currentTournament.id, match.id);
-      success(`${winnerName || 'Winner'} advances.`);
-    } catch (saveError) {
-      error(String(saveError?.message || 'Unable to save this result.'));
-    }
+  const confirmUndo = async (reason) => {
+    await undoMatchResult(currentTournament.id, undoing.id, reason);
+    success('Result undone. The match is open again and the change was logged.');
+    setUndoing(null);
   };
 
   const playableMatches = (currentTournament?.matches || []).filter((match) => match.status !== 'bye');
@@ -631,12 +628,16 @@ export default function OrganizerBracket() {
   const eventOver = isEventOver(currentEvent);
   const bracketPublic = isBracketPublic(currentEvent);
   // Seeds can be reshuffled and the bracket rebuilt right up until scoring opens.
-  const seedsLocked = isFinalized || (eventStarted && hasBracket);
+  // Opening it again for an exceptional redraw needs a reason when rebuilding.
+  const seedsLocked = isFinalized || (eventStarted && hasBracket && !exceptionalRedraw);
   // Scores stay closed until the event is approved and scoring is opened here.
   const scoringOpen = isScoringOpen(currentEvent);
   const scoresEditable = hasBracket && !isFinalized && scoringOpen;
   const bracketStage = isFinalized ? 'final' : eventOver ? 'over' : scoringOpen ? 'live' : bracketPublic ? 'ready' : 'seeding';
-  const canUndo = scoresEditable && (currentTournament.historyLog || []).length > 0;
+  // Saved results can be corrected (with a reason) until the event's results are final.
+  const correctable = hasBracket && !isFinalized && !eventOver;
+  const lastSavedMatch = currentTournament ? getLastSavedMatch(currentTournament.id) : null;
+  const canUndo = correctable && Boolean(lastSavedMatch);
 
   // Whether the list on screen differs from the order the bracket was built from.
   const builtOrder = normalizeEntrants(currentTournament?.entrantSnapshot || []).map((entrant) => String(entrant.id)).join('|');
@@ -690,8 +691,7 @@ export default function OrganizerBracket() {
   };
 
   const handleUndo = () => {
-    setConfirmingUndo(false);
-    runBracketAction('undo', () => undoLastResult(currentTournament.id), 'Last result undone.');
+    if (lastSavedMatch) setUndoing(lastSavedMatch);
   };
 
   const handleFinalize = () => {
@@ -780,6 +780,25 @@ export default function OrganizerBracket() {
               style={{ ...secondaryButtonStyle, opacity: 0.5, cursor: 'not-allowed' }}
             >
               <i className="bi bi-shuffle" /> Shuffle
+            </button>
+            {!isFinalized && !eventOver && hasBracket && (
+              <button
+                type="button"
+                onClick={() => setExceptionalRedraw(true)}
+                title="Unlock the order for an exceptional redraw. Rebuilding will ask for a reason, and the old pairings are logged."
+                style={{ ...secondaryButtonStyle, background: '#fff7ed', borderColor: '#fed7aa', color: '#c2410c' }}
+              >
+                <i className="bi bi-unlock" /> Exceptional redraw
+              </button>
+            )}
+          </div>
+        )}
+        {!performanceMode && seedsOpen && seedsEditable && exceptionalRedraw && (
+          <div style={{ width: '100%', padding: '10px 12px', borderRadius: 12, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412', fontSize: 13, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <i className="bi bi-exclamation-triangle" />
+            <span style={{ flex: 1, minWidth: 200 }}>Exceptional redraw: change the order, then rebuild. You will be asked for a reason{hasResults ? ', and saved results will be cleared' : ''}.</span>
+            <button type="button" onClick={() => { setExceptionalRedraw(false); resetSeeds(); }} style={{ ...secondaryButtonStyle, background: '#ffffff' }}>
+              Cancel
             </button>
           </div>
         )}
@@ -928,8 +947,10 @@ export default function OrganizerBracket() {
                   ? <><i className="bi bi-exclamation-triangle" style={{ marginRight: 6 }} />Rebuilding clears the match scores already recorded.</>
                   : seedsDirty
                     ? <><i className="bi bi-info-circle" style={{ marginRight: 6 }} />You changed the order. Rebuild the bracket to apply it.</>
+                    : hasBracket && bracketPublic
+                      ? 'The pairing is official because the event is approved. Rebuilding now is an exceptional redraw and needs a reason.'
                     : hasBracket
-                      ? 'The bracket matches this order. You can reshuffle and rebuild until you open scoring.'
+                      ? 'The bracket matches this order. You can reshuffle and rebuild freely until the event is approved.'
                       : 'Happy with the matchups? Build the bracket. You can still change it until you open scoring.'}
               </span>
               <button
@@ -950,7 +971,7 @@ export default function OrganizerBracket() {
   return (
     <DashboardLayout
       title={performanceMode ? 'Points Leaderboard Management' : 'Tournament Bracket Management'}
-      subtitle={performanceMode ? 'Track judge scores and rank contestants by total points' : 'Set who plays whom, build the bracket, and record match results'}
+      subtitle={performanceMode ? 'Track judge scores and rank contestants by total points' : 'Set who plays whom, build the bracket, and review or correct match results'}
     >
       <ConfirmDialog
         open={Boolean(pendingRegenerate)}
@@ -995,13 +1016,68 @@ export default function OrganizerBracket() {
         onCancel={() => setConfirmingOpenScoring(false)}
         onConfirm={handleOpenScoring}
       />
-      <ConfirmDialog
-        open={confirmingUndo}
-        title="Undo the last result?"
-        message="The most recently saved match score will be removed and that match reopened. Any team it advanced goes back a round."
+      <ReasonDialog
+        open={Boolean(undoing)}
+        title="Undo this result?"
+        message={undoing ? `${undoing.team1?.name || 'TBD'} ${undoing.score1} – ${undoing.score2} ${undoing.team2?.name || 'TBD'} will be removed and the match reopened for the scorer. Any team it advanced goes back a round.` : ''}
         confirmLabel="Undo Result"
-        onCancel={() => setConfirmingUndo(false)}
-        onConfirm={handleUndo}
+        onCancel={() => setUndoing(null)}
+        onConfirm={confirmUndo}
+      />
+      <ReasonDialog
+        open={Boolean(correcting)}
+        danger={false}
+        title="Correct a saved result"
+        message={correcting ? `Saved: ${correcting.team1?.name || 'TBD'} ${correcting.score1} – ${correcting.score2} ${correcting.team2?.name || 'TBD'}. Enter the correct final score.` : ''}
+        confirmLabel="Save Correction"
+        canConfirm={Boolean(correcting) && (
+          Number(correctionScores.score1) !== Number(correcting?.score1) || Number(correctionScores.score2) !== Number(correcting?.score2)
+        )}
+        onCancel={() => setCorrecting(null)}
+        onConfirm={confirmCorrection}
+      >
+        {correcting && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: 10, alignItems: 'end', marginBottom: 14 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: '#334155' }}>
+              {correcting.team1?.name || 'TBD'}
+              <input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={correctionScores.score1}
+                onChange={(event) => setCorrectionScores((current) => ({ ...current, score1: event.target.value }))}
+                style={{ ...controlStyle, width: '100%', boxSizing: 'border-box' }}
+              />
+            </label>
+            <span style={{ paddingBottom: 12, color: '#94a3b8', fontWeight: 800 }}>–</span>
+            <label style={{ display: 'grid', gap: 6, fontSize: 12, fontWeight: 700, color: '#334155' }}>
+              {correcting.team2?.name || 'TBD'}
+              <input
+                type="number"
+                min="0"
+                inputMode="numeric"
+                value={correctionScores.score2}
+                onChange={(event) => setCorrectionScores((current) => ({ ...current, score2: event.target.value }))}
+                style={{ ...controlStyle, width: '100%', boxSizing: 'border-box' }}
+              />
+            </label>
+          </div>
+        )}
+      </ReasonDialog>
+      <ReasonDialog
+        open={redrawing}
+        title="Exceptional redraw"
+        message={hasResults
+          ? 'This bracket already has saved results. Redrawing replaces the pairings and clears every result. The old pairings and results are kept in the change log with your reason.'
+          : 'The pairing is already official (the event is approved). Redrawing changes who plays whom. The old pairings are kept in the change log with your reason.'}
+        confirmLabel="Redraw Bracket"
+        requireText={hasResults ? 'REDRAW' : ''}
+        reasonPlaceholder="e.g. A team withdrew before the first game; approved by the sports head."
+        onCancel={() => setRedrawing(false)}
+        onConfirm={async (reason) => {
+          await handleGenerate(true, reason);
+          setRedrawing(false);
+        }}
       />
       <div style={{ display: 'grid', gap: 20 }}>
         {!performanceMode && (
@@ -1011,7 +1087,7 @@ export default function OrganizerBracket() {
               'Pick the event you want a bracket for',
               'Shuffle or drag the teams into order, then build the bracket',
               'Open scoring once the event is approved and games are about to start',
-              'Enter match scores as games finish',
+              'Your assigned scorers save each result; correct one here (with a reason) if needed',
               'Finalize the scores once every game is done',
             ]}
           />
@@ -1145,7 +1221,7 @@ export default function OrganizerBracket() {
             openScoringHint={openScoringHint}
             onOpenScoring={() => setConfirmingOpenScoring(true)}
             busyAction={busyAction}
-            onUndo={() => setConfirmingUndo(true)}
+            onUndo={handleUndo}
             onFinalize={() => setConfirmingFinalize(true)}
           />
         ) : null}
@@ -1204,14 +1280,23 @@ export default function OrganizerBracket() {
             )}
           </div>
         ) : hasBracket ? (
-          <LiveBracket
-            tournament={currentTournament}
-            editable={scoresEditable}
-            onScoreChange={handleScoreFieldChange}
-            onSaveMatch={handleSaveMatch}
-            onAutoAdvanceMatch={handleAutoAdvanceMatch}
-            onPickWinner={handlePickWinner}
-          />
+          <>
+            {scoresEditable && (
+              <div style={{ ...emptyPanelStyle, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                <i className="bi bi-info-circle" style={{ color: '#2563eb', marginTop: 2 }} />
+                <span>
+                  Match results are entered by the scorers you assigned to this event. You can correct or undo a saved result
+                  here, with a reason — every change is kept in the change log.
+                </span>
+              </div>
+            )}
+            <LiveBracket
+              tournament={currentTournament}
+              correctable={correctable}
+              onCorrectMatch={openCorrection}
+              onUndoMatch={(match) => setUndoing(match)}
+            />
+          </>
         ) : (
           <div style={{ ...emptyPanelStyle, textAlign: 'center', padding: '36px 24px' }}>
             <div style={{ fontSize: 30, color: '#93c5fd', marginBottom: 8 }}><i className="bi bi-diagram-3" /></div>

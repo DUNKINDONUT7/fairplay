@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { countPlayoffTeams, isLeagueMatch } from '../../utils/bracketEngine';
+import ConfirmDialog from '../common/ConfirmDialog';
 import './LiveBracket.css';
 
 function getMatchStatusClass(status) {
@@ -19,19 +20,28 @@ function renderScoreValue(value) {
   return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
+// `editable`: the assigned scorer's view — type scores (kept as a draft on
+// this device) and save each result explicitly. Nothing is saved while
+// typing: a saved result can only be changed by the organizer afterwards.
+// `correctable`: the organizer's view — saved results get Correct / Undo,
+// both of which ask for a reason.
 export default function LiveBracket({
   tournament,
   editable = false,
+  drafts = {},
+  savingMatchId = null,
   onScoreChange,
   onSaveMatch,
-  onAutoAdvanceMatch,
   onPickWinner,
+  correctable = false,
+  onCorrectMatch,
+  onUndoMatch,
 }) {
+  const [confirming, setConfirming] = useState(null);
   if (!tournament) return null;
 
   const rounds = tournament.rounds || [];
   const championName = tournament.champion?.name || null;
-  const [editedFields, setEditedFields] = useState({});
 
   // League-style matches (round robin, or the group stage of Group Stage +
   // Knockout) are saved with a button and may be drawn.
@@ -89,20 +99,27 @@ export default function LiveBracket({
 
               <div className="live-bracket-round-matches">
                 {(round.matches || []).map((match) => {
+                  const draft = drafts?.[match.id] || {};
+                  const playable = Boolean(match.team1 && match.team2) && !['completed', 'bye'].includes(match.status);
+                  const scoreable = editable && playable;
+                  const draftScore1 = Number(draft.score1 ?? match.score1 ?? 0);
+                  const draftScore2 = Number(draft.score2 ?? match.score2 ?? 0);
+                  const tieNotAllowed = !isLeague(match) && draftScore1 === draftScore2;
+                  const saving = savingMatchId === match.id;
                   const slots = [
                     {
                       key: 'score1',
                       placeholder: match.placeholder1,
                       team: match.team1,
-                      value: match.score1,
-                      winner: match.winner?.id === match.team1?.id,
+                      value: scoreable ? draftScore1 : match.score1,
+                      winner: Boolean(match.winner) && match.winner?.id === match.team1?.id,
                     },
                     {
                       key: 'score2',
                       placeholder: match.placeholder2,
                       team: match.team2,
-                      value: match.score2,
-                      winner: match.winner?.id === match.team2?.id,
+                      value: scoreable ? draftScore2 : match.score2,
+                      winner: Boolean(match.winner) && match.winner?.id === match.team2?.id,
                     },
                   ];
 
@@ -128,43 +145,16 @@ export default function LiveBracket({
                               </div>
                             </div>
 
-                            {editable ? (
+                            {scoreable ? (
                               <input
                                 className="live-bracket-score"
                                 type="number"
                                 min="0"
+                                inputMode="numeric"
+                                aria-label={`${slot.team?.name || 'Team'} score`}
                                 value={renderScoreValue(slot.value)}
-                                disabled={!slot.team}
-                                onChange={async (event) => {
-                                  const nextValue = event.target.value;
-                                  const nextTouched = {
-                                    ...(editedFields[match.id] || {}),
-                                    [slot.key]: true,
-                                  };
-
-                                  setEditedFields((current) => ({
-                                    ...current,
-                                    [match.id]: nextTouched,
-                                  }));
-
-                                  await onScoreChange?.(match.id, slot.key, nextValue);
-
-                                  if (isLeague(match) || isFinalMatch(match) || !match.team1 || !match.team2) {
-                                    return;
-                                  }
-
-                                  const nextScore1 = Number(slot.key === 'score1' ? nextValue : match.score1 || 0);
-                                  const nextScore2 = Number(slot.key === 'score2' ? nextValue : match.score2 || 0);
-                                  const bothEdited = Boolean(nextTouched.score1) && Boolean(nextTouched.score2);
-
-                                  if (bothEdited && nextScore1 !== nextScore2) {
-                                    await onAutoAdvanceMatch?.(match);
-                                    setEditedFields((current) => ({
-                                      ...current,
-                                      [match.id]: {},
-                                    }));
-                                  }
-                                }}
+                                disabled={!slot.team || saving}
+                                onChange={(event) => onScoreChange?.(match.id, slot.key, event.target.value)}
                               />
                             ) : (
                               <div className="live-bracket-score-readonly">
@@ -174,19 +164,21 @@ export default function LiveBracket({
                           </div>
                         ))}
 
-                        {editable && onPickWinner && !isLeague(match) && match.team1 && match.team2 && !['completed', 'bye'].includes(match.status) && (
+                        {scoreable && onPickWinner && !isLeague(match) && (
                           <div className="live-bracket-pick-row">
                             <button
                               type="button"
                               className="live-bracket-pick-btn"
-                              onClick={() => onPickWinner(match, 'score1')}
+                              disabled={saving}
+                              onClick={() => setConfirming({ match, kind: 'pick', winnerKey: 'score1' })}
                             >
                               <i className="bi bi-trophy" /> {match.team1.name} wins
                             </button>
                             <button
                               type="button"
                               className="live-bracket-pick-btn"
-                              onClick={() => onPickWinner(match, 'score2')}
+                              disabled={saving}
+                              onClick={() => setConfirming({ match, kind: 'pick', winnerKey: 'score2' })}
                             >
                               <i className="bi bi-trophy" /> {match.team2.name} wins
                             </button>
@@ -196,22 +188,36 @@ export default function LiveBracket({
                         <div className="live-bracket-footer">
                           <div className="live-bracket-footer-note">
                             {match.winner?.name
-                              ? `${match.winner.name} advances`
+                              ? `${match.winner.name} ${isFinalMatch(match) ? 'won' : 'advances'}`
                               : match.status === 'bye'
                                 ? 'Automatic advance'
-                                : editable && !isLeague(match) && !isFinalMatch(match)
-                                  ? 'Pick a winner above, or enter exact scores below'
-                                : 'Waiting for result'}
+                                : match.status === 'completed'
+                                  ? 'Draw'
+                                  : scoreable && tieNotAllowed
+                                    ? 'Enter the final score (no ties in knockout games)'
+                                    : scoreable
+                                      ? 'Check the score, then save the result'
+                                      : 'Waiting for result'}
                           </div>
-                          {editable && (isLeague(match) || isFinalMatch(match)) && (
+                          {scoreable && (
                             <button
                               className="live-bracket-action"
                               type="button"
-                              disabled={!match.team1 || !match.team2}
-                              onClick={() => onSaveMatch?.(match)}
+                              disabled={saving || tieNotAllowed}
+                              onClick={() => setConfirming({ match, kind: 'save' })}
                             >
-                              Save Match
+                              {saving ? 'Saving…' : 'Save Result'}
                             </button>
+                          )}
+                          {correctable && match.status === 'completed' && (
+                            <div style={{ display: 'flex', gap: 6 }}>
+                              <button className="live-bracket-action" type="button" onClick={() => onCorrectMatch?.(match)}>
+                                Correct
+                              </button>
+                              <button className="live-bracket-action" type="button" onClick={() => onUndoMatch?.(match)}>
+                                Undo
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -329,6 +335,34 @@ export default function LiveBracket({
           </div>
         </div>
       ) : null}
+
+      <ConfirmDialog
+        open={Boolean(confirming)}
+        danger={false}
+        title="Save this result?"
+        message={describeConfirmation(confirming, drafts)}
+        confirmLabel="Save Result"
+        onCancel={() => setConfirming(null)}
+        onConfirm={() => {
+          const { match, kind, winnerKey } = confirming;
+          setConfirming(null);
+          if (kind === 'pick') onPickWinner?.(match, winnerKey);
+          else onSaveMatch?.(match);
+        }}
+      />
     </div>
   );
+}
+
+function describeConfirmation(confirming, drafts) {
+  if (!confirming) return '';
+  const { match, kind, winnerKey } = confirming;
+  if (kind === 'pick') {
+    const winner = winnerKey === 'score1' ? match.team1 : match.team2;
+    return `${winner?.name || 'Winner'} wins (recorded as 1 – 0). Once saved, only the organizer can correct it.`;
+  }
+  const draft = drafts?.[match.id] || {};
+  const score1 = Number(draft.score1 ?? match.score1 ?? 0);
+  const score2 = Number(draft.score2 ?? match.score2 ?? 0);
+  return `${match.team1?.name || 'TBD'} ${score1} – ${score2} ${match.team2?.name || 'TBD'}. Once saved, only the organizer can correct it.`;
 }

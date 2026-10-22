@@ -142,6 +142,9 @@ function normalizeEvent(event, index = 0) {
     maxParticipants: Number(source.maxParticipants || source.max_participants || 0) || null,
     description: source.description || '',
     criteria: normalizedCriteria,
+    // Which saved rubric version the criteria are (bumped by the database
+    // whenever they change; frozen once the first score exists).
+    rubricVersion: Number(source.rubricVersion || source.rubric_version || 1),
     contestants: normalizeContestants({ ...source, id: normalizedId }),
     judges: Array.isArray(source.judges) ? source.judges : [],
     image: source.image || source.imageUrl || source.coverImage || source.bannerUrl || '',
@@ -491,8 +494,20 @@ const useEventStore = create(
             });
             if (error) throw error;
           } catch (error) {
+            // The database refused (or could not be reached): put the screen
+            // back to what is really saved and stop the caller from reporting
+            // a success that did not happen.
             console.error('Error updating event:', error.message);
-            set({ error: error.message });
+            set((state) => ({
+              error: error.message,
+              events: state.events.map((event) => (String(event.id) === String(eventId) ? current : event)),
+            }));
+            const failure = new Error(/failed to fetch|network/i.test(error.message || '')
+              ? 'Could not reach the server, so the change was not saved. Check the connection and try again.'
+              : error.message || 'The change was not saved.');
+            useNotificationStore.getState().error?.(failure.message);
+            failure.notified = true;
+            throw failure;
           }
         }
 

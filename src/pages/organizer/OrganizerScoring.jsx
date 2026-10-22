@@ -20,8 +20,11 @@ import useEventStore from '../../store/eventStore';
 import useNotificationStore from '../../store/notificationStore';
 import useScoreStore from '../../store/scoreStore';
 import useAudienceScoreStore from '../../store/audienceScoreStore';
-import useJudgeStore from '../../store/judgeStore';
 import { finalizeEventWorkflow } from '../../services/automationService';
+import { listEventStaff } from '../../services/staffService';
+import ReasonDialog from '../../components/common/ReasonDialog';
+import { parseScoringRange } from '../../utils/scoreComputation';
+import { subscribeToTable } from '../../utils/supabaseClient';
 
 export default function OrganizerScoring() {
   const [searchParams] = useSearchParams();
@@ -29,9 +32,8 @@ export default function OrganizerScoring() {
   const { user } = useAuthStore();
   const { events, fetchEvents, updateEvent } = useEventStore();
   const { success, error, notifyResultsFinalized } = useNotificationStore();
-  const { fetchScores, getLiveFeed, calculateLeaderboard, scores } = useScoreStore();
+  const { fetchScores, getLiveFeed, calculateLeaderboard, scores, correctScore, voidScore } = useScoreStore();
   const { fetchAudienceScores, getAudienceSummary, subscribeToAudienceScores, submissions } = useAudienceScoreStore();
-  const { fetchJudges, getJudgesByEvent } = useJudgeStore();
   const eventIdFromUrl = searchParams.get('eventId');
   const [selectedEvent, setSelectedEvent] = useRememberedEvent(eventIdFromUrl || '');
   const [activeTab, setActiveTab] = useState('scores');
@@ -51,13 +53,27 @@ export default function OrganizerScoring() {
   const finalizeTournament = useTournamentStore((state) => state.finalizeTournament);
   const [confirmingUndoRound, setConfirmingUndoRound] = useState(false);
   const [advancing, setAdvancing] = useState(false);
+  // Judge accounts of the selected event (event_staff) — who is expected to
+  // score, so a missing sheet can be flagged instead of counted as zero.
+  const [staff, setStaff] = useState([]);
+  // Organizer corrections of a saved judge sheet (W03), each with a reason.
+  const [correctingSheet, setCorrectingSheet] = useState(null);
+  const [correctionValues, setCorrectionValues] = useState({});
+  const [voidingSheet, setVoidingSheet] = useState(null);
+  const [explainId, setExplainId] = useState(null);
 
   useEffect(() => {
     if (user?.id) {
       fetchEvents(user.id);
     }
-    fetchJudges();
-  }, [fetchEvents, fetchJudges, user?.id]);
+  }, [fetchEvents, user?.id]);
+
+  useEffect(() => {
+    if (!selectedEvent) { setStaff([]); return undefined; }
+    const load = () => listEventStaff(selectedEvent).then(setStaff).catch(() => setStaff([]));
+    load();
+    return subscribeToTable({ table: 'event_staff', filter: `event_id=eq.${selectedEvent}`, onChange: load });
+  }, [selectedEvent]);
 
   useEffect(() => {
     fetchScores(selectedEvent || undefined);
@@ -76,10 +92,17 @@ export default function OrganizerScoring() {
     () => (selected ? getLiveFeed(selected.id, selected.criteria || []) : []),
     [getLiveFeed, scores, selected]
   );
-  const leaderboard = useMemo(
-    () => (selected ? calculateLeaderboard(selected.id, selected.criteria || []) : []),
-    [calculateLeaderboard, scores, selected, submissions]
+  const judgeStaff = useMemo(
+    () => staff.filter((entry) => entry.role === 'judge' && ['invited', 'active'].includes(entry.status)),
+    [staff]
   );
+  // One seat per judge position; a replacement continues the seat it replaces.
+  const expectedSeats = new Set(judgeStaff.map((entry) => entry.seatId)).size;
+  const leaderboard = useMemo(
+    () => (selected ? calculateLeaderboard(selected.id, selected.criteria || [], { expectedSeats: expectedSeats || undefined }) : []),
+    [calculateLeaderboard, expectedSeats, scores, selected, submissions]
+  );
+  const provisional = leaderboard.some((row) => !row.eliminatedIn && row.missingSheets > 0);
   const audienceSummary = useMemo(
     () => (selected ? getAudienceSummary(selected.id) : { totalSubmissions: 0, byContestant: {} }),
     [getAudienceSummary, selected, submissions]
@@ -88,26 +111,21 @@ export default function OrganizerScoring() {
 
   const judgeProgress = useMemo(() => {
     if (!selected) return [];
-    const contestantCount = Array.isArray(selected.contestants) ? selected.contestants.length : 0;
-    const assignments = getJudgesByEvent(selected.id);
-    return assignments
-      .filter((assignment) => assignment.judge)
-      .map((assignment) => {
-        const scoredCount = new Set(
-          liveFeed
-            .filter((item) => String(item.judgeId).toLowerCase() === String(assignment.judge.id).toLowerCase()
-              || String(item.judgeId).toLowerCase() === String(assignment.judge.email || '').toLowerCase())
-            .map((item) => item.contestantId)
-        ).size;
-        return {
-          judgeId: assignment.judge.id,
-          judgeName: assignment.judge.name,
-          scoredCount,
-          contestantCount,
-          done: contestantCount > 0 && scoredCount >= contestantCount,
-        };
-      });
-  }, [getJudgesByEvent, liveFeed, selected]);
+    const out = new Set((selected.eliminatedContestantIds || []).map(String));
+    const contestantCount = (selected.contestants || []).filter((contestant) => !out.has(String(contestant.id))).length;
+    return judgeStaff.map((entry) => {
+      const scoredCount = entry.userId
+        ? new Set(liveFeed.filter((item) => !item.voided && String(item.judgeId) === String(entry.userId)).map((item) => item.contestantId)).size
+        : 0;
+      return {
+        judgeId: entry.id,
+        judgeName: entry.status === 'invited' ? `${entry.fullName} (not activated)` : entry.fullName,
+        scoredCount,
+        contestantCount,
+        done: contestantCount > 0 && scoredCount >= contestantCount,
+      };
+    });
+  }, [judgeStaff, liveFeed, selected]);
 
   const eliminatedIds = new Set((selected?.eliminatedContestantIds || []).map(String));
 
@@ -119,7 +137,7 @@ export default function OrganizerScoring() {
   // can catch it before finalizing instead of after the fact in an audit.
   const scoreReview = useMemo(() => {
     const byContestant = new Map();
-    liveFeed.forEach((item) => {
+    liveFeed.filter((item) => !item.voided).forEach((item) => {
       const key = String(item.contestantId);
       if (!byContestant.has(key)) {
         byContestant.set(key, { contestantId: item.contestantId, contestantName: item.contestantName, entries: [] });
@@ -267,22 +285,44 @@ export default function OrganizerScoring() {
     }
   };
 
+  const openCorrection = (item) => {
+    setCorrectionValues({ ...(item.criteriaScores || {}) });
+    setCorrectingSheet(item);
+  };
+  const correctionValid = Boolean(correctingSheet) && (selected?.criteria || []).every((criterion) => {
+    const value = correctionValues[criterion.id];
+    if (value === '' || value === undefined || value === null) return false;
+    const { min, max } = parseScoringRange(criterion.scoringRange);
+    return Number(value) >= min && Number(value) <= max;
+  });
+  const confirmCorrection = async (reason) => {
+    const values = {};
+    (selected?.criteria || []).forEach((criterion) => { values[criterion.id] = Number(correctionValues[criterion.id]); });
+    await correctScore(correctingSheet.id, values, reason);
+    success(`Score corrected. The leaderboard was recalculated and the change was logged.`);
+    setCorrectingSheet(null);
+  };
+  const confirmVoid = async (reason) => {
+    await voidScore(voidingSheet.id, reason);
+    success('Sheet voided. It stays on record but no longer counts, and the change was logged.');
+    setVoidingSheet(null);
+  };
+
   const handleFinalize = async () => {
     if (!selected || isFinalized) return;
     setFinalizing(true);
     try {
       const result = await finalizeEventWorkflow(selected);
       // Flips the event itself into the same "closed" state the judge-facing
-      // screens (JudgeScoring, JudgeLiveScoring, JudgePublicScoring) already
+      // screen (JudgeLiveScoring) already
       // gate on, and doubles as the one-time flag that hides this button
       // once finalized — see isFinalized above.
       await updateEvent(selected.id, { scoringActive: false, status: 'completed' });
-      const judgeEmails = getJudgesByEvent(selected.id)
-        .filter((assignment) => assignment.judge)
-        .map((assignment) => assignment.judge.email)
-        .filter(Boolean);
+      const judgeEmails = judgeStaff.map((entry) => entry.email).filter(Boolean);
       await notifyResultsFinalized(selected, { judgeEmails });
       success(`Locked ${result.lockedCount} score submission${result.lockedCount === 1 ? '' : 's'} for ${selected.title}. Judges can no longer submit or edit scores, and participants were notified.`);
+    } catch (finalizeError) {
+      if (!finalizeError?.notified) error(String(finalizeError?.message || 'The scores could not be finalized.'));
     } finally {
       setFinalizing(false);
       setConfirmingFinalize(false);
@@ -330,10 +370,49 @@ export default function OrganizerScoring() {
       <ConfirmDialog
         open={confirmingFinalize}
         title="Finalize and lock scores?"
-        message={selected ? `This permanently locks all submitted scores for "${selected.title}". Judges will no longer be able to edit or resubmit — this cannot be undone.` : ''}
+        message={selected ? `${provisional ? `Some contestants are still missing judge sheets (${leaderboard.filter((row) => row.missingSheets > 0).map((row) => row.contestantName).join(', ')}). Their averages use only the sheets that were submitted. ` : ''}This permanently locks all submitted scores for "${selected.title}". Judges will no longer be able to edit or resubmit, and nothing can be corrected afterwards.` : ''}
         confirmLabel={finalizing ? 'Locking...' : 'Finalize and Lock'}
+        requireText={provisional ? 'FINALIZE' : ''}
         onCancel={() => setConfirmingFinalize(false)}
         onConfirm={handleFinalize}
+      />
+      <ReasonDialog
+        open={Boolean(correctingSheet)}
+        danger={false}
+        title="Correct a judge's saved sheet"
+        message={correctingSheet ? `${correctingSheet.judgeName} → ${correctingSheet.contestantName}. Saved total ${formatScore(correctingSheet.totalScore)}. The judge keeps the credit for the sheet; the correction, your reason and the old values are logged.` : ''}
+        confirmLabel="Save Correction"
+        canConfirm={correctionValid}
+        onCancel={() => setCorrectingSheet(null)}
+        onConfirm={confirmCorrection}
+      >
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+          {(selected?.criteria || []).map((criterion) => {
+            const { min, max } = parseScoringRange(criterion.scoringRange);
+            return (
+              <label key={criterion.id} style={{ display: 'grid', gridTemplateColumns: '1fr 96px', gap: 10, alignItems: 'center', fontSize: 13, color: '#334155', fontWeight: 600 }}>
+                <span>{criterion.name} <span style={{ color: '#94a3b8', fontWeight: 400 }}>({min}–{max}, {criterion.weight}%)</span></span>
+                <input
+                  type="number"
+                  min={min}
+                  max={max}
+                  step="any"
+                  value={correctionValues[criterion.id] ?? ''}
+                  onChange={(changeEvent) => setCorrectionValues((current) => ({ ...current, [criterion.id]: changeEvent.target.value }))}
+                  style={{ padding: '8px 10px', borderRadius: 10, border: '1px solid #cbd5e1', fontSize: 14 }}
+                />
+              </label>
+            );
+          })}
+        </div>
+      </ReasonDialog>
+      <ReasonDialog
+        open={Boolean(voidingSheet)}
+        title="Void this sheet?"
+        message={voidingSheet ? `${voidingSheet.judgeName} → ${voidingSheet.contestantName} (${formatScore(voidingSheet.totalScore)}). The sheet stays on record but stops counting toward the results.` : ''}
+        confirmLabel="Void Sheet"
+        onCancel={() => setVoidingSheet(null)}
+        onConfirm={confirmVoid}
       />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
         <EventPicker events={activeEvents} value={selectedEvent} onChange={setSelectedEvent} />
@@ -593,6 +672,7 @@ export default function OrganizerScoring() {
                             <th style={reportStyles.th}>Judge</th>
                             <th style={reportStyles.th}>Status</th>
                             <th style={{ ...reportStyles.th, textAlign: 'right' }}>Score</th>
+                            {!isFinalized && <th style={reportStyles.th} aria-label="Actions" />}
                           </tr>
                         </thead>
                         <tbody>
@@ -600,7 +680,7 @@ export default function OrganizerScoring() {
                             const when = item.timestamp ? new Date(item.timestamp) : null;
                             const validDate = when && !Number.isNaN(when.getTime());
                             return (
-                              <tr key={`${item.eventId}-${item.judgeId}-${item.contestantId}`}>
+                              <tr key={item.id} style={item.voided ? { opacity: 0.55 } : undefined}>
                                 <td style={{ ...reportStyles.td, whiteSpace: 'nowrap' }}>
                                   <div style={{ fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
                                     {validDate ? when.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '—'}
@@ -612,12 +692,28 @@ export default function OrganizerScoring() {
                                 <td style={{ ...reportStyles.td, fontWeight: 700, color: '#0f172a' }}>{item.contestantName}</td>
                                 <td style={reportStyles.td}>{item.judgeName}</td>
                                 <td style={reportStyles.td}>
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: item.locked ? '#047857' : '#b45309', background: item.locked ? '#ecfdf5' : '#fffbeb' }}>
-                                    <i className={item.locked ? 'bi bi-lock-fill' : 'bi bi-pencil'} />
-                                    {item.locked ? 'Locked' : 'Can still be edited'}
-                                  </span>
+                                  {item.voided ? (
+                                    <span title={item.voidedReason} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: '#b91c1c', background: '#fef2f2' }}>
+                                      <i className="bi bi-slash-circle" /> Voided — not counted
+                                    </span>
+                                  ) : (
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: 999, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', color: item.locked ? '#047857' : '#b45309', background: item.locked ? '#ecfdf5' : '#fffbeb' }}>
+                                      <i className={item.locked ? 'bi bi-lock-fill' : 'bi bi-pencil'} />
+                                      {item.locked ? 'Submitted as final' : 'Judge can still edit'}
+                                    </span>
+                                  )}
                                 </td>
-                                <td style={{ ...reportStyles.td, ...reportStyles.num, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{formatScore(item.totalScore)}</td>
+                                <td style={{ ...reportStyles.td, ...reportStyles.num, fontSize: 16, fontWeight: 800, color: '#0f172a', textDecoration: item.voided ? 'line-through' : 'none' }}>{formatScore(item.totalScore)}</td>
+                                {!isFinalized && (
+                                  <td style={{ ...reportStyles.td, whiteSpace: 'nowrap' }}>
+                                    {!item.voided && (
+                                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                        <button type="button" onClick={() => openCorrection(item)} style={tinyButtonStyle}>Correct</button>
+                                        <button type="button" onClick={() => setVoidingSheet(item)} style={{ ...tinyButtonStyle, color: '#b91c1c', borderColor: '#fecaca' }}>Void</button>
+                                      </div>
+                                    )}
+                                  </td>
+                                )}
                               </tr>
                             );
                           })}
@@ -647,6 +743,27 @@ export default function OrganizerScoring() {
                   <p style={{ ...sectionBodyStyle, marginBottom: 14 }}>
                     Ranked on {currentRound.name} scores. Contestants cut in an earlier round are listed below, in the order they finished that round.
                   </p>
+                )}
+                {leaderboard.length > 0 && (
+                  <div style={{ display: 'grid', gap: 10, marginBottom: 14 }}>
+                    {provisional && (
+                      <div role="status" style={{ padding: '10px 14px', borderRadius: 12, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: 13 }}>
+                        <i className="bi bi-hourglass-split" style={{ marginRight: 8 }} />
+                        Provisional ranking: some contestants are still missing judge sheets. Missing sheets are not counted as zero — the average uses only the sheets submitted so far.
+                      </div>
+                    )}
+                    <details style={{ padding: '10px 14px', borderRadius: 12, background: '#f8fafc', border: '1px solid #e2e8f0', fontSize: 13, color: '#334155' }}>
+                      <summary style={{ cursor: 'pointer', fontWeight: 700 }}>How the final score is computed</summary>
+                      <ol style={{ margin: '8px 0 0', paddingLeft: 18, lineHeight: 1.7 }}>
+                        <li>Each judge sheet: Σ(score × weight) ÷ Σ(weight) of rubric version {selected?.rubricVersion || 1}.</li>
+                        <li>Judge average: mean of the sheets, one per judging seat ({expectedSeats || 'every'} seat{expectedSeats === 1 ? '' : 's'}); voided sheets excluded.</li>
+                        {audienceEnabled
+                          ? <li>Audience: mean vote (1–10) stretched to the rubric scale, weighted {selected?.audienceImpactWeight || 10}% (judges {100 - (selected?.audienceImpactWeight || 10)}%).</li>
+                          : <li>Audience voting is off for this event (judges 100%).</li>}
+                        <li>Rounded once to 2 decimals. Equal scores share a rank unless the tie-breaker names a criterion.</li>
+                      </ol>
+                    </details>
+                  </div>
                 )}
                 {leaderboard.length === 0 ? (
                   <div style={emptyStateStyle}>
@@ -688,8 +805,20 @@ export default function OrganizerScoring() {
                         <div>
                           <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a', display: 'block' }}>{item.contestantName}</span>
                           <span style={{ fontSize: 12, color: '#64748b' }}>
-                            {item.eliminatedIn ? `Out in ${item.eliminatedIn}` : `${item.totalScores} submission${item.totalScores === 1 ? '' : 's'}`}
+                            {item.eliminatedIn ? `Out in ${item.eliminatedIn}` : `${item.totalScores} sheet${item.totalScores === 1 ? '' : 's'}${item.missingSheets ? ` · ${item.missingSheets} missing` : ''}`}
                           </span>
+                          {(item.sheets || []).length > 0 && (
+                            <button type="button" onClick={() => setExplainId(explainId === item.contestantId ? null : item.contestantId)} style={{ display: 'block', border: 'none', background: 'none', padding: 0, marginTop: 2, color: '#2563eb', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>
+                              {explainId === item.contestantId ? 'Hide breakdown' : 'Show breakdown'}
+                            </button>
+                          )}
+                          {explainId === item.contestantId && (
+                            <span style={{ display: 'block', fontSize: 11, color: '#475569', marginTop: 4 }}>
+                              {(item.sheets || []).map((sheet) => `${sheet.judgeName}: ${sheet.total.toFixed(2)}`).join(' · ')}
+                              {' → judge average '}{Number(item.judgeAverage).toFixed(2)}
+                              {audienceEnabled ? ` · audience ${Number(item.audienceAverage).toFixed(2)} → ${Number(item.audienceScaled).toFixed(2)} on the rubric scale` : ''}
+                            </span>
+                          )}
                           {audienceEnabled && (
                             <span style={{ display: 'block', fontSize: 11, color: '#059669', marginTop: 2 }}>
                               Judges {(item.judgeAverage?.toFixed?.(2) ?? item.judgeAverage) || 0} · Audience {(item.audienceAverage?.toFixed?.(2) ?? item.audienceAverage) || 0}
@@ -700,6 +829,12 @@ export default function OrganizerScoring() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         {isEliminated && (
                           <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, background: '#fee2e2', color: '#dc2626', letterSpacing: '0.04em' }}>ELIMINATED</span>
+                        )}
+                        {!isEliminated && item.tied && (
+                          <span title="Same final score as another contestant" style={{ fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, background: '#ede9fe', color: '#6d28d9', letterSpacing: '0.04em' }}>TIE</span>
+                        )}
+                        {!isEliminated && item.missingSheets > 0 && (
+                          <span style={{ fontSize: 10, fontWeight: 800, padding: '3px 8px', borderRadius: 999, background: '#fef3c7', color: '#b45309', letterSpacing: '0.04em' }}>INCOMPLETE</span>
                         )}
                         <span style={{ fontSize: 20, fontWeight: 800, color: '#2563eb' }}>{item.averageScore}</span>
                       </div>
@@ -899,3 +1034,5 @@ const secondaryButtonStyle = {
   fontSize: 14,
   cursor: 'pointer',
 };
+
+const tinyButtonStyle = { padding: '4px 10px', borderRadius: 999, border: '1px solid #bfdbfe', background: '#ffffff', color: '#1d4ed8', fontSize: 11, fontWeight: 700, cursor: 'pointer' };

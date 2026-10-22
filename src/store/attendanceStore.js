@@ -7,7 +7,7 @@ import useEventStore from './eventStore';
 // A participant scanned in at the door clearly showed up — clear any
 // earlier "No Show" mark (OrganizerEventDetail.jsx's eliminatedContestantIds
 // toggle) left over from before they arrived, so judges see them again
-// (JudgeScoring.jsx/JudgeLiveScoring.jsx both filter contestants out of
+// (JudgeLiveScoring.jsx filters contestants out of
 // scoring by that same field) without the organizer having to remember to
 // go flip it back manually.
 async function clearNoShowIfPresent(eventId, attendeeId) {

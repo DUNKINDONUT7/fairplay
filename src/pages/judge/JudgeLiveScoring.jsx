@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import LargeScoreInput, { LONG_SCALE_FROM, getRangeMax } from '../../components/scoring/LargeScoreInput';
 import ScoreGuide from '../../components/scoring/ScoreGuide';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import useEventStore from '../../store/eventStore';
-import useNotificationStore from '../../store/notificationStore';
-import { isSupabaseConfigured, supabase } from '../../utils/supabaseClient';
+import useAuthStore from '../../store/authStore';
+import useScoreStore from '../../store/scoreStore';
+import { supabase } from '../../utils/supabaseClient';
+import { listMyAssignments } from '../../services/staffService';
+import { roundHalfAway, rubricMaximum, sheetTotal } from '../../utils/scoreComputation';
 import { getContestantDisplayName } from '../../utils/helpers';
 import { getCurrentRound, getCurrentRoundKey, isCurrentRoundScore } from '../../utils/rounds';
 
@@ -57,13 +60,6 @@ function AnimatedBackground() {
       ))}
     </>
   );
-}
-
-const STORAGE_KEY = 'fairplay_judge_identity';
-
-function getStoredJudge() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); }
-  catch { return null; }
 }
 
 // The buttons follow the criterion's own range; this used to be a fixed 1-10
@@ -201,12 +197,12 @@ function CriterionCard({ criterion, score, comment, onScore, onComment }) {
 }
 
 export default function JudgeLiveScoring() {
-  const { sessionId } = useParams();
+  const { eventId: routeEventId } = useParams();
   const navigate = useNavigate();
-  const location = useLocation();
+  const { user } = useAuthStore();
   const { fetchEvents } = useEventStore();
   const liveEvents = useEventStore((state) => state.events);
-  const { notifyScoreSubmitted } = useNotificationStore();
+  const submitScore = useScoreStore((state) => state.submitScore);
 
   const [event, setEvent] = useState(null);
   const [judge, setJudge] = useState(null);
@@ -216,97 +212,63 @@ export default function JudgeLiveScoring() {
   const [activeContestantId, setActiveContestantId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [revoked, setRevoked] = useState(false);
+  const [notAssigned, setNotAssigned] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [roundNotice, setRoundNotice] = useState('');
   const seenRoundKey = useRef(null);
 
+  // This judge's saved sheets for the current round, from the database.
+  async function loadMySheets(targetEvent) {
+    const { data: allRows, error } = await supabase
+      .from('scores')
+      .select('id,event_id,judge_id,contestant_id,criteria_scores,comments,remarks,round_name,locked,voided')
+      .eq('judge_id', user.id)
+      .eq('event_id', targetEvent.id);
+    if (error) throw error;
+    const restoredScores = {};
+    const restoredComments = {};
+    const restoredSubmitted = {};
+    (allRows || []).filter((row) => !row.voided && isCurrentRoundScore(row, targetEvent)).forEach((row) => {
+      restoredScores[row.contestant_id] = { ...(row.criteria_scores || {}) };
+      restoredComments[row.contestant_id] = { ...(row.comments || {}) };
+      if ((targetEvent.criteria || []).every((criterion) => restoredScores[row.contestant_id][criterion.id] != null)) {
+        restoredSubmitted[row.contestant_id] = true;
+      }
+    });
+    return { restoredScores, restoredComments, restoredSubmitted };
+  }
+
   useEffect(() => {
-    const stored = getStoredJudge();
-    if (!stored?.judgeId) { navigate(`/judge/session/${sessionId}`); return; }
-    setJudge(stored);
+    if (!user?.id) return;
+    setJudge({ judgeId: user.id, judgeName: user.name });
 
     async function load() {
+      // Only an ACTIVE judge assignment of this account opens the sheet. The
+      // database checks it again on every save (submit_judge_score).
+      const mine = await listMyAssignments().catch(() => []);
+      const assignment = mine.find((row) => row.role === 'judge' && String(row.eventId) === String(routeEventId));
+      if (!assignment || assignment.status === 'invited') { setNotAssigned(true); return; }
+      if (assignment.status !== 'active') { setRevoked(true); return; }
+
       await fetchEvents();
-      const allEvents = useEventStore.getState().events;
-      const inviteEventId = sessionId?.startsWith('invite-') ? location.state?.eventId : null;
-      const matched = allEvents.find((e) =>
-        (e.judgeSessions || []).some((s) => s.sessionId === sessionId)
-      ) || (inviteEventId != null ? allEvents.find((e) => String(e.id) === String(inviteEventId)) : null);
-      if (!matched) return;
+      const matched = useEventStore.getState().events.find((e) => String(e.id) === String(routeEventId));
+      if (!matched) { setNotAssigned(true); return; }
       setEvent(matched);
 
-      // Revoked judges keep their localStorage identity but must not see
-      // scoring content again — check the actual assignment status before
-      // restoring anything.
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: assignmentRow } = await supabase
-            .from('judge_assignments')
-            .select('status')
-            .eq('judge_id', stored.judgeId)
-            .eq('event_id', matched.id)
-            .maybeSingle();
-          if (assignmentRow?.status === 'revoked') {
-            setRevoked(true);
-            return;
-          }
-        } catch {
-          // Non-critical — fall through to normal load if the check itself fails
-        }
+      try {
+        const { restoredScores, restoredComments, restoredSubmitted } = await loadMySheets(matched);
+        setScores(restoredScores);
+        setComments(restoredComments);
+        setSubmitted(restoredSubmitted);
+        const firstUnscored = matched.contestants?.find((c) => !restoredSubmitted[c.id]);
+        setActiveContestantId(firstUnscored?.id ?? matched.contestants?.[0]?.id ?? null);
+      } catch {
+        setActiveContestantId(matched.contestants?.[0]?.id ?? null);
       }
-
-      // Restore existing scores from Supabase
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: allRows } = await supabase
-            .from('scores')
-            .select('id,event_id,judge_id,contestant_id,criteria_scores,comments,remarks,round_name')
-            .eq('judge_id', stored.judgeId)
-            .eq('event_id', matched.id);
-
-          // Only this round's scores come back onto the sheet; a new round
-          // starts blank.
-          const rows = (allRows || []).filter((row) => isCurrentRoundScore(row, matched));
-
-          if (rows.length > 0) {
-            const restoredScores = {};
-            const restoredComments = {};
-            const restoredSubmitted = {};
-
-            rows.forEach((row) => {
-              if (!restoredScores[row.contestant_id]) restoredScores[row.contestant_id] = {};
-              if (!restoredComments[row.contestant_id]) restoredComments[row.contestant_id] = {};
-              const saved = row.criteria_scores || {};
-              restoredScores[row.contestant_id] = { ...restoredScores[row.contestant_id], ...saved };
-              restoredComments[row.contestant_id] = { ...restoredComments[row.contestant_id], ...(row.comments || {}) };
-            });
-
-            // Mark contestants as submitted if all criteria are scored
-            const criteria = matched.criteria || [];
-            Object.keys(restoredScores).forEach((cId) => {
-              const allScored = criteria.every((c) => restoredScores[cId][c.id] != null);
-              if (allScored) restoredSubmitted[cId] = true;
-            });
-
-            setScores(restoredScores);
-            setComments(restoredComments);
-            setSubmitted(restoredSubmitted);
-
-            // Auto-select first unsubmitted contestant
-            const firstUnscored = matched.contestants?.find((c) => !restoredSubmitted[c.id]);
-            setActiveContestantId(firstUnscored?.id ?? matched.contestants?.[0]?.id ?? null);
-            return;
-          }
-        } catch {
-          // Non-critical — fall through to empty state
-        }
-      }
-
-      setActiveContestantId(matched.contestants?.[0]?.id ?? null);
     }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [routeEventId, user?.id]);
 
   // The event store already listens for changes to events (and re-checks on
   // a timer), so following it here is all it takes for this page to pick up
@@ -333,34 +295,19 @@ export default function JudgeLiveScoring() {
 
     let cancelled = false;
     (async () => {
-      const restoredScores = {};
-      const restoredComments = {};
-      const restoredSubmitted = {};
-      if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: allRows } = await supabase
-            .from('scores')
-            .select('contestant_id,criteria_scores,comments,round_name')
-            .eq('judge_id', judge.judgeId)
-            .eq('event_id', event.id);
-          (allRows || []).filter((row) => isCurrentRoundScore(row, event)).forEach((row) => {
-            restoredScores[row.contestant_id] = { ...(row.criteria_scores || {}) };
-            restoredComments[row.contestant_id] = { ...(row.comments || {}) };
-            if ((event.criteria || []).every((criterion) => restoredScores[row.contestant_id][criterion.id] != null)) {
-              restoredSubmitted[row.contestant_id] = true;
-            }
-          });
-        } catch {
-          // Non-critical — the round simply starts blank.
-        }
+      let restored = { restoredScores: {}, restoredComments: {}, restoredSubmitted: {} };
+      try {
+        restored = await loadMySheets(event);
+      } catch {
+        // The round simply starts blank.
       }
       if (cancelled) return;
       const out = new Set((event.eliminatedContestantIds || []).map(String));
       const stillIn = (event.contestants || []).filter((contestant) => !out.has(String(contestant.id)));
-      setScores(restoredScores);
-      setComments(restoredComments);
-      setSubmitted(restoredSubmitted);
-      setActiveContestantId((stillIn.find((contestant) => !restoredSubmitted[contestant.id]) || stillIn[0])?.id ?? null);
+      setScores(restored.restoredScores);
+      setComments(restored.restoredComments);
+      setSubmitted(restored.restoredSubmitted);
+      setActiveContestantId((stillIn.find((contestant) => !restored.restoredSubmitted[contestant.id]) || stillIn[0])?.id ?? null);
       setSaveError('');
       setRoundNotice(`${getCurrentRound(event)?.name || 'A new round'} has started. Your score sheet now shows the ${stillIn.length} contestant${stillIn.length === 1 ? '' : 's'} in this round.`);
     })();
@@ -404,17 +351,16 @@ export default function JudgeLiveScoring() {
   // The highest weighted total the rubric allows — 10 on the default scale,
   // 100 on a 100-point one — so totals are never labelled "/ 10" by rote.
   function getMaxTotal() {
-    const criteria = event?.criteria || [];
-    const max = criteria.reduce((sum, c) => sum + getRangeMax(c.scoringRange) * (c.weight / 100), 0);
+    const max = rubricMaximum(event?.criteria || []);
     return Number.isInteger(max) ? String(max) : max.toFixed(2);
   }
 
+  // Same formula as the results (scoreComputation.js), so the total a judge
+  // sees is exactly the one the leaderboard uses — even when the weights do
+  // not add up to 100.
   function getWeightedTotal(contestantId) {
-    const criteria = event?.criteria || [];
-    const s = scores[contestantId] || {};
-    return criteria.reduce((sum, c) => {
-      return sum + (Number(s[c.id] || 0) * (c.weight / 100));
-    }, 0).toFixed(2);
+    const total = sheetTotal(event?.criteria || [], scores[contestantId] || {});
+    return roundHalfAway(total ?? 0).toFixed(2);
   }
 
   async function submitContestant(contestantId) {
@@ -422,83 +368,27 @@ export default function JudgeLiveScoring() {
     setSaving(true);
     setSaveError('');
 
-    if (isSupabaseConfigured && supabase) {
-      const { data: assignmentRow } = await supabase
-        .from('judge_assignments')
-        .select('status')
-        .eq('judge_id', judge.judgeId)
-        .eq('event_id', event.id)
-        .maybeSingle();
-      if (assignmentRow?.status === 'revoked') {
-        setRevoked(true);
-        setSaving(false);
-        return;
-      }
-    }
-
     const criteria = event?.criteria || [];
     const s = scores[contestantId] || {};
     const c = comments[contestantId] || {};
 
-    // Save each criterion score to Supabase
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const scorePayload = {
-          id: `${event.id}_${judge.judgeId}_${contestantId}`,
-          event_id: event.id,
-          judge_id: judge.judgeId,
-          contestant_id: contestantId,
-          // Saved with the row so leaderboards and reports can show who was
-          // scored, and by whom, without looking the ids up again.
-          contestant_name: event.contestants?.find((contestant) => String(contestant.id) === String(contestantId))?.name || null,
-          judge_name: judge.judgeName || null,
-          event_title: event.title || null,
-          round_name: getCurrentRoundKey(event) || null,
-          criteria_scores: criteria.reduce((acc, criterion) => {
-            acc[criterion.id] = Number(s[criterion.id] || 0);
-            return acc;
-          }, {}),
-          total_score: Number(getWeightedTotal(contestantId)),
-          comments: c,
-          remarks: Object.values(c).filter(Boolean).join(' | '),
-          updated_at: new Date().toISOString(),
-        };
-
-        // upsert() does not throw on a DB/RLS rejection — it resolves with
-        // { error } — so that has to be checked explicitly, or a rejected
-        // write (e.g. a revoked judge's score blocked by RLS) would still
-        // fall through to "submitted" with no sign anything went wrong.
-        const { error: saveError } = await supabase.from('scores').upsert([scorePayload]);
-        if (saveError) {
-          setSaveError('Could not save this score — check your connection and try again.');
-          setSaving(false);
-          return;
-        }
-
-        await notifyScoreSubmitted({
-          ...scorePayload,
-          eventId: event.id,
-          judgeId: judge.judgeId,
-          contestantId,
-          contestantName: event.contestants?.find((contestant) => String(contestant.id) === String(contestantId))?.name || `Contestant ${contestantId}`,
-          eventTitle: event.title,
-          judgeName: judge.judgeName,
-        }, event, 'submitted');
-      } catch {
-        setSaveError('Could not save this score — check your connection and try again.');
-        setSaving(false);
-        return;
+    try {
+      await submitScore(event.id, judge.judgeId, contestantId, criteria.reduce((acc, criterion) => {
+        acc[criterion.id] = Number(s[criterion.id]);
+        return acc;
+      }, {}), {
+        comments: c,
+        remarks: Object.values(c).filter(Boolean).join(' | '),
+        roundName: getCurrentRoundKey(event) || null,
+      });
+    } catch (error) {
+      if (/not an active judge/i.test(error.message)) {
+        setRevoked(true);
+      } else {
+        setSaveError(error.message || 'Could not save this score — check your connection and try again.');
       }
-    } else {
-      await notifyScoreSubmitted({
-        id: `${event.id}_${judge.judgeId}_${contestantId}`,
-        eventId: event.id,
-        judgeId: judge.judgeId,
-        contestantId,
-        contestantName: event.contestants?.find((contestant) => String(contestant.id) === String(contestantId))?.name || `Contestant ${contestantId}`,
-        eventTitle: event.title,
-        judgeName: judge.judgeName,
-      }, event, 'submitted');
+      setSaving(false);
+      return;
     }
 
     setSaving(false);
@@ -509,6 +399,24 @@ export default function JudgeLiveScoring() {
     const contestants = (event?.contestants || []).filter((c) => !eliminated.has(String(c.id)));
     const next = contestants.find((c) => !submitted[c.id] && c.id !== contestantId);
     if (next) setActiveContestantId(next.id);
+  }
+
+  if (notAssigned) {
+    return (
+      <div style={fullPage}>
+        <AnimatedBackground />
+        <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
+          <i className="bi bi-shield-lock" style={{ fontSize: 52, color: '#dc2626', display: 'block', marginBottom: 16 }} />
+          <div style={{ fontWeight: 800, fontSize: 22, color: '#0f172a', marginBottom: 8 }}>Not assigned to this event</div>
+          <p style={{ color: '#64748b', fontSize: 15, maxWidth: 360, margin: '0 auto 16px' }}>
+            Your account is not an active judge for this event, so you cannot score it.
+          </p>
+          <button type="button" onClick={() => navigate('/judge')} style={{ border: '1px solid #bfdbfe', background: '#ffffff', color: '#1d4ed8', borderRadius: 12, padding: '10px 16px', fontWeight: 700, cursor: 'pointer' }}>
+            Back to my assignments
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (!event || !judge) {

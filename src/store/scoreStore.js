@@ -6,6 +6,8 @@ import useEventStore from './eventStore';
 import useNotificationStore from './notificationStore';
 import useAudienceScoreStore from './audienceScoreStore';
 import { getCurrentRoundKey, isCurrentRoundScore } from '../utils/rounds';
+import { computeEventResults, roundHalfAway, sheetTotal } from '../utils/scoreComputation';
+import { rpcOrThrow } from '../utils/rpc';
 
 function scoreKey(eventId, judgeId, contestantId) {
   return `${eventId}_${judgeId}_${contestantId}`;
@@ -15,11 +17,10 @@ function normalizeScore(score) {
   const eventId = score.eventId || score.event_id;
   const contestantId = score.contestantId || score.contestant_id;
   // Reconstruct judgeId from composite id key (format: eventId_judgeId_contestantId)
-  // This handles cases where judge_id column is bigint and couldn't store email
+  // for rows saved before judge_id was always filled in.
   let judgeId = score.judgeId || score.judge_id;
   if (!judgeId && score.id && String(score.id).includes('_')) {
-    const parts = String(score.id).split('_');
-    // id = eventId_judgeId_contestantId — judgeId is the middle part(s)
+    const parts = String(score.id).split('__')[0].split('_');
     if (parts.length >= 3) {
       judgeId = parts.slice(1, -1).join('_');
     }
@@ -29,6 +30,13 @@ function normalizeScore(score) {
     id: String(score.id || scoreKey(eventId, judgeId, contestantId)),
     eventId,
     judgeId,
+    // The judging seat (see scoreComputation.js); older rows have none and
+    // count as one seat per judge.
+    seatId: score.seatId || score.seat_id || judgeId || null,
+    staffId: score.staffId || score.staff_id || null,
+    voided: Boolean(score.voided),
+    voidedReason: score.voidedReason || score.voided_reason || '',
+    rubricVersion: score.rubricVersion ?? score.rubric_version ?? null,
     contestantId,
     criteriaScores: score.criteriaScores || score.criteria_scores || {},
     comments: score.comments || score.criteria_comments || {},
@@ -36,7 +44,9 @@ function normalizeScore(score) {
     contestantName: score.contestantName || score.contestant_name || `Contestant ${contestantId}`,
     eventTitle: score.eventTitle || score.event_title || 'Untitled Event',
     judgeName: score.judgeName || score.judge_name || 'Judge',
+    totalScore: Number(score.totalScore ?? score.total_score ?? 0),
     timestamp: score.timestamp || score.updated_at || score.created_at || new Date().toISOString(),
+    submittedAt: score.submittedAt || score.submitted_at || null,
     locked: Boolean(score.locked),
     lockedAt: score.lockedAt || score.locked_at || null,
     // Which round of a multi-round contest this score was given in.
@@ -84,6 +94,7 @@ function ensureScoresRealtime(eventId) {
 const useScoreStore = create(
   persist(
     (set, get) => ({
+      // Keyed by the database row id (one row per judge, contestant and round).
       scores: {},
       leaderboard: {},
       loading: false,
@@ -109,23 +120,23 @@ const useScoreStore = create(
           const { data, error } = await query;
           if (error) throw error;
 
-          // Merge Supabase results into local store — never wipe local-only scores.
-          // Supabase wins on conflicts (same key), but scores that only exist locally are kept.
-          if (data && data.length > 0) {
-            const incoming = {};
-            data.map(normalizeScore).forEach((score) => {
-              incoming[scoreKey(score.eventId, score.judgeId, score.contestantId)] = score;
-            });
-            set((state) => ({ scores: { ...state.scores, ...incoming }, loading: false, error: null }));
-          } else {
-            set({ loading: false, error: null });
-          }
+          // The database is the record: every write goes through it, so what
+          // it returns replaces what was cached for that event (or for all).
+          const incoming = {};
+          (data || []).map(normalizeScore).forEach((score) => {
+            incoming[score.id] = score;
+          });
+          set((state) => {
+            const kept = eventId
+              ? Object.fromEntries(Object.entries(state.scores).filter(([, score]) => String(score.eventId) !== String(eventId)))
+              : {};
+            return { scores: { ...kept, ...incoming }, loading: false, error: null };
+          });
           ensureScoresRealtime(eventId);
 
           return eventId ? get().getScoresForEvent(eventId) : Object.values(get().scores);
         } catch (error) {
           console.error('Error fetching scores:', error.message);
-          // Keep local scores intact on fetch failure
           if (!silent) {
             set({ loading: false, error: error.message });
           }
@@ -133,171 +144,61 @@ const useScoreStore = create(
         }
       },
 
-      submitScore: async (eventId, judgeId, contestantId, criteriaScores, metadata = {}) => {
-        const key = scoreKey(eventId, judgeId, contestantId);
-        const roundName = getCurrentRoundKey(findScoreEvent(eventId));
-        const nextScore = normalizeScore({
-          roundName,
-          id: key,
-          eventId,
-          judgeId,
-          contestantId,
-          criteriaScores,
-          comments: metadata.comments || {},
-          remarks: metadata.remarks || '',
-          contestantName: metadata.contestantName,
-          eventTitle: metadata.eventTitle,
-          judgeName: metadata.judgeName,
-          timestamp: new Date().toISOString(),
-          locked: false,
+      // A judge's sheet for one contestant. Saved by the database function
+      // submit_judge_score, which checks that the signed-in account is an
+      // active judge of this event and that scoring is open. Throws when the
+      // database refuses, so a screen never reports a save that didn't happen.
+      // (`judgeId` is ignored: the database uses the signed-in account.)
+      submitScore: async (eventId, _judgeId, contestantId, criteriaScores, metadata = {}) => {
+        const event = findScoreEvent(eventId);
+        const data = await rpcOrThrow('submit_judge_score', {
+          p_event_id: Number(eventId),
+          p_contestant_id: String(contestantId),
+          p_criteria_scores: criteriaScores,
+          p_comments: metadata.comments || {},
+          p_remarks: metadata.remarks || '',
+          p_round_name: metadata.roundName ?? getCurrentRoundKey(event) ?? null,
         });
 
-        set((state) => ({
-          scores: {
-            ...state.scores,
-            [key]: nextScore,
-          },
-        }));
-
-        if (!isSupabaseConfigured) {
-          await useNotificationStore.getState().notifyScoreSubmitted(nextScore, findScoreEvent(eventId), 'submitted');
-          return nextScore;
-        }
-
-        try {
-          const payload = {
-            id: nextScore.id,
-            event_id: nextScore.eventId,
-            // judge_id omitted — column is bigint in DB, use judge_name + id key instead
-            contestant_id: String(nextScore.contestantId),
-            contestant_name: nextScore.contestantName,
-            event_title: nextScore.eventTitle,
-            judge_name: nextScore.judgeName,
-            criteria_scores: nextScore.criteriaScores,
-            remarks: nextScore.remarks || '',
-            round_name: nextScore.roundName || null,
-            // locked intentionally omitted — resubmitting must never reset an
-            // existing lock, and the DB trigger rejects the write outright if
-            // the row is already locked anyway.
-            updated_at: nextScore.timestamp,
-          };
-
-          const { data, error } = await supabase
-            .from('scores')
-            .upsert([payload])
-            .select()
-            .single();
-          if (error) throw error;
-
-          const normalized = normalizeScore(data || nextScore);
-          set((state) => ({ scores: { ...state.scores, [key]: normalized } }));
-          await useNotificationStore.getState().notifyScoreSubmitted(normalized, findScoreEvent(eventId), 'submitted');
-          return normalized;
-        } catch (error) {
-          console.error('Error submitting score:', error.message);
-          set({ error: error.message });
-          await useNotificationStore.getState().notifyScoreSubmitted(nextScore, findScoreEvent(eventId), 'submitted');
-          return nextScore;
-        }
+        const saved = normalizeScore(data);
+        set((state) => ({ scores: { ...state.scores, [saved.id]: saved } }));
+        useNotificationStore.getState().notifyScoreSubmitted(saved, event, 'submitted').catch(() => {});
+        return saved;
       },
 
       updateScore: async (eventId, judgeId, contestantId, criteriaScores, metadata = {}) => {
-        const key = scoreKey(eventId, judgeId, contestantId);
-        const stored = get().scores[key];
-        if (stored?.locked) return false;
-        // A score left over from an earlier round is replaced, not edited:
-        // its remarks and comments don't carry into the new round.
-        const scoreEvent = findScoreEvent(eventId);
-        const existing = stored && isCurrentRoundScore(stored, scoreEvent) ? stored : null;
-
-        const nextScore = normalizeScore({
-          ...existing,
-          id: stored?.id,
-          roundName: getCurrentRoundKey(scoreEvent),
-          eventId,
-          judgeId,
-          contestantId,
-          criteriaScores,
-          comments: metadata.comments || existing?.comments || {},
-          remarks: metadata.remarks || existing?.remarks || '',
-          contestantName: metadata.contestantName || existing?.contestantName,
-          eventTitle: metadata.eventTitle || existing?.eventTitle,
-          judgeName: metadata.judgeName || existing?.judgeName,
-          timestamp: new Date().toISOString(),
-          locked: existing?.locked || false,
-          lockedAt: existing?.lockedAt || null,
-        });
-
-        set((state) => ({
-          scores: {
-            ...state.scores,
-            [key]: nextScore,
-          },
-        }));
-
-        if (!isSupabaseConfigured) {
-          await useNotificationStore.getState().notifyScoreSubmitted(nextScore, findScoreEvent(eventId), 'updated');
-          return true;
-        }
-
-        try {
-          const payload = {
-            id: nextScore.id,
-            event_id: nextScore.eventId,
-            // judge_id omitted — column is bigint in DB, use judge_name + id key instead
-            contestant_id: String(nextScore.contestantId),
-            contestant_name: nextScore.contestantName,
-            event_title: nextScore.eventTitle,
-            judge_name: nextScore.judgeName,
-            criteria_scores: nextScore.criteriaScores,
-            remarks: nextScore.remarks || '',
-            round_name: nextScore.roundName || null,
-            locked: nextScore.locked || false,
-            updated_at: nextScore.timestamp,
-          };
-
-          const { error } = await supabase.from('scores').upsert([payload]);
-          if (error) throw error;
-          await useNotificationStore.getState().notifyScoreSubmitted(nextScore, findScoreEvent(eventId), 'updated');
-        } catch (error) {
-          console.error('Error updating score:', error.message);
-          set({ error: error.message });
-        }
-
+        await get().submitScore(eventId, judgeId, contestantId, criteriaScores, metadata);
         return true;
       },
 
-      lockScore: async (eventId, judgeId, contestantId) => {
-        const key = scoreKey(eventId, judgeId, contestantId);
-        const nextScore = {
-          ...get().scores[key],
-          locked: true,
-          lockedAt: new Date().toISOString(),
-        };
+      // The signed-in judge marks their sheet(s) final.
+      lockScore: async (eventId, _judgeId, contestantId = null) => {
+        const count = await rpcOrThrow('lock_my_judge_scores', {
+          p_event_id: Number(eventId),
+          p_contestant_id: contestantId == null ? null : String(contestantId),
+        });
+        await get().fetchScores(eventId, { silent: true });
+        return count;
+      },
 
-        set((state) => ({
-          scores: {
-            ...state.scores,
-            [key]: nextScore,
-          },
-        }));
+      // Organizer correction of a saved sheet, with a reason (logged).
+      correctScore: async (scoreId, criteriaScores, reason) => {
+        const data = await rpcOrThrow('correct_judge_score', {
+          p_score_id: String(scoreId),
+          p_criteria_scores: criteriaScores,
+          p_reason: reason,
+        });
+        const saved = normalizeScore(data);
+        set((state) => ({ scores: { ...state.scores, [saved.id]: saved } }));
+        return saved;
+      },
 
-        if (!isSupabaseConfigured) {
-          return nextScore;
-        }
-
-        try {
-          const { error } = await supabase
-            .from('scores')
-            .update({ locked: true, locked_at: nextScore.lockedAt })
-            .eq('id', nextScore.id);
-          if (error) throw error;
-        } catch (error) {
-          console.error('Error locking score:', error.message);
-          set({ error: error.message });
-        }
-
-        return nextScore;
+      // Organizer: take a sheet out of the results, with a reason (logged).
+      voidScore: async (scoreId, reason) => {
+        const data = await rpcOrThrow('void_judge_score', { p_score_id: String(scoreId), p_reason: reason });
+        const saved = normalizeScore(data);
+        set((state) => ({ scores: { ...state.scores, [saved.id]: saved } }));
+        return saved;
       },
 
       // The current round's scores — what judges are working on and what the
@@ -332,92 +233,60 @@ const useScoreStore = create(
         return get().getScoresForEvent(eventId).filter((score) => String(score.judgeId) === String(judgeId));
       },
 
+      // One sheet's weighted total — the same formula the results use
+      // (scoreComputation.js step 1), rounded only for display.
       calculateWeightedTotal: (criteria, scores) => {
-        const totalWeight = criteria.reduce((sum, criterion) => sum + (criterion.weight || 0), 0) || 100;
-        const breakdown = criteria.map((criterion) => {
-          const score = Number(scores[criterion.id] ?? scores[criterion.name] ?? 0);
-          const weighted = (score * (criterion.weight || 0)) / totalWeight;
+        const list = criteria || [];
+        const totalWeight = list.reduce((sum, criterion) => sum + (Number(criterion.weight) > 0 ? Number(criterion.weight) : 0), 0);
+        const breakdown = list.map((criterion) => {
+          const score = Number(scores?.[criterion.id] ?? scores?.[criterion.name] ?? 0);
+          const weight = Number(criterion.weight) > 0 ? Number(criterion.weight) : 0;
+          const weighted = totalWeight > 0 ? (score * weight) / totalWeight : score / Math.max(list.length, 1);
           return { id: criterion.id, name: criterion.name, score, weight: criterion.weight, weighted };
         });
-        const totalScore =
-          Math.round(breakdown.reduce((sum, item) => sum + item.weighted, 0) * 100) / 100;
-        return { totalScore, breakdown };
+        const raw = sheetTotal(list, scores || {});
+        return { totalScore: raw === null ? 0 : roundHalfAway(raw), breakdown };
       },
 
-      calculateLeaderboard: (eventId, criteria) => {
+      // Ranked results of a judged event. See src/utils/scoreComputation.js
+      // for the formula. `options.expectedSeats` (number of judging seats)
+      // lets a contestant missing a sheet be flagged; without it the most
+      // sheets any contestant has is used.
+      calculateLeaderboard: (eventId, criteria, options = {}) => {
         const eventScores = get().getScoresForEvent(eventId);
         const event = findScoreEvent(eventId);
         const audienceSummary = useAudienceScoreStore.getState().getAudienceSummary(eventId);
         const audienceEnabled = Boolean(event?.audienceImpactEnabled ?? event?.audienceImpact);
-        const audienceWeight = audienceEnabled ? Math.min(Math.max(Number(event?.audienceImpactWeight || 10), 0), 100) : 0;
-        const judgeWeight = audienceEnabled ? 100 - audienceWeight : 100;
-        const contestantScores = {};
 
-        eventScores.forEach((score) => {
-          if (!contestantScores[score.contestantId]) {
-            contestantScores[score.contestantId] = {
-              total: 0,
-              count: 0,
-              scores: [],
-              contestantName: resolveContestantName(event, score.contestantId, score.contestantName),
-            };
-          }
-          const result = get().calculateWeightedTotal(criteria, score.criteriaScores);
-          contestantScores[score.contestantId].total += result.totalScore;
-          contestantScores[score.contestantId].count += 1;
-          contestantScores[score.contestantId].scores.push(result);
-        });
-
+        // Contestants cut in an earlier round are placed below, from the round
+        // they went out in — not ranked again on audience votes alone.
         const cutEarlier = new Set(
           (Array.isArray(event?.roundResults) ? event.roundResults : [])
             .flatMap((round) => (round.standings || []).filter((row) => !row.advanced).map((row) => String(row.contestantId)))
         );
-        Object.entries(audienceSummary.byContestant || {}).forEach(([id, audience]) => {
-          if (cutEarlier.has(String(id))) return;
-          if (!contestantScores[id]) {
-            contestantScores[id] = {
-              total: 0,
-              count: 0,
-              scores: [],
-              contestantName: resolveContestantName(event, id, audience.contestantName),
-            };
-          }
+        const audienceByContestant = Object.fromEntries(
+          Object.entries(audienceSummary.byContestant || {}).filter(([id]) => !cutEarlier.has(String(id)))
+        );
+
+        const names = {};
+        (event?.contestants || []).forEach((contestant) => { names[String(contestant.id)] = contestant.name; });
+        eventScores.forEach((score) => {
+          const id = String(score.contestantId);
+          if (!names[id]) names[id] = resolveContestantName(event, id, score.contestantName);
+        });
+        Object.entries(audienceByContestant).forEach(([id, audience]) => {
+          if (!names[id]) names[id] = resolveContestantName(event, id, audience.contestantName);
         });
 
-        const rubricWeight = (criteria || []).reduce((sum, criterion) => sum + (criterion.weight || 0), 0) || 100;
-        const rubricMax = (criteria || []).reduce((sum, criterion) => {
-          const numbers = String(criterion.scoringRange || '1-10').match(/d+(.d+)?/g) || [];
-          return sum + ((Number(numbers[numbers.length - 1]) || 10) * (criterion.weight || 0)) / rubricWeight;
-        }, 0) || 10;
-        const audienceScale = rubricMax / 10;
-
-        const ranked = Object.entries(contestantScores)
-          .map(([id, data]) => {
-            const judgeAverage = data.count > 0 ? Math.round((data.total / data.count) * 100) / 100 : 0;
-            const audience = audienceSummary.byContestant?.[id] || null;
-            const audienceAverage = audience?.averageScore || 0;
-            // Audience votes are always 1-10. On a longer scale (say 100
-            // points) they are stretched to that scale first, or their share
-            // of the final score would be ten times too small. On the default
-            // 10-point scale this changes nothing.
-            const finalScore = audienceEnabled
-              ? Math.round(((judgeAverage * judgeWeight) + (audienceAverage * audienceScale * audienceWeight)) * 100) / 10000
-              : judgeAverage;
-
-            return {
-            contestantId: id,
-            contestantName: data.contestantName,
-            averageScore: finalScore,
-            judgeAverage,
-            audienceAverage,
-            audienceSubmissions: audience?.count || 0,
-            audienceWeight,
-            judgeWeight,
-            totalScores: data.count,
-          };
-          })
-          .sort((left, right) => right.averageScore - left.averageScore)
-          .map((item, index) => ({ ...item, rank: index + 1 }));
+        const results = computeEventResults({
+          criteria: criteria || [],
+          scores: eventScores,
+          audience: { enabled: audienceEnabled, weight: event?.audienceImpactWeight ?? 10, byContestant: audienceByContestant },
+          expectedSeats: options.expectedSeats,
+          tieBreaker: event?.tieBreaker,
+          names,
+        });
+        const ranked = results.rows;
 
         // Multi-round contests: whoever was cut in an earlier round still has a
         // place in the final order — below everyone who went further, in the
@@ -434,12 +303,14 @@ const useScoreStore = create(
                 contestantId: String(row.contestantId),
                 contestantName: resolveContestantName(event, row.contestantId, row.name),
                 averageScore: row.score,
+                finalScore: row.score,
                 judgeAverage: row.score,
                 audienceAverage: 0,
                 audienceSubmissions: 0,
-                audienceWeight,
-                judgeWeight,
+                audienceWeight: results.audienceWeight,
+                judgeWeight: results.judgeWeight,
                 totalScores: row.submissions || 0,
+                missingSheets: 0,
                 eliminatedIn: round.name,
                 rank: ranked.length + 1,
               });
@@ -449,47 +320,24 @@ const useScoreStore = create(
         return ranked;
       },
 
+      // Organizer: lock every sheet of the event (database function; only
+      // the event's organizer may do this). Throws when refused.
       finalizeEventScores: async (eventId) => {
-        const scoresForEvent = get().getAllScoresForEvent(eventId);
-        if (scoresForEvent.length === 0) return 0;
-
-        const lockedAt = new Date().toISOString();
-        const ids = scoresForEvent.map((score) => score.id);
-
-        set((state) => {
-          const nextScores = { ...state.scores };
-          scoresForEvent.forEach((score) => {
-            const key = scoreKey(score.eventId, score.judgeId, score.contestantId);
-            nextScores[key] = { ...nextScores[key], locked: true, lockedAt };
-          });
-          return { scores: nextScores };
-        });
-
-        if (isSupabaseConfigured) {
-          try {
-            // One batched update instead of N sequential lockScore() calls —
-            // finalizing an event can mean hundreds of scores, and awaiting
-            // them one at a time serializes what should be a single round trip.
-            const { error } = await supabase
-              .from('scores')
-              .update({ locked: true, locked_at: lockedAt })
-              .in('id', ids);
-            if (error) throw error;
-          } catch (error) {
-            console.error('Error finalizing event scores:', error.message);
-            set({ error: error.message });
-          }
-        }
-
-        return scoresForEvent.length;
+        const count = await rpcOrThrow('finalize_event_scores', { p_event_id: Number(eventId) });
+        await get().fetchScores(eventId, { silent: true });
+        return Number(count || 0);
       },
 
       getScoreByKey: (eventId, judgeId, contestantId) => {
-        const key = scoreKey(eventId, judgeId, contestantId);
-        const score = get().scores[key] || null;
+        const event = findScoreEvent(eventId);
         // A score from an earlier round is not "this judge's score" any more:
         // the judge starts the new round with a blank sheet.
-        return score && isCurrentRoundScore(score, findScoreEvent(eventId)) ? score : null;
+        return Object.values(get().scores).find((score) =>
+          String(score.eventId) === String(eventId) &&
+          String(score.judgeId) === String(judgeId) &&
+          String(score.contestantId) === String(contestantId) &&
+          isCurrentRoundScore(score, event)
+        ) || null;
       },
     }),
     {

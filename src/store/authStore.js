@@ -16,6 +16,7 @@ const ALLOWED_ROLES = new Set([
   'admin',
   'organizer',
   'judge',
+  'scorer',
   'participant',
   'institute-coordinator',
   'sports-head',

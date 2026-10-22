@@ -9,6 +9,8 @@ import useRegistrationStore from '../../store/registrationStore';
 import useScoreStore from '../../store/scoreStore';
 import { buildAuditLogs, fetchAiDetections } from '../../services/adminDataService';
 import { supabase } from '../../utils/supabaseClient';
+import AuditReviewPanel from '../../components/audit/AuditReviewPanel';
+import { describeAuditEntry, describeChanges } from '../../utils/auditDescribe';
 
 const FETCH_LIMIT = 1000;
 
@@ -29,11 +31,18 @@ const TABLE_LABELS = {
   accounts: 'User',
   ai_logs: 'AI request',
   ai_detections: 'AI detection',
+  event_staff: 'Judge/scorer assignment',
+  judge_invites: 'Judge invitation',
+  audit_flag_reviews: 'Audit review',
+  result_changes: 'Result change',
+  match_result_entries: 'Match result entry',
+  platform_settings: 'Platform setting',
+  rubric_versions: 'Rubric version',
 };
 
 const ACTION_THEME = {
-  insert: { label: 'Created', bg: '#dcfce7', fg: '#15803d' },
-  update: { label: 'Updated', bg: '#dbeafe', fg: '#1d4ed8' },
+  insert: { label: 'Added', bg: '#dcfce7', fg: '#15803d' },
+  update: { label: 'Changed', bg: '#dbeafe', fg: '#1d4ed8' },
   delete: { label: 'Deleted', bg: '#fee2e2', fg: '#b91c1c' },
   history: { label: 'Earlier record', bg: '#f1f5f9', fg: '#475569' },
 };
@@ -62,7 +71,11 @@ function isMissingTableError(err) {
 
 function formatTimestamp(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value || 'Unknown') : date.toLocaleString();
+  // Always Philippine time with an explicit label, whatever the viewer's
+  // computer is set to, so a logged time can be matched to a known event time.
+  return Number.isNaN(date.getTime())
+    ? String(value || 'Unknown')
+    : `${date.toLocaleString('en-PH', { timeZone: 'Asia/Manila', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' })} PHT`;
 }
 
 function formatRelative(value) {
@@ -79,24 +92,13 @@ function formatRelative(value) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function formatValue(value) {
-  if (value === null || value === undefined || value === '') return '—';
-  if (typeof value === 'object') return Array.isArray(value) ? `${value.length} item${value.length === 1 ? '' : 's'}` : 'details changed';
-  const text = String(value);
-  return text.length > 60 ? `${text.slice(0, 57)}…` : text;
-}
-
-function humanizeField(field) {
-  return String(field).replace(/_/g, ' ');
-}
-
 function toCsvField(value) {
   const text = String(value ?? '');
   return `"${text.replace(/"/g, '""')}"`;
 }
 
 function downloadLogsCsv(entries) {
-  const headers = ['Timestamp', 'User', 'Role', 'Action', 'Area', 'Record', 'Changed fields'];
+  const headers = ['When (PHT)', 'Done by', 'Role', 'Type', 'Area', 'Item', 'What happened', 'Before → after'];
   const rows = entries.map((entry) => [
     formatTimestamp(entry.occurredAt),
     entry.actorLabel,
@@ -104,7 +106,8 @@ function downloadLogsCsv(entries) {
     entry.actionLabel,
     entry.areaLabel,
     entry.recordLabel,
-    (entry.changedFields || []).join('; '),
+    entry.sentence || '',
+    (entry.changeItems || []).map((item) => `${item.label}: ${item.before} → ${item.after}`).join('; '),
   ]);
   // Leading BOM so Excel opens it as UTF-8 instead of mangling accented characters.
   const csv = '﻿' + [headers, ...rows].map((row) => row.map(toCsvField).join(',')).join('\r\n');
@@ -214,6 +217,8 @@ export default function AdminAudit() {
         area: log.source,
         areaLabel: log.target,
         recordLabel: log.action,
+        sentence: log.action,
+        changeItems: [],
         changedFields: [],
         oldData: {},
         newData: {},
@@ -232,12 +237,15 @@ export default function AdminAudit() {
         action: row.action,
         actionLabel: theme.label,
         theme,
-        actorLabel: row.actor_id ? (actor?.name || row.actor_email || 'Unknown user') : 'System',
-        actorSub: row.actor_id ? (actor?.name && row.actor_email ? row.actor_email : '') : 'Automatic or server process',
+        actorLabel: row.actor_id ? (actor?.name || row.actor_email || 'Unknown user') : 'FairPlay system',
+        actorSub: row.actor_id ? (actor?.name && row.actor_email ? row.actor_email : '') : 'Automatic task, or a change made directly in the database',
         actorRole: actor?.role || row.actor_role || '',
         area: row.table_name,
         areaLabel: TABLE_LABELS[row.table_name] || row.table_name,
         recordLabel: row.summary || (row.record_id ? `#${row.record_id}` : '—'),
+        // Plain sentence + plain before/after, instead of column names.
+        sentence: describeAuditEntry(row),
+        changeItems: describeChanges(row),
         changedFields: row.changed_fields || [],
         oldData: row.old_data || {},
         newData: row.new_data || {},
@@ -253,7 +261,7 @@ export default function AdminAudit() {
     if (actionFilter !== 'all' && entry.action !== actionFilter) return false;
     if (areaFilter !== 'all' && entry.area !== areaFilter) return false;
     if (!searchTerm) return true;
-    return [entry.actorLabel, entry.actorSub, entry.areaLabel, entry.recordLabel, entry.actionLabel, ...entry.changedFields]
+    return [entry.actorLabel, entry.actorSub, entry.areaLabel, entry.recordLabel, entry.actionLabel, entry.sentence, ...entry.changedFields]
       .some((value) => String(value || '').toLowerCase().includes(searchTerm));
   }), [entries, actionFilter, areaFilter, searchTerm]);
 
@@ -283,6 +291,21 @@ export default function AdminAudit() {
           </button>
         </div>
       )}
+      {/* W04: what needs an admin's attention, pulled out of the log, on top. */}
+      <div style={{ marginBottom: 20 }}>
+        <AuditReviewPanel
+          auditRows={rows}
+          detections={aiDetections}
+          onOpenRecord={(flag) => {
+            const row = rows.find((entry) => String(entry.id) === String(flag.sourceId));
+            setActionFilter('all');
+            setAreaFilter(row?.table_name || 'all');
+            setSearchInput(row?.summary || '');
+            setExpandedId(row?.id ?? null);
+            document.getElementById('audit-entries')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }}
+        />
+      </div>
       {(
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 14, marginBottom: 20 }}>
@@ -299,7 +322,7 @@ export default function AdminAudit() {
             ))}
           </div>
 
-          <div style={cardStyle}>
+          <div id="audit-entries" style={{ ...cardStyle, scrollMarginTop: 90 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
               <div role="tablist" aria-label="Filter by action" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {[{ value: 'all', label: 'All' }, ...Object.entries(ACTION_THEME).map(([value, theme]) => ({ value, label: theme.label }))].map((tab) => {
@@ -353,7 +376,7 @@ export default function AdminAudit() {
                   <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 860 }}>
                     <thead>
                       <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
-                        {['When', 'User', 'Action', 'Record', 'Changes'].map((header) => (
+                        {['When', 'Done by', 'Type', 'Item', 'What happened'].map((header) => (
                           <th key={header} style={thStyle}>{header}</th>
                         ))}
                       </tr>
@@ -396,19 +419,17 @@ export default function AdminAudit() {
                                 <div style={{ fontWeight: 700, color: '#0f172a' }}>{entry.recordLabel}</div>
                               </td>
                               <td style={tdStyle}>
-                                {canExpand ? (
+                                <div style={{ color: '#0f172a', fontSize: 13, lineHeight: 1.5, maxWidth: 360 }}>{entry.sentence}</div>
+                                {canExpand && (entry.changeItems || []).length > 0 && (
                                   <button
                                     type="button"
                                     onClick={() => setExpandedId(expanded ? null : entry.id)}
                                     aria-expanded={expanded}
-                                    style={{ border: 'none', background: 'none', padding: 0, color: '#2563eb', fontWeight: 700, fontSize: 13, cursor: 'pointer', textAlign: 'left' }}
+                                    style={{ border: 'none', background: 'none', padding: 0, marginTop: 4, color: '#2563eb', fontWeight: 700, fontSize: 12, cursor: 'pointer', textAlign: 'left' }}
                                   >
-                                    {entry.changedFields.slice(0, 3).map(humanizeField).join(', ')}
-                                    {entry.changedFields.length > 3 ? ` +${entry.changedFields.length - 3} more` : ''}
+                                    {expanded ? 'Hide details' : 'See before and after'}
                                     <i className={expanded ? 'bi bi-chevron-up' : 'bi bi-chevron-down'} style={{ marginLeft: 6 }} />
                                   </button>
-                                ) : (
-                                  <span style={{ color: '#94a3b8', fontSize: 13 }}>{entry.action === 'insert' ? 'New record' : entry.action === 'delete' ? 'Record removed' : '—'}</span>
                                 )}
                               </td>
                             </tr>
@@ -416,13 +437,16 @@ export default function AdminAudit() {
                               <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
                                 <td colSpan="5" style={{ padding: '0 16px 16px' }}>
                                   <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 12, display: 'grid', gap: 8 }}>
-                                    {entry.changedFields.map((field) => (
-                                      <div key={field} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 180px) 1fr', gap: 12, fontSize: 13, alignItems: 'center' }}>
-                                        <span style={{ color: '#64748b', fontWeight: 700, textTransform: 'capitalize' }}>{humanizeField(field)}</span>
+                                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 200px) 1fr', gap: 12, fontSize: 11, fontWeight: 800, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                                      <span>What</span><span>Before → After</span>
+                                    </div>
+                                    {(entry.changeItems || []).map((item) => (
+                                      <div key={item.label} style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 200px) 1fr', gap: 12, fontSize: 13, alignItems: 'center' }}>
+                                        <span style={{ color: '#64748b', fontWeight: 700 }}>{item.label}</span>
                                         <span style={{ color: '#0f172a' }}>
-                                          <span style={{ color: '#b91c1c', textDecoration: 'line-through' }}>{formatValue(entry.oldData[field])}</span>
+                                          <span style={{ color: '#b91c1c', textDecoration: 'line-through' }}>{item.before}</span>
                                           <i className="bi bi-arrow-right" style={{ margin: '0 8px', color: '#94a3b8' }} />
-                                          <span style={{ color: '#15803d', fontWeight: 700 }}>{formatValue(entry.newData[field])}</span>
+                                          <span style={{ color: '#15803d', fontWeight: 700 }}>{item.after}</span>
                                         </span>
                                       </div>
                                     ))}

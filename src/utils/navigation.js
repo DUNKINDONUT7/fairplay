@@ -9,6 +9,7 @@ export function roleHomePath(role) {
     admin: '/admin',
     organizer: '/organizer',
     judge: '/judge',
+    scorer: '/scorer',
     participant: '/participant',
   }[role] || '/';
 }
